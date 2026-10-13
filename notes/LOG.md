@@ -615,3 +615,10 @@
 - README screenshots in `docs/screens/` from the host preview (`CLEAN=1`: no HOLD/CHORD badges, cropped to y < 142).
 - `firmware/images/OVERDUB.OP1` sha256 8d5185b11ed6e4928b2634cdccd7b15b6f30d65762ade53fa8bbcd877d2dd36b (`build.py --version 1.0`). Supersedes MODS.OP1 as the release candidate.
 - Result: _pending user flash_.
+
+## 2026-10-13 — Test image 51: OVERDUB.OP1 (grain screen A)
+- grain screen: green (grain size) is a shaded dark-green band around the playhead, one grain wide, with the bars inside drawn green; the Hann window and the orange spray bracket are gone. Live grains are white while they read at the playhead and orange when the spray threw them elsewhere (outside the band, up to 3 band-halves ahead for the drift). With no notes sounding, three orange pop-outs show where the spray would throw grains, moving about 4 times a second. True scale (whole bank across the screen), as the user chose.
+- GitHub page (`docs/index.html`, served from /docs), background #161618.
+- Custom wavetable research and simulator prototype: notes/wavetable-custom.md, src/engine/wt_import.h, src/engine/test/wt_import_*.
+- `firmware/images/OVERDUB.OP1` sha256 77b752ec8123068239ba2e7d79b0fa68592f260a7effee5dce4ce2a755a74384 (`build.py --version 1.0`). Supersedes image 50 as the release candidate.
+- Result: _pending user flash_.

@@ -481,6 +481,8 @@ static uint32_t exp2_q16_ui(int32_t y)
 }
 
 
+static uint32_t grain_frame RAM = 0;     /* screen frames, for the idle spray pop-outs */
+
 static void draw_grain(void *r, const int16_t *k)
 {
     int32_t pos = k[0] < 0 ? 0 : k[0], size = k[1] < 0 ? 0 : k[1], dens = k[2] < 0 ? 0 : k[2];
@@ -501,8 +503,15 @@ static void draw_grain(void *r, const int16_t *k)
     fp32 sw = ((width >> 10) * ((spray * 1029) >> 15)) >> 5;       /* +-0.3 s of the 9.6 s bank */
     if (src.slot >= 0)
         sw = (fp32)(udiv(((uint32_t)sw >> 4) * (GRAIN_TOTAL >> 6), src.len >> 6) << 4);   /* same 0.3 s */
-    fp32 swin = sw > FP(1) + (FP(1) >> 2) ? sw : FP(1) + (FP(1) >> 2);
     fp32 seg_lo = x0 + (width / GRAIN_SOURCES) * bank_src, seg_hi = seg_lo + width / GRAIN_SOURCES;
+    /* green: grain size as a shaded band around the playhead, as wide as one grain on this scale (10 .. 500 ms;
+     * at least 6 units so short grains stay visible); the bars inside it are drawn green */
+    uint32_t glen = (441u * exp2_q16_ui((size * 11559) >> 10)) >> 16;         /* samples, as grain.c */
+    fp32 half = (fp32)(udiv((glen >> 2) * (uint32_t)(width >> 10), src.len >> 2) << 9);
+    if (half < FP(3))
+        half = FP(3);
+    for (fp32 x = px - half; x <= px + half; x += FP(1) >> 1)
+        vline_fast(r, x, cy - FP(40), cy + FP(40), DARKGREEN);
     for (int i = 0; i < 128; i++) {
         int32_t h;
         if (src.slot < 0) {
@@ -519,8 +528,8 @@ static void draw_grain(void *r, const int16_t *k)
         if (hh < FP(1) >> 1)
             hh = FP(1) >> 1;
         int colour = DARKBLUE;
-        if (x >= px - swin && x <= px + swin)
-            colour = BLUE;
+        if (x >= px - half && x <= px + half)
+            colour = GREEN;
         else if (src.slot >= 0 || (x >= seg_lo && x < seg_hi))
             colour = GREY;
         vline_fast(r, x, cy - hh, cy + hh, colour);
@@ -529,37 +538,15 @@ static void draw_grain(void *r, const int16_t *k)
         for (int i = 0; i <= GRAIN_SOURCES; i++)                    /* ruler ticks at the sound seams */
             vline_fast(r, x0 + (width / GRAIN_SOURCES) * i, FP(131), FP(135), GREY);
 
-    /* green: grain size as a Hann window above the playhead, as wide as one grain on this scale (10 .. 500 ms;
-     * at least 6 units so short grains stay visible) */
-    {
-        uint32_t len = (441u * exp2_q16_ui((size * 11559) >> 10)) >> 16;      /* samples, as grain.c */
-        fp32 half = (fp32)(udiv((len >> 2) * (uint32_t)(width >> 10), src.len >> 2) << 9);
-        if (half < FP(3))
-            half = FP(3);
-        fp32 hx = 0, hy = 0, hdx = (half * 10923) >> 15;                      /* 2 * half / 12 */
-        for (int i = 0; i <= 12; i++) {
-            int32_t hv = sin_t(0x0AAAAAAAu * (uint32_t)i);                   /* sin(pi i / 12) */
-            hv = (hv * hv) >> 15;                                            /* Hann */
-            fp32 qx = px - half + hdx * i, qy = FP(42) - ((FP(9) >> 5) * hv >> 10);
-            if (i)
-                line_fp(r, hx, hy, qx, qy, FP(3) >> 1, GREEN);
-            hx = qx;
-            hy = qy;
-        }
-    }
-
-    /* playhead with a downward cap, spray bracket underneath */
+    /* playhead with a downward cap */
     line_fp(r, px, FP(48), px, FP(132), FP(3) >> 1, BLUE);
     line_fp(r, px - FP(3), FP(45), px + FP(3), FP(45), FP(1), BLUE);
     line_fp(r, px - FP(3), FP(45), px, FP(49), FP(1), BLUE);
     line_fp(r, px + FP(3), FP(45), px, FP(49), FP(1), BLUE);
-    if (sw > FP(1)) {
-        line_fp(r, px - sw, FP(137), px + sw, FP(137), FP(3) >> 1, ORANGE);
-        line_fp(r, px - sw, FP(134), px - sw, FP(137), FP(3) >> 1, ORANGE);
-        line_fp(r, px + sw, FP(134), px + sw, FP(137), FP(3) >> 1, ORANGE);
-    }
 
-    /* live grains: 2-px bright runs lighting up the audio they read (rendering voices only) */
+    /* live grains: 2-px bright runs lighting up the audio they read (rendering voices only). White while a grain
+     * reads at the playhead (it drifts forward by up to one grain); orange when the spray popped it out elsewhere */
+    int live = 0;
     for (int vi = 0; vi < 6; vi++) {
         struct grain_voice *gv = (struct grain_voice *)(voice_ram + vi * VOICE_RAM_BYTES);
         if (gv->owner != OWNER_GRAIN || gv->peak <= 0)
@@ -580,8 +567,27 @@ static void draw_grain(void *r, const int16_t *k)
             if (hh < FP(3))
                 hh = FP(3);
             int colour = g->mul > 20000 ? LIGHTBLUE : WHITE;         /* shimmer grains light blue */
+            if (gx < px - half - FP(2) || gx > px + 3 * half + FP(2))
+                colour = ORANGE;                                       /* sprayed */
+            live = 1;
             vline_fast(r, gx, cy - hh, cy + hh, colour);
             vline_fast(r, gx + (FP(1) * 7 >> 3), cy - hh, cy + hh, colour);
+        }
+    }
+    /* orange: no notes sounding, so show where the spray would throw grains: three pop-outs inside +-spray,
+     * moving to new random spots about four times a second */
+    grain_frame++;
+    if (!live && sw > FP(1)) {
+        for (uint32_t j = 0; j < 3; j++) {
+            uint32_t h = ((grain_frame >> 3) * 3 + j + 1) * 2654435761u;
+            fp32 gx = px - sw + (fp32)((((uint32_t)(2 * sw) >> 4) * (h >> 16)) >> 12);
+            int bi = ((gx - x0) * 431) >> 20;                          /* / (304 / 128 units): no runtime division */
+            int32_t hgt = bi < 0 || bi > 127 ? 0 : src.slot < 0 ? (grain_data[2 * bi] > grain_data[2 * bi + 1] ? grain_data[2 * bi] : grain_data[2 * bi + 1]) : 16384;
+            fp32 hh = (hgt * FP(36)) >> 15;
+            if (hh < FP(4))
+                hh = FP(4);
+            vline_fast(r, gx, cy - hh, cy + hh, ORANGE);
+            vline_fast(r, gx + (FP(1) * 7 >> 3), cy - hh, cy + hh, ORANGE);
         }
     }
 }
