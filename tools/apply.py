@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply an op-1-mods patch to your own stock OP-1 firmware 246 image.
+"""Apply an overdub patch to your own stock OP-1 firmware 246 image.
 
   python3 apply.py op1_246.op1 [OUT.OP1] [--patch DIR]
 
@@ -98,7 +98,7 @@ def apply_db(stock_path, p, out_path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stock", help="stock op1_246.op1")
-    ap.add_argument("out", nargs="?", default="MODS.OP1")
+    ap.add_argument("out", nargs="?", default="OVERDUB.OP1")
     ap.add_argument("--patch", default=os.path.join(HERE, "patch"))
     a = ap.parse_args()
     name = os.path.basename(a.out)

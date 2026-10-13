@@ -1,7 +1,8 @@
-# op-1-mods
+# overdub
 
-New synth engines, FX with animated screens, and keyboard modes for the **original OP-1 (firmware 246)**.
+**op1-overdub**: new synth engines, FX with animated screens, and keyboard modes for the **original OP-1 (firmware 246)**.
 They are patched into TE's own firmware: every stock engine, FX and feature keeps working.
+Like an overdub on tape, it adds new layers over TE's firmware without erasing anything underneath.
 
 Not affiliated with or supported by teenage engineering. You flash this at your own risk (see [Safety](#safety)).
 
@@ -35,10 +36,10 @@ Not affiliated with or supported by teenage engineering. You flash this at your 
 ## Install
 
 1. Download stock firmware 246 from TE: <https://teenage.engineering/_software/op-1/op1_246.op1>.
-2. Download `op1-mods-*.zip` from [Releases](../../releases) and unzip it.
-3. `python3 apply.py op1_246.op1` (Python 3.10+, no other dependencies) writes `MODS.OP1`.
+2. Download `overdub-*.zip` from [Releases](../../releases) and unzip it.
+3. `python3 apply.py op1_246.op1` (Python 3.10+, no other dependencies) writes `OVERDUB.OP1`.
    It checks that your file is stock 246 and that the result is exactly the expected image.
-4. On the OP-1: hold **COM** while switching on, press **1** (upload firmware), connect USB, copy `MODS.OP1` to the
+4. On the OP-1: hold **COM** while switching on, press **1** (upload firmware), connect USB, copy `OVERDUB.OP1` to the
    OP-1 disk, eject. Same procedure as an official update.
 
 The release contains only our code, our database rows (engine/FX names and presets) and our SVG screens.
@@ -62,7 +63,7 @@ python3 build.py                               # everything; downloads stock 246
 python3 build.py --engines grain --fx distortion --no-hold --name MINE
 ```
 
-Outputs `firmware/images/<NAME>.OP1` and the shareable `dist/op1-mods-<name>.zip`.
+Outputs `firmware/images/<NAME>.OP1` and the shareable `dist/overdub-<version>.zip`.
 `firmware/` holds TE's firmware and anything built from it: it is gitignored, never commit or share it.
 DSP is checked in the Blackfin simulator first (`src/engine/test/`, `src/slot/test/`).
 

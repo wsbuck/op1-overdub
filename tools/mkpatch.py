@@ -61,7 +61,7 @@ def main():
     ap.add_argument("stock")
     ap.add_argument("built")
     ap.add_argument("outdir")
-    ap.add_argument("--name", default="op-1-mods")
+    ap.add_argument("--name", default="overdub")
     a = ap.parse_args()
     stock = {n: c for n, _, c in op1pack.members(op1pack.read_image(a.stock))[0]}
     built = {n: c for n, _, c in op1pack.members(op1pack.read_image(a.built))[0]}

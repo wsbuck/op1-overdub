@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Build the custom firmware image and a shareable patch from stock OP-1 firmware 246.
 
-  python3 build.py [--engines va,wavetable,grain] [--fx ensemble,pingpong,distortion] [--name MODS]
+  python3 build.py [--engines va,wavetable,grain] [--fx ensemble,pingpong,distortion] [--version 1.0]
 
 Needs Docker with the `op1-bfin` toolchain image (docker build -t op1-bfin tools/docker) and Python 3.10+.
 Stock 246 is downloaded from teenage.engineering into firmware/stock/ if it isn't there (and checked by sha256).
 Outputs:
   firmware/images/<NAME>.OP1     the image to flash
-  dist/op1-mods-<name>.zip       the patch and tools/apply.py, to share (our code, rows and SVGs only; no TE firmware)
+  dist/overdub-<version>.zip     the patch and tools/apply.py, to share (our code, rows and SVGs only; no TE firmware)
 Everything under firmware/ is TE-derived and gitignored: never commit or share it.
 """
 import argparse
@@ -52,7 +52,8 @@ def main():
     ap.add_argument("--no-chord", action="store_true", help="leave out CHORD")
     ap.add_argument("--svg-cost", action="store_true", help="show the screen render cost on the FX screens (development)")
     ap.add_argument("--debug-ui", action="store_true", help="show profiler lines on the engine screens (development)")
-    ap.add_argument("--name", default="MODS", help="image name (default MODS -> firmware/images/MODS.OP1)")
+    ap.add_argument("--name", default="OVERDUB", help="image name (default OVERDUB -> firmware/images/OVERDUB.OP1)")
+    ap.add_argument("--version", default="dev", help="release version, used in the zip name (default dev)")
     ap.add_argument("--stock", default=os.path.join(ROOT, "firmware", "stock", "op1_246.op1"))
     a = ap.parse_args()
     if not a.name.isalnum() or any(w in a.name.upper() for w in op1pack.FORBIDDEN_WORDS):
@@ -103,9 +104,9 @@ def main():
     run(*cmd)
 
     # The shareable bundle: apply.py and the two modules it uses, plus the patch (no TE firmware).
-    dist = os.path.join(ROOT, "dist", f"op1-mods-{a.name.lower()}")
+    dist = os.path.join(ROOT, "dist", f"overdub-{a.version}" + ("" if a.name == "OVERDUB" else f"-{a.name.lower()}"))
     run(sys.executable, os.path.join(ROOT, "tools", "mkpatch.py"), a.stock, image, os.path.join(dist, "patch"), "--name",
-        f"op-1-mods: {', '.join(e['name'] for e in engines)}; FX {', '.join(f['name'] for f in fxs) or 'none'}")
+        f"overdub {a.version}: {', '.join(e['name'] for e in engines)}; FX {', '.join(f['name'] for f in fxs) or 'none'}")
     for f in ("apply.py", "ldr.py", "op1pack.py"):
         shutil.copyfile(os.path.join(ROOT, "tools", f), os.path.join(dist, f))
     shutil.copyfile(os.path.join(ROOT, "LICENSE"), os.path.join(dist, "LICENSE"))
