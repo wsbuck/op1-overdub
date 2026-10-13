@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+pedals.svg - "distortion" FX screen (Two Pedals). Our own artwork: a wah (green) patched into a compact distortion box.
+Pedalboard convention: signal enters on the RIGHT and leaves on the LEFT. Input cable from the screen's right edge into the wah's
+toe-end jack (right); patch from the wah's heel-side jack (left) to the box's right jack (input); output from the box's left jack
+(orange collar) toward the screen's left edge.
+Drawn by TE's retained renderer, then our immediate-mode overlay on top. Ids are found once at load (find, assert=0) and cached.
+d = blue drive 0..1, g = green, c = white character, m = orange mix 0..1, t = frame clock (s).
+jit(t, seed, rate) = deterministic noise -1..1 that changes `rate` times per second. mode = MODES[round(c * 5)]:
+TUBE MUFF FUZZ CLIP FOLD CRUSH.
+WAH (green), drawn from a 3D model (below). a = -1 (green 0, low-pass: heel down)
+  .. 0 (16384 +- 2048, flat: level) .. +1 (green max, focus: toe down); theta = 9 deg * a (positive = toe down, clockwise).
+  the wah turned 45 deg CLOCKWISE on the floor as seen on screen (yaw 135 deg:
+  toe back-left toward the box, heel front-right), drawn from a 3D model (X along heel 0 -> toe 106,
+  Y across 0..22, Z up; roof Z 14/21, treadle Z 25..33, axle (X 53, Z 25) along Y), rotated about (53, 11), projected
+  obliquely: screen = (234.42, 102.45) + 1.3000 * (X' + Y'/2, -Z - Y'/2). No static wah matrix. Input jack on the visible (far, Y = 22) side
+  near the heel (front-right, cable to the right edge), output near the toe (back-left, patch to the box). Visible faces: side (Y = 22), heel end, roofs, treadle top / side / heel end.
+  rock R3(theta) = rotation about the axle line in the X-Z plane (toe down for theta > 0). Each treadle face is planar, so its
+  screen image under the rock is affine: M_face = P o R3 o P_face^-1, evaluated as the affine map taking 3 reference points'
+  rest screen positions to their rocked ones (a 2x2 solve per face, or a small table over theta):
+  ttop  refs (X,Y,Z) = (-5,0,33) (111,0,33) (-5,22,33);  tside (-5,22,33) (111,22,33) (-5,22,25);  tend (-5,0,33) (-5,22,33) (-5,0,25)
+  ribs           green rubber grip bars, filled (ride with ttop); axle = green pivot pin (static)
+DISTORTION (static group "dist" = translate(-64 0); its children in the box's own coordinates):
+  pedal          matrix = rotate(1.8 deg * d^1.5 * jit) about (160, 138) * translate(3.2 d^1.15 * jit, 2.0 d^1.15 * jit),
+                 jitter rate 8 + 16 d Hz: the whole box shakes, still at d = 0                                     [blue]
+  plate          matrix = translate(2.6 d^1.1 * jit, 1.8 d^1.1 * jit): the foot-plate rattles                       [blue]
+  s1..s4         sparks, shown for d > 0.72 / 0.8 / 0.88 / 0.95, blinking; small rotate jitter                    [blue]
+  glow           LED rays, shown when m > 0 and d > 0.03; matrix = scale(0.55 + 0.75 d, flicker) about the LED   [blue]
+  p1..p4         matrix = rotate(-135 + 270 * knob deg) about (127|149|171|193, 34)          [all four; the green knob stays as a small indicator]
+  body, plateb   fill (+ body stroke) = mode colour: TUBE lightorange, MUFF lpg, FUZZ purple, CLIP orange, FOLD darkgreen,
+                 CRUSH purplegrey; plaque stroke = red for MUFF (silver box, red rim), black otherwise          [white]
+  rays           stroke per mode for contrast (TUBE/MUFF/CRUSH red, FUZZ/FOLD pink, CLIP white)
+  word           overlay: the mode word in our stroke font (font.h), centred in the plaque, follows the pedal matrix
+MIX FADE (orange, both pedals; mix 0 is fully dry): v = 0.15 + 0.85 m; colour = lerp(black, colour, v), RGBA written per frame:
+  distortion: shadow cableO plugL plugR collar jackL jackR body hilite lip plateb grooves screw slot (14)
+  wah + cables: wshadow wroofL wroofR wend wside wbrk rubber chrome shine wjackI wjackO cableI patch plugW (14)
+  ribs           fill lerp(black, green, 0.4 + 0.6 v); led red (lerped) when m > 0, offred at 0
+  NOT faded: knob skirts/caps/pointers and the green axle (the controls stay readable at mix 0); black/shading parts.
+Overlay (immediate mode): the mode word only, step 1.8, width 1.5: 9-25 AA segments; colour by v: white / purplegrey / grey.
+-->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" x="0" y="0" width="320" height="160" viewBox="0 0 320 160">
+  <g id="wah">
+    <path id="wshadow" d="M280.84 123.13 L226.61 68.9 L188 81.76 L242.24 136 Z" fill="#1D2040"/>
+    <path id="wroofL" d="M273.95 103.55 L249.59 70.09 L219.25 80.2 L243.61 113.66 Z" fill="#7C7A8F" stroke="#7C7891" stroke-width="1" stroke-linejoin="round"/>
+    <path id="wroofR" d="M249.59 70.09 L225.23 54.83 L194.89 64.94 L219.25 80.2 Z" fill="#7C788F" stroke="#7D7991" stroke-width="1" stroke-linejoin="round"/>
+    <path id="wend" d="M273.95 121.75 L243.61 131.86 L243.61 113.66 L273.95 103.55 Z" fill="#353338" stroke="#7D798F" stroke-width="1" stroke-linejoin="round"/>
+    <path id="wside" d="M243.61 131.86 L194.89 83.14 L194.89 64.94 L219.25 80.2 L243.61 113.66 Z" fill="#353138" stroke="#7D7A90" stroke-width="1" stroke-linejoin="round"/>
+    <path id="wbrk" d="M222.7 87.17 L214.43 78.9 L216.73 72.09 L220.4 75.77 Z" fill="#ADB1DC" stroke="#7D7890" stroke-width="0.8"/>
+    <g id="ttop">
+      <path id="rubber" d="M276.25 81.15 L222.93 27.83 L192.6 37.95 L245.91 91.26 Z" fill="#010000" stroke="#AEB2DD" stroke-width="1" stroke-linejoin="round"/>
+      <path id="ribs" d="M267.74 77.24 L266.55 76.05 L243.11 83.86 L244.3 85.06 Z M262.23 71.73 L261.03 70.53 L237.59 78.35 L238.79 79.54 Z M256.71 66.21 L255.52 65.02 L232.08 72.83 L233.27 74.03 Z M251.2 60.7 L250 59.5 L226.56 67.32 L227.76 68.51 Z M245.68 55.18 L244.49 53.99 L221.05 61.8 L222.24 62.99 Z M240.17 49.67 L238.97 48.47 L215.53 56.28 L216.73 57.48 Z M234.65 44.15 L233.46 42.96 L210.02 50.77 L211.21 51.96 Z M229.14 38.64 L227.94 37.44 L204.5 45.25 L205.7 46.45 Z M223.62 33.12 L222.43 31.92 L198.98 39.74 L200.18 40.93 Z" fill="#00ED96"/>
+    </g>
+    <g id="tend">
+      <path id="tendf" d="M276.25 81.15 L245.91 91.26 L245.91 99.06 L276.25 88.95 Z" fill="#7C7991" stroke="#E6E7FE" stroke-width="0.8" stroke-linejoin="round"/>
+    </g>
+    <g id="tside">
+      <path id="chrome" d="M244.99 100.74 L193.98 49.72 L192.6 44.45 L192.6 37.95 L245.91 91.26 L245.91 99.06 Z" fill="#AEB2DB" stroke="#E6E7FF" stroke-width="1" stroke-linejoin="round"/>
+      <line id="shine" x1="242.88" y1="91.72" x2="195.54" y2="44.37" stroke="#FFFEFE" stroke-width="1.2" stroke-linecap="round"/>
+    </g>
+    <circle id="axle" cx="218.43" cy="70.73" r="3.6" fill="#00ED95" stroke="#010000" stroke-width="1"/>
+    <path id="cableI" d="M239.06 122.76 C239.06 134.76 316 120.76 330 112.76" fill="none" stroke="#363238" stroke-width="3" stroke-linecap="round"/>
+    <circle id="wjackI" cx="239.06" cy="118.76" r="2.6" fill="#010000" stroke="#AEB0DD" stroke-width="1"/>
+    <circle id="wjackO" cx="198.62" cy="78.32" r="3.4" fill="#7B7991" stroke="#AEB0DB" stroke-width="1"/>
+    <path id="plugW" d="M237.86 116.36 H240.26 C240.93 116.36 241.46 116.9 241.46 117.56 V122.06 C241.46 122.73 240.93 123.26 240.26 123.26 H237.86 C237.2 123.26 236.66 122.73 236.66 122.06 V117.56 C236.66 116.9 237.2 116.36 237.86 116.36 Z" fill="#7C7990" stroke="#AEB1DC" stroke-width="0.8"/>
+  </g>
+  <path id="patch" d="M198.62 78.32 C172.62 80.32 186 64 172 60" fill="none" stroke="#343238" stroke-width="3.4" stroke-linecap="round"/>
+  <g id="dist" transform="translate(-64 0)">
+    <ellipse id="shadow" cx="160" cy="139" rx="54" ry="2.6" fill="#1D2041"/>
+    <g id="pedal">
+      <path id="cableO" d="M88 60 C80 60 76 66 75 94 S74 138 72 146" fill="none" stroke="#353239" stroke-width="3.4" stroke-linecap="round"/>
+      <path id="plugL" d="M89.2 57.2 H94.8 C95.46 57.2 96 57.74 96 58.4 V61.6 C96 62.26 95.46 62.8 94.8 62.8 H89.2 C88.54 62.8 88 62.26 88 61.6 V58.4 C88 57.74 88.54 57.2 89.2 57.2 Z M96.5 55.8 H108.5 C109.33 55.8 110 56.47 110 57.3 V62.7 C110 63.53 109.33 64.2 108.5 64.2 H96.5 C95.67 64.2 95 63.53 95 62.7 V57.3 C95 56.47 95.67 55.8 96.5 55.8 Z" fill="#7C798F" stroke="#AEB1DD" stroke-width="0.8"/>
+      <path id="plugR" d="M225.2 57.2 H234.8 C235.46 57.2 236 57.74 236 58.4 V61.6 C236 62.26 235.46 62.8 234.8 62.8 H225.2 C224.54 62.8 224 62.26 224 61.6 V58.4 C224 57.74 224.54 57.2 225.2 57.2 Z M211.5 55.8 H223.5 C224.33 55.8 225 56.47 225 57.3 V62.7 C225 63.53 224.33 64.2 223.5 64.2 H211.5 C210.67 64.2 210 63.53 210 62.7 V57.3 C210 56.47 210.67 55.8 211.5 55.8 Z" fill="#7C7A90" stroke="#AEB1DB" stroke-width="0.8"/>
+      <rect id="collar" x="99.4" y="55.8" width="3.6" height="8.4" fill="#FF413F" stroke="#FE423F" stroke-width="0.6"/>
+      <rect id="jackL" x="109" y="54" width="8" height="12" fill="#AEB2DC" stroke="#7C7890" stroke-width="0.8"/>
+      <rect id="jackR" x="203" y="54" width="8" height="12" fill="#AEB0DC" stroke="#7D7990" stroke-width="0.8"/>
+      <path id="body" d="M122 20 H198 C201.31 20 204 22.69 204 26 V132 C204 135.31 201.31 138 198 138 H122 C118.69 138 116 135.31 116 132 V26 C116 22.69 118.69 20 122 20 Z" fill="#FF4240" stroke="#FF423E" stroke-width="1"/>
+      <rect id="shade" x="198" y="23" width="4.6" height="112" fill="#010000" opacity="0.22"/>
+      <line id="hilite" x1="118.2" y1="26" x2="118.2" y2="132" stroke="#FFFEFF" stroke-width="1.2" opacity="0.35"/>
+      <line id="lip" x1="122" y1="22" x2="198" y2="22" stroke="#FEFFFF" stroke-width="1" opacity="0.3"/>
+      <g id="k1">
+        <circle cx="127" cy="35.2" r="9.6" fill="#010000" opacity="0.45"/>
+        <circle cx="127" cy="34" r="9.4" fill="#010000" stroke="#353238" stroke-width="1"/>
+        <path d="M134.4 34 L136 34 M133.84 36.83 L135.31 37.44 M132.23 39.23 L133.36 40.36 M129.83 40.84 L130.44 42.31 M127 41.4 L127 43 M124.17 40.84 L123.56 42.31 M121.77 39.23 L120.64 40.36 M120.16 36.83 L118.69 37.44 M119.6 34 L118 34 M120.16 31.17 L118.69 30.56 M121.77 28.77 L120.64 27.64 M124.17 27.16 L123.56 25.69 M127 26.6 L127 25 M129.83 27.16 L130.44 25.69 M132.23 28.77 L133.36 27.64 M133.84 31.17 L135.31 30.56" fill="none" stroke="#353238" stroke-width="1"/>
+        <circle cx="127" cy="34" r="5.3" fill="#698EFF" stroke="#010000" stroke-width="0.8"/>
+        <g id="p1">
+          <line x1="127" y1="31.8" x2="127" y2="24.8" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+          <line x1="127" y1="31.8" x2="127" y2="29" stroke="#010000" stroke-width="1.8" stroke-linecap="round"/>
+        </g>
+      </g>
+      <g id="k2">
+        <circle cx="149" cy="35.2" r="9.6" fill="#010000" opacity="0.45"/>
+        <circle cx="149" cy="34" r="9.4" fill="#010000" stroke="#353238" stroke-width="1"/>
+        <path d="M156.4 34 L158 34 M155.84 36.83 L157.31 37.44 M154.23 39.23 L155.36 40.36 M151.83 40.84 L152.44 42.31 M149 41.4 L149 43 M146.17 40.84 L145.56 42.31 M143.77 39.23 L142.64 40.36 M142.16 36.83 L140.69 37.44 M141.6 34 L140 34 M142.16 31.17 L140.69 30.56 M143.77 28.77 L142.64 27.64 M146.17 27.16 L145.56 25.69 M149 26.6 L149 25 M151.83 27.16 L152.44 25.69 M154.23 28.77 L155.36 27.64 M155.84 31.17 L157.31 30.56" fill="none" stroke="#353238" stroke-width="1"/>
+        <circle cx="149" cy="34" r="5.3" fill="#00ED95" stroke="#010000" stroke-width="0.8"/>
+        <g id="p2">
+          <line x1="149" y1="31.8" x2="149" y2="24.8" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+          <line x1="149" y1="31.8" x2="149" y2="29" stroke="#010000" stroke-width="1.8" stroke-linecap="round"/>
+        </g>
+      </g>
+      <g id="k3">
+        <circle cx="171" cy="35.2" r="9.6" fill="#010000" opacity="0.45"/>
+        <circle cx="171" cy="34" r="9.4" fill="#010000" stroke="#353238" stroke-width="1"/>
+        <path d="M178.4 34 L180 34 M177.84 36.83 L179.31 37.44 M176.23 39.23 L177.36 40.36 M173.83 40.84 L174.44 42.31 M171 41.4 L171 43 M168.17 40.84 L167.56 42.31 M165.77 39.23 L164.64 40.36 M164.16 36.83 L162.69 37.44 M163.6 34 L162 34 M164.16 31.17 L162.69 30.56 M165.77 28.77 L164.64 27.64 M168.17 27.16 L167.56 25.69 M171 26.6 L171 25 M173.83 27.16 L174.44 25.69 M176.23 28.77 L177.36 27.64 M177.84 31.17 L179.31 30.56" fill="none" stroke="#353238" stroke-width="1"/>
+        <circle cx="171" cy="34" r="5.3" fill="#FFFFFF" stroke="#010000" stroke-width="0.8"/>
+        <g id="p3">
+          <line x1="171" y1="31.8" x2="171" y2="24.8" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+          <line x1="171" y1="31.8" x2="171" y2="29" stroke="#010000" stroke-width="1.8" stroke-linecap="round"/>
+        </g>
+      </g>
+      <g id="k4">
+        <circle cx="193" cy="35.2" r="9.6" fill="#010000" opacity="0.45"/>
+        <circle cx="193" cy="34" r="9.4" fill="#010000" stroke="#353238" stroke-width="1"/>
+        <path d="M200.4 34 L202 34 M199.84 36.83 L201.31 37.44 M198.23 39.23 L199.36 40.36 M195.83 40.84 L196.44 42.31 M193 41.4 L193 43 M190.17 40.84 L189.56 42.31 M187.77 39.23 L186.64 40.36 M186.16 36.83 L184.69 37.44 M185.6 34 L184 34 M186.16 31.17 L184.69 30.56 M187.77 28.77 L186.64 27.64 M190.17 27.16 L189.56 25.69 M193 26.6 L193 25 M195.83 27.16 L196.44 25.69 M198.23 28.77 L199.36 27.64 M199.84 31.17 L201.31 30.56" fill="none" stroke="#353238" stroke-width="1"/>
+        <circle cx="193" cy="34" r="5.3" fill="#FF423F" stroke="#010000" stroke-width="0.8"/>
+        <g id="p4">
+          <line x1="193" y1="31.8" x2="193" y2="24.8" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+          <line x1="193" y1="31.8" x2="193" y2="29" stroke="#010000" stroke-width="1.8" stroke-linecap="round"/>
+        </g>
+      </g>
+      <g id="glow">
+        <path id="rays" d="M155 48.5 L151.8 48.5 M156.46 44.96 L154.2 42.7 M160 43.5 L160 40.3 M163.54 44.96 L165.8 42.7 M165 48.5 L168.2 48.5" fill="none" stroke="#FFFFFE" stroke-width="1.5" stroke-linecap="round"/>
+      </g>
+      <circle id="bezel" cx="160" cy="48.5" r="3.6" fill="#010000"/>
+      <circle id="led" cx="160" cy="48.5" r="2.2" fill="#FF3A5E" stroke="#FF3A5D" stroke-width="0.6"/>
+      <path id="plaque" d="M134.5 55 H185.5 C186.88 55 188 56.12 188 57.5 V71.5 C188 72.88 186.88 74 185.5 74 H134.5 C133.12 74 132 72.88 132 71.5 V57.5 C132 56.12 133.12 55 134.5 55 Z" fill="#010000" stroke="#010001" stroke-width="1.4"/>
+      <line id="hinge" x1="117" y1="77.5" x2="203" y2="77.5" stroke="#010000" stroke-width="2.4" opacity="0.55"/>
+      <g id="plate">
+        <path id="plateb" d="M121.5 79 H198.5 C200.71 79 202.5 80.79 202.5 83 V133 C202.5 135.21 200.71 137 198.5 137 H121.5 C119.29 137 117.5 135.21 117.5 133 V83 C117.5 80.79 119.29 79 121.5 79 Z" fill="#FF433F" stroke="#010000" stroke-width="1.2"/>
+        <path id="pad" d="M126 84 H194 C195.66 84 197 85.34 197 87 V120 C197 121.66 195.66 123 194 123 H126 C124.34 123 123 121.66 123 120 V87 C123 85.34 124.34 84 126 84 Z" fill="#010000" stroke="#010000" stroke-width="1"/>
+        <path id="grooves" d="M127 87.2 H193 V88.8 H127 Z M127 91.4 H193 V93 H127 Z M127 95.6 H193 V97.2 H127 Z M127 99.8 H193 V101.4 H127 Z M127 104 H193 V105.6 H127 Z M127 108.2 H193 V109.8 H127 Z M127 112.4 H193 V114 H127 Z M127 116.6 H193 V118.2 H127 Z M127 120.8 H193 V122.4 H127 Z" fill="#353237"/>
+        <circle id="screw" cx="160" cy="130.5" r="3.6" fill="#AFB1DC" stroke="#7B7990" stroke-width="0.8"/>
+        <line id="slot" x1="157.6" y1="130.5" x2="162.4" y2="130.5" stroke="#7C7A91" stroke-width="1"/>
+      </g>
+    </g>
+    <g id="s1">
+      <polygon points="112.17,20.17 108.8,21 112.17,21.83 113,25.2 113.83,21.83 117.2,21 113.83,20.17 113,16.8" fill="#BFD8FF" stroke="#698EFF" stroke-width="0.6"/>
+    </g>
+    <g id="s2">
+      <polygon points="206.29,22.29 203.4,23 206.29,23.71 207,26.6 207.71,23.71 210.6,23 207.71,22.29 207,19.4" fill="#BFD8FF" stroke="#698EFF" stroke-width="0.6"/>
+    </g>
+    <g id="s3">
+      <polygon points="212.41,76.41 210,77 212.41,77.59 213,80 213.59,77.59 216,77 213.59,76.41 213,74" fill="#BFD8FF" stroke="#698EFF" stroke-width="0.6"/>
+    </g>
+    <g id="s4">
+      <polygon points="106.37,75.37 103.8,76 106.37,76.63 107,79.2 107.63,76.63 110.2,76 107.63,75.37 107,72.8" fill="#BFD8FF" stroke="#698EFF" stroke-width="0.6"/>
+    </g>
+  </g>
+</svg>

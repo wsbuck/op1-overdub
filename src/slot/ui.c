@@ -1,0 +1,1544 @@
+/* Screens for our engines (ids >= 15), drawn instead of iter's dials on the shared iter screen (0x14).
+ *
+ * Called from _ui_update (slot.S) once per display frame, after TE has cleared the frame, only when the
+ * current synth slot holds one of our engines. Immediate mode on TE's raster (notes/screen.md):
+ *   te_line  FUN_01a24a4c(raster, Q22.10 point a, b, Q22.10 width, const uint8_t rgba[4] *)  AGG thick line
+ * Landscape SVG space, 320 wide, y down, scaled by TE to the panel. Safe area x 4..316, y 2..140.
+ * Text is our stroke font (font.h), drawn with te_line so it scales with the panel.
+ * No libc/libgcc: no division, no floats, no writable globals (this links into the slot block).
+ *
+ * Design: notes/screen.md "UI redesign" (TE-style: dark structure, live elements in the knob colours,
+ * iter's dials, sampler's HOLD badge). wavetable: waterfall of the bank's frames; grain: source overview,
+ * playhead, spray, live grains (sampler or built-in bank); va: oscillator shape and filter response.
+ */
+#include <stdint.h>
+#include "font.h"
+#include "dsp.h"
+#include "warp.h"
+#include "wt_layout.h"
+#include "modal_state.h"
+#include "grain_layout.h"
+#include "grain_state.h"
+#include "grain_source.h"
+#include "ui_tables.h"
+#include "ensemble.h"
+#include "pingpong.h"
+
+/* Writable state lives in .data (the slot block is loaded into RAM); .bss is refused by the linker. */
+#ifdef __bfin__
+#define RAM __attribute__((section(".data")))
+static inline uint32_t cycles(void)
+{
+    uint32_t c;
+    __asm__ volatile ("%0 = CYCLES;" : "=d"(c));
+    return c;
+}
+#else
+#define RAM
+static inline uint32_t cycles(void) { return 0; }
+#endif
+
+typedef int32_t fp32;                     /* Q22.10 */
+#define FP(x) ((fp32)(x) << 10)
+
+extern void *te_raster(void);
+extern void te_line(void *raster, const fp32 *a, const fp32 *b, fp32 width, const uint8_t *rgba);
+/* Live knobs come from the render trampoline (tramp.S copies each call's params). An earlier version also
+ * popped TE's DSP->GUI mailbox (FUN_0196749c) but passed the record in R0; TE's function takes it in R1, so
+ * it wrote 28 bytes through a stale register: memory corruption and, once, a misaligned-write exception
+ * (LOG.md 2026-10-08). Removed. */
+extern const int16_t wt_data[] __attribute__((weak));         /* wt engine's tables (build_slot.py: --defsym _wt_data) */
+extern uint8_t voice_ram[];               /* engines' per-voice RAM (FREE region 0, 0x00810000) */
+extern uint32_t hold_on;                  /* hold.c */
+extern uint32_t chord_on, chord_learning; /* hold.c: CHORD mode and its learned shape */
+extern int32_t chord_n, chord_iv[];
+extern const uint8_t ui_kind[];           /* screen kind per engine id 15.. (build_slot.py, from engines.json) */
+enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4 };   /* = UI_KINDS in build_slot.py */
+extern const int16_t grain_data[] __attribute__((weak));        /* granular engine: overview[GRAIN_OVERVIEW], then the bank */
+/* Our FX (fx.json; build_slot.py generates fx_kind/fx_count). Weak: an image without one of them still links. */
+extern const uint8_t fx_kind[];           /* screen kind per FX id 8.. */
+extern const int32_t fx_count;
+enum { FX_ENSEMBLE = 1, FX_PINGPONG = 2, FX_DISTORTION = 3 };   /* = FX_UI_KINDS in build_slot.py */
+extern int32_t distortion_curve(const int16_t *p, int32_t x) __attribute__((weak));
+extern const char *distortion_mode_name(const int16_t *p) __attribute__((weak));
+extern struct ens ensemble_state[2] __attribute__((weak));
+extern struct pp pingpong_state[2] __attribute__((weak));
+/* TE's retained SVG renderer (notes/svg-route.md; call conventions checked at TE's call sites). */
+extern int te_yaffs_open(const char *path, int flags, int mode);     /* FUN_01a997f4: fd, -1 if missing */
+extern int te_yaffs_close(int fd);                                    /* FUN_01a99908 */
+extern void *te_svg_load(const char *name);   /* FUN_019fb458: /yaffs2/content/display/<name>; asserts on errors */
+extern void *te_node_find(void *node, const char *id, int must);      /* FUN_019eb8ac: must = 0 -> 0 if missing */
+extern void te_node_matrix(void *node, const int32_t *m);             /* FUN_019ead58: local matrix, Q10 */
+extern void te_svg_render(void *screen);      /* FUN_01a3b4c8: renders [screen] (the doc) onto the raster */
+extern uint8_t *te_svg_stroke(void *screen, const char *id);  /* FUN_01a3b854: the node's line style, rgba first */
+extern uint8_t *te_svg_fill(void *screen, const char *id);    /* FUN_01a3b96c: the node's fill rgba */
+
+#ifndef PALETTE                           /* overridable for the host preview (src/slot/test/preview.py) */
+#define PALETTE ((const uint8_t *)0x01BAAF50)
+#define KNOBS(slot) ((const int16_t *)(0xFF8013C4 + (slot) * 16))
+#define PROF ((volatile uint32_t *)0x00800000)     /* tramp.S: max, sum, calls, live knobs[4] (int16), count */
+#define TE_MATRIX ((const int32_t *)0x01DE5E68)   /* raster transform, Q22.10 column-major */
+/* FX knobs by edit mode (FUN_01a28da0): synth 0xFF801444 + slot*16, drum 0xFF8015C4 + slot*16, master 0xFF8016C4 */
+#define FX_KNOBS(mode, slot) ((const int16_t *)((mode) == 3 ? 0xFF8016C4 : \
+                                                 ((mode) == 1 ? 0xFF8015C4 : 0xFF801444) + (slot) * 16))
+#endif
+/* TE palette (colors.svg): structure in dark shades, live elements in the knob colours (notes/screen.md). */
+enum { RED = 2, OFFRED = 3, OFFGREY = 4, DARKGREEN = 5, PURPLEGREY = 8, LIGHTBLUE = 9, DARKBLUE = 10, GREY = 12, ORANGE = 13,
+       WHITE = 14, BLUE = 15, GREEN = 16, LIGHTGREEN = 18 };
+
+static void line_fp(void *r, fp32 x0, fp32 y0, fp32 x1, fp32 y1, fp32 w, int colour)
+{
+    fp32 a[2] = { x0, y0 }, b[2] = { x1, y1 };
+    te_line(r, a, b, w, PALETTE + 4 * colour);
+}
+
+/* Vertical SVG line written straight into the frame, 1 px, no anti-aliasing. TE's raster maps SVG space with
+ * the matrix at 0x01DE5E68 (column-major Q22.10: px = m0 x + m3 y + m6, row = m1 x + m4 y + m7). On the
+ * rotated panels m0 = m4 = 0, so a vertical SVG line is one run of pixels in a panel row: a few cycles per
+ * pixel instead of an AGG line (~20k cycles each on device; LOG.md 2026-10-08). Other transforms fall back
+ * to te_line. Raster object: [0] back buffer (uint16 RGB565), [1] px per row, [2] row stride bytes, [3] rows.
+ * Palette entries are RGBA (te_line swaps to BGR for its blender, which packs red from byte 0). */
+static void line_fp(void *r, fp32 x0, fp32 y0, fp32 x1, fp32 y1, fp32 w, int colour);
+
+/* The raster's buffer must be one of TE's two framebuffers (0x02000000, 0x03000000; up to 0x29C00 B each,
+ * notes/screen.md) and the geometry sane, or the fast paths fall back to te_line: a wrong pointer here would
+ * write into random memory. */
+static int raster_ok(const int32_t *ras)
+{
+    uint32_t b = (uint32_t)ras[0];
+    int32_t width = ras[1], stride = ras[2], rows = ras[3];
+    if (width <= 0 || width > 400 || rows <= 0 || rows > 480 || stride < width * 2 || stride > 1024)
+        return 0;
+    uint32_t end = b + (uint32_t)(rows * stride);
+    return (b >= 0x02000000u && end <= 0x02040000u) || (b >= 0x03000000u && end <= 0x03040000u);
+}
+
+static void vline_fast(void *r, fp32 x, fp32 y0, fp32 y1, int colour)
+{
+    const int32_t *m = TE_MATRIX;
+    const int32_t *ras = (const int32_t *)r;
+    int32_t width = ras[1], stride = ras[2], rows = ras[3];
+    if (m[0] != 0 || m[4] != 0 || !raster_ok(ras)) {
+        line_fp(r, x, y0, x, y1, FP(1) >> 1, colour);
+        return;
+    }
+    int32_t row = (((m[1] * (x >> 2)) >> 8) + m[7]) >> 10;
+    int32_t p0 = (((m[3] * (y0 >> 2)) >> 8) + m[6]) >> 10, p1 = (((m[3] * (y1 >> 2)) >> 8) + m[6]) >> 10;
+    if (p0 > p1) {
+        int32_t t = p0;
+        p0 = p1;
+        p1 = t;
+    }
+    if (row < 0 || row >= rows || p1 < 0 || p0 >= width)
+        return;
+    if (p0 < 0)
+        p0 = 0;
+    if (p1 >= width)
+        p1 = width - 1;
+    const uint8_t *c = PALETTE + 4 * colour;
+    uint16_t px = (uint16_t)(((c[0] >> 3) << 11) | ((c[1] >> 2) << 5) | (c[2] >> 3));
+    uint16_t *dst = (uint16_t *)((uint8_t *)(uintptr_t)ras[0] + row * stride) + p0;
+    for (int32_t i = p0; i <= p1; i++)
+        *dst++ = px;
+}
+
+/* Any thin line written straight into the frame: endpoints through TE's matrix, then a 1-px Bresenham line in
+ * panel coordinates. A few hundred cycles instead of ~20k for an AGG line; used for dim/background detail
+ * (waterfall frames, dial rings, seams, hidden edges). Same raster checks and fallback as vline_fast. */
+static void line_fast(void *r, fp32 x0, fp32 y0, fp32 x1, fp32 y1, int colour)
+{
+    const int32_t *m = TE_MATRIX;
+    const int32_t *ras = (const int32_t *)r;
+    int32_t width = ras[1], stride = ras[2], rows = ras[3];
+    if (!raster_ok(ras)) {
+        line_fp(r, x0, y0, x1, y1, FP(1) >> 1, colour);
+        return;
+    }
+    int32_t ax = x0 >> 2, ay = y0 >> 2, bx = x1 >> 2, by = y1 >> 2;              /* Q8, products fit */
+    int32_t c0 = (((m[0] * ax + m[3] * ay) >> 8) + m[6]) >> 10, r0 = (((m[1] * ax + m[4] * ay) >> 8) + m[7]) >> 10;
+    int32_t c1 = (((m[0] * bx + m[3] * by) >> 8) + m[6]) >> 10, r1 = (((m[1] * bx + m[4] * by) >> 8) + m[7]) >> 10;
+    const uint8_t *c = PALETTE + 4 * colour;
+    uint16_t px = (uint16_t)(((c[0] >> 3) << 11) | ((c[1] >> 2) << 5) | (c[2] >> 3));
+    uint8_t *buf = (uint8_t *)(uintptr_t)ras[0];
+    int32_t dc = c1 > c0 ? c1 - c0 : c0 - c1, dr = r1 > r0 ? r1 - r0 : r0 - r1;
+    int32_t sc = c0 < c1 ? 1 : -1, sr = r0 < r1 ? 1 : -1, err = dc - dr;
+    for (int n = 0; n < 1024; n++) {
+        if ((uint32_t)c0 < (uint32_t)width && (uint32_t)r0 < (uint32_t)rows)
+            ((uint16_t *)(buf + r0 * stride))[c0] = px;
+        if (c0 == c1 && r0 == r1)
+            break;
+        int32_t e2 = 2 * err;
+        if (e2 > -dr) {
+            err -= dr;
+            c0 += sc;
+        }
+        if (e2 < dc) {
+            err += dc;
+            r0 += sr;
+        }
+    }
+}
+
+/* Draw s with its top-left at (x, y) (Q22.10); `step` = grid step (glyph 4 x 6 steps, advance 6).
+ * text(): anti-aliased (titles, HOLD). text_fast(): 1-px strokes for small labels, crisp and ~free. */
+static void text_any(void *r, const char *s, fp32 x, fp32 y, fp32 step, int colour, int fast)
+{
+    fp32 w = step >> 2 > FP(1) ? step >> 2 : FP(1);
+    for (; *s; s++, x += 6 * step) {
+        int c = *s >= 'a' && *s <= 'z' ? *s - 32 : *s;
+        if (c < FONT_FIRST || c > FONT_LAST)
+            continue;
+        for (const uint8_t *g = font_seg + font_off[c - FONT_FIRST]; *g != 0xFF; g += 2) {
+            fp32 x0 = x + (g[0] >> 4) * step, y0 = y + (g[0] & 15) * step;
+            fp32 x1 = x + (g[1] >> 4) * step, y1 = y + (g[1] & 15) * step;
+            if (fast)
+                line_fast(r, x0, y0, x1, y1, colour);
+            else
+                line_fp(r, x0, y0, x1, y1, w, colour);
+        }
+    }
+}
+#define text(r, s, x, y, step, colour) text_any(r, s, x, y, step, colour, 0)
+#define text_fast(r, s, x, y, step, colour) text_any(r, s, x, y, step, colour, 1)
+
+/* sin and cos of `turn` (uint32, 2^32 = one turn), Q15. */
+static int32_t sin_t(uint32_t turn)
+{
+    uint32_t i = turn >> 24;
+    int32_t f = (int32_t)((turn >> 9) & 0x7FFF);
+    return sine256[i] + (((sine256[i + 1] - sine256[i]) * f) >> 15);
+}
+#define cos_t(t) sin_t((t) + 0x40000000u)
+
+/* ---- shared chrome: title and HOLD badge. No knob dials: every knob drives part of the picture instead,
+ * in its knob colour (blue, green, white, orange), as on TE's own screens. ---- */
+
+/* Title, top left, in the colour of the knob that selects what it names (TE: ftwo, eq). */
+static void title(void *r, const char *s, int colour)
+{
+    text(r, s, FP(8), FP(7), FP(2), colour);
+}
+
+/* sampler.svg's boxed HOLD, between the title and the dials. */
+static void hold_badge(void *r)
+{
+    line_fp(r, FP(130), FP(5), FP(170), FP(5), FP(1), RED);
+    line_fp(r, FP(170), FP(5), FP(170), FP(20), FP(1), RED);
+    line_fp(r, FP(170), FP(20), FP(130), FP(20), FP(1), RED);
+    line_fp(r, FP(130), FP(20), FP(130), FP(5), FP(1), RED);
+    text(r, "HOLD", FP(133) + (FP(1) >> 1), FP(8), FP(3) >> 1, RED);
+}
+
+/* CHORD: a boxed badge (LEARN while SHIFT-learning) under HOLD's, and the shape on a mini keyboard: one tick per
+ * semitone (black keys short and dark), the chord's notes as dots under the ticks, the root white. */
+static void chord_badge(void *r)
+{
+    int learning = chord_learning;
+    int colour = learning ? ORANGE : RED;
+    line_fp(r, FP(130), FP(24), FP(180), FP(24), FP(1), colour);
+    line_fp(r, FP(180), FP(24), FP(180), FP(39), FP(1), colour);
+    line_fp(r, FP(180), FP(39), FP(130), FP(39), FP(1), colour);
+    line_fp(r, FP(130), FP(39), FP(130), FP(24), FP(1), colour);
+    text(r, learning ? "LEARN" : "CHORD", FP(133) + (FP(1) >> 1), FP(27), FP(3) >> 1, colour);
+    int n = chord_n, lo = 0, hi = 0;
+    if (n > 4)
+        n = 4;
+    for (int i = 0; i < n; i++) {
+        lo = chord_iv[i] < lo ? chord_iv[i] : lo;
+        hi = chord_iv[i] > hi ? chord_iv[i] : hi;
+    }
+    if (hi - lo < 12)                       /* show at least an octave */
+        hi = lo + 12;
+    int span = hi - lo;
+    fp32 step = span <= 24 ? FP(3) : (fp32)udiv(FP(72), span);
+    fp32 x0 = FP(186);
+    int pc = lo;                            /* pitch class of the lowest tick (no % or / here: no libgcc) */
+    while (pc < 0)
+        pc += 12;
+    while (pc >= 12)
+        pc -= 12;
+    for (int s = 0; s <= span; s++, pc = pc == 11 ? 0 : pc + 1) {
+        int black = (0x54A >> pc) & 1;      /* C# D# F# G# A# */
+        vline_fast(r, x0 + s * step, FP(24), black ? FP(31) : FP(35), black ? DARKBLUE : GREY);
+    }
+    for (int i = 0; i < n; i++) {
+        fp32 x = x0 + (chord_iv[i] - lo) * step;
+        line_fp(r, x, FP(37), x, FP(39) + (FP(1) >> 1), FP(2), i ? colour : WHITE);
+    }
+}
+
+/* ---- wavetable: waterfall of the bank's frames, current frame bright ---- */
+
+static const char *const bank_name[BANKS] = { "ANALOG", "PWM", "VOWEL", "ORGAN", "SYNC", "FOLD", "BELL", "DIGITAL" };
+
+#define WT_POINTS 65                        /* 64 segments at shift 0 */
+#define WT_LEVEL 3                          /* 256-sample level: 32 harmonics */
+#define WT_WIDTH 200
+#define WT_AMP 18
+#define WT_X0 24                            /* front frame left edge, centre line */
+#define WT_Y0 122
+#define WT_DX (FP(13) >> 1)                 /* 6.5 per frame towards the back */
+#define WT_DY FP(5)
+
+/* Sample of frame f (or the blend of f and f + 1 by ff, Q15) at phase ph, Q15 range. */
+static int32_t wt_sample(int bank, int f, int32_t ff, uint32_t ph)
+{
+    const int16_t *a = wt_data + (bank * FRAMES + f) * FRAME_STRIDE + level_off[WT_LEVEL];
+    uint32_t i = ph >> (32 - 8);
+    int32_t s = a[i];
+    if (ff) {
+        const int16_t *b = a + FRAME_STRIDE;
+        s += ((b[i] - s) * ff) >> 15;
+    }
+    return s;
+}
+
+/* One frame as a polyline of (WT_POINTS - 1) >> shift segments at depth `depth` (Q15 frames from the
+ * front): 1-px fast lines when width is 0, else anti-aliased. Returns the right end (x, y). */
+static void wt_frame(void *r, int bank, int f, int32_t ff, const struct warp *wp, int32_t depth, int shift,
+                     fp32 width, int colour, fp32 *end_x, fp32 *end_y)
+{
+    fp32 ox = FP(WT_X0) + ((WT_DX >> 5) * depth >> 10), oy = FP(WT_Y0) - ((WT_DY >> 5) * depth >> 10);
+    const uint32_t step = (0xFFFFFFFFu / (WT_POINTS - 1)) << shift;
+    const fp32 dx = (FP(WT_WIDTH) / (WT_POINTS - 1)) << shift;
+    const int points = ((WT_POINTS - 1) >> shift) + 1;
+    fp32 px = 0, py = 0;
+    for (int i = 0; i < points; i++) {
+        uint32_t ph = i == points - 1 ? 0xFFFFFFFFu : step * (uint32_t)i;
+        int32_t s = wt_sample(bank, f, ff, wp->depth ? warp_phase(wp, ph) : ph);
+        fp32 qx = ox + (i == points - 1 ? FP(WT_WIDTH) : dx * i);
+        fp32 qy = oy - ((s * FP(WT_AMP)) >> 15);
+        if (i) {
+            if (!width)
+                line_fast(r, px, py, qx, qy, colour);
+            else
+                line_fp(r, px, py, qx, qy, width, colour);
+        }
+        px = qx;
+        py = qy;
+    }
+    if (end_x) {
+        *end_x = ox + FP(WT_WIDTH);
+        *end_y = oy;
+    }
+}
+
+static void draw_wt(void *r, const int16_t *k)
+{
+    int32_t pos = k[0] < 0 ? 0 : k[0], uni = k[3] < 0 ? 0 : k[3];
+    int bank = (k[1] < 0 ? 0 : k[1]) >> 12;
+    struct warp wp = warp_setup(k[2] < 0 ? 0 : k[2]);
+
+    /* green: bank name and 8 pips (the current one lit) */
+    title(r, bank_name[bank], GREEN);
+    for (int i = 0; i < BANKS; i++) {
+        fp32 x = FP(184) + FP(11) * i;
+        if (i == bank)
+            line_fp(r, x, FP(10), x + FP(7), FP(10), FP(2), GREEN);
+        else
+            line_fast(r, x, FP(10), x + FP(7), FP(10), GREY);
+    }
+    /* white: warp glyph, one sine cycle through the engine's own phase bend (warp.h), x 276..312 */
+    {
+        fp32 gx = FP(276), gy = FP(28), px = 0, py = 0;
+        for (int i = 0; i <= 18; i++) {
+            uint32_t ph = i == 18 ? 0xFFFFFFFFu : (0xFFFFFFFFu / 18) * (uint32_t)i;
+            int32_t sv = sin_t(wp.depth ? warp_phase(&wp, ph) : ph);
+            fp32 qx = gx + FP(2) * i, qy = gy - ((FP(7) >> 5) * sv >> 10);
+            if (i)
+                line_fp(r, px, py, qx, qy, FP(3) >> 1, WHITE);
+            px = qx;
+            py = qy;
+        }
+    }
+
+    /* fm/st.svg depth hierarchy: back frames dark blue, the two around the position grey, current bright. */
+    int32_t fpos = pos * (FRAMES - 1);
+    int fr = fpos >> 15;
+    int32_t ff = fpos & 0x7FFF;
+    if (fr >= FRAMES - 1) {
+        fr = FRAMES - 2;
+        ff = 0x7FFF;
+    }
+    for (int f = FRAMES - 1; f >= 0; f--)
+        wt_frame(r, bank, f, 0, &wp, f << 15, 2, 0, f == fr || f == fr + 1 ? GREY : DARKBLUE, 0, 0);
+    /* orange: unison as a detuned ghost of the current frame, fading in (off-red, then orange) and spreading
+     * sideways with the detune (as the engine: gain over the first quarter, detune growing with the rest) */
+    if (uni > 0) {
+        int32_t spread = FP(2) + ((FP(10) >> 5) * ((uni * uni) >> 15) >> 10);
+        /* depth offset in Q15 frames: spread / 6.5 units per frame = spread (Q10) * 32768 / 6656 ~ * 315 >> 6 */
+        wt_frame(r, bank, fr, ff, &wp, fpos + ((spread * 315) >> 6), 1, FP(1), uni < 8192 ? OFFRED : ORANGE, 0, 0);
+    }
+    fp32 ex, ey;
+    wt_frame(r, bank, fr, ff, &wp, fpos, 1, FP(2), BLUE, &ex, &ey);
+    line_fp(r, ex + FP(2), ey, ex + FP(9), ey, FP(2), BLUE);  /* position handle (st.svg) */
+}
+
+/* ---- va: exact oscillator shape, detune ghost, filter response ---- */
+
+/* Piecewise-linear va shape s(t) = saw(t) - mix saw(t + pw) over two periods, x0..x0+w, centre cy, amplitude
+ * amp per unit (s is in [-2, 2]); `phase` shifts it (Q15 of a period). Breakpoints only: a few segments. */
+static void va_shape(void *r, int32_t mix, uint32_t pw, int32_t phase, fp32 x0, fp32 w, fp32 cy, fp32 amp,
+                     fp32 width, int colour)
+{
+    /* one period: ramp 0..1-pw, jump +2 mix at 1-pw, ramp to 1, jump -2 at 1 (saw reset). Values Q15 units. */
+    int32_t p = (int32_t)(pw >> 17);                           /* pw in Q15 of a period */
+    int32_t knee = 32768 - p;
+    /* s at t (Q15), left limit, for t in [0, 1): 2t - 1 - mix (2 (t + p) - 1 - (t >= knee ? 2 : 0)) */
+    #define VA_S(t, after_knee) ((2 * (t) - 32768) - (((mix) >> 1) * (2 * ((t) + p) - 32768 - ((after_knee) ? 65536 : 0)) >> 14))
+    int32_t pts_t[12], pts_v[12], n = 0;
+    for (int per = 0; per < 2; per++) {
+        int32_t base = per * 32768;
+        pts_t[n] = base; pts_v[n++] = VA_S(0, 0);
+        pts_t[n] = base + knee; pts_v[n++] = VA_S(knee, 0);
+        pts_t[n] = base + knee; pts_v[n++] = VA_S(knee, 1);
+        pts_t[n] = base + 32768; pts_v[n++] = VA_S(32768, 1);
+    }
+    #undef VA_S
+    fp32 px = 0, py = 0;
+    for (int i = 0; i < n; i++) {
+        int32_t t = pts_t[i] + phase;                          /* shift, clip to the panel */
+        if (t > 65536)
+            t = 65536;
+        fp32 qx = x0 + (((w >> 4) * t) >> 12), qy = cy - (((amp >> 4) * pts_v[i]) >> 11);   /* t: 2 periods = 65536 */
+        if (i) {
+            if (width)
+                line_fp(r, px, py, qx, qy, width, colour);
+            else
+                line_fast(r, px, py, qx, qy, colour);
+        }
+        px = qx;
+        py = qy;
+    }
+}
+
+static void draw_va(void *r, const int16_t *k)
+{
+    int32_t wave = k[0] < 0 ? 0 : k[0], det = k[1] < 0 ? 0 : k[1];
+    int32_t cut = k[2] < 0 ? 0 : k[2], res = k[3] < 0 ? 0 : k[3];
+    int32_t mix = wave < 16384 ? wave << 1 : 32767;           /* as va.c */
+    uint32_t pw = wave < 16384 ? 0x80000000u : 0x80000000u - (uint32_t)(wave - 16384) * 104858u;
+
+    /* blue: wave (title + shape), green: detune ghost, white: cutoff curve, orange: resonance peak */
+    title(r, wave < 8192 ? "SAW" : wave < 24576 ? "SQUARE" : "PULSE", BLUE);
+
+    /* left panel: oscillator (pd.svg axes), osc 2 as a green ghost offset by the detune */
+    const fp32 ox = FP(10), ow = FP(136), ocy = FP(90), oamp = FP(11);
+    line_fast(r, ox, ocy, ox + ow, ocy, DARKBLUE);
+    line_fast(r, ox, FP(62), ox, FP(118), DARKBLUE);
+    if (det >= 330)
+        va_shape(r, mix, pw, 2621 + ((det * 13107) >> 15), ox, ow, ocy, oamp, 0, GREEN);
+    va_shape(r, mix, pw, 0, ox, ow, ocy, oamp, FP(2), BLUE);
+
+    /* right panel: low-pass response, log frequency (the cutoff knob is exponential, so linear in x) */
+    const fp32 fx0 = FP(166), fw = FP(146), y0db = FP(96);
+    line_fast(r, fx0, y0db, fx0 + fw, y0db, DARKBLUE);
+    int row = 0;
+    while (row + 1 < VA_LP_ROWS && res >= va_q_row_min[row + 1])
+        row++;
+    fp32 fc = fx0 + (((fw >> 5) * cut) >> 10);
+    fp32 px = 0, py = 0;
+    for (int i = 0; i <= 24; i++) {
+        fp32 x = fx0 + (fw / 24) * i;
+        /* (x - fc) / 146 units * 9.45 octaves, in quarter octaves: (x - fc) * 0.2589 (x in Q10: * 265 >> 20) */
+        int32_t q = ((x - fc) * 265) >> 20;
+        int32_t db16;
+        if (q < -8)
+            db16 = 0;
+        else if (q > 8)
+            db16 = -48 * q;                                           /* -12 dB per octave, dB * 16 */
+        else
+            db16 = va_lp_db16[row][q + 8];
+        fp32 y = y0db - ((db16 * (FP(1) * 16 / 10)) >> 4);           /* 1.6 units per dB (db16 = dB * 16) */
+        if (y < FP(44))
+            y = FP(44);
+        if (y > FP(132))
+            y = FP(132);
+        if (i)
+            line_fp(r, px, py, x, y, FP(3) >> 1, WHITE);              /* white knob: cutoff */
+        px = x;
+        py = y;
+    }
+    for (fp32 y = FP(48); y < FP(132); y += FP(4))                     /* dashed cutoff guide */
+        vline_fast(r, fc, y, y + FP(2), GREY);
+    int32_t peak16 = 0;
+    for (int i = 0; i < VA_LP_POINTS; i++)
+        if (va_lp_db16[row][i] > peak16)
+            peak16 = va_lp_db16[row][i];
+    fp32 peak_y = y0db - ((peak16 * (FP(1) * 16 / 10)) >> 4) - FP(3);
+    line_fp(r, fc - FP(4), peak_y, fc + FP(4), peak_y, FP(2), ORANGE); /* orange knob: resonance */
+}
+
+/* ---- grain: source overview (dim) with the active region bright, playhead, spray, live grains ---- */
+
+/* 2^(y / 65536) * 65536 (as grain.c's exp2_q16), y < 15 * 65536 */
+static uint32_t exp2_q16_ui(int32_t y)
+{
+    static const uint16_t tab[33] = { 32768, 33486, 34219, 34968, 35734, 36516, 37316, 38133, 38968, 39821, 40693,
+        41584, 42495, 43425, 44376, 45348, 46341, 47356, 48393, 49452, 50535, 51642, 52773, 53928, 55109, 56316,
+        57549, 58809, 60097, 61413, 62757, 64132, 65535 };
+    int n = y >> 16;
+    int32_t f = y & 0xFFFF, i = f >> 11, fr = f & 0x7FF;
+    uint32_t m = tab[i] + (((tab[i + 1] - tab[i]) * fr) >> 11);
+    return (m << n) << 1;
+}
+
+static const char *const source_name[GRAIN_SOURCES] = { "CHOIR", "STRINGS", "BELLS", "GLASS", "AIR", "PLUCKS" };
+
+static void draw_grain(void *r, const int16_t *k)
+{
+    int32_t pos = k[0] < 0 ? 0 : k[0], size = k[1] < 0 ? 0 : k[1], dens = k[2] < 0 ? 0 : k[2];
+    int32_t spray = k[3] < 0 ? 0 : k[3];
+    struct grain_src src = grain_source(grain_data + GRAIN_OVERVIEW, GRAIN_TOTAL);
+    int bank_src = (pos * GRAIN_SOURCES) >> 15;
+    if (bank_src >= GRAIN_SOURCES)
+        bank_src = GRAIN_SOURCES - 1;
+    if (src.slot < 0) {
+        title(r, source_name[bank_src], BLUE);                 /* blue knob picks the sound */
+    } else {
+        static const char digits[] = "12345678";
+        char name[10] = "SAMPLER  ";
+        name[8] = digits[src.slot];
+        name[9] = 0;
+        title(r, name, BLUE);
+    }
+    /* white: density as a row of ticks, 1 .. 16 (2 .. 80 grains per second), top right */
+    for (int i = 0, n = 1 + ((dens * 15) >> 15); i < n; i++)
+        line_fast(r, FP(304) - FP(8) * i, FP(8), FP(304) - FP(8) * i, FP(18), WHITE);
+
+    /* overview: 128 bars across x 8..312, centre y 90, +-36. Bank: its own peaks. Sampler: TE's peak table
+     * (one per 256 samples) over the trimmed window. Colour: inside the spray window blue, inside the current
+     * bank sound (or the whole sampler window) grey, else dark blue (sampler.svg / drum2.svg). */
+    const fp32 x0 = FP(8), width = FP(304), cy = FP(90);
+    fp32 px = x0 + (((width >> 10) * pos) >> 5);
+    fp32 sw = ((width >> 10) * ((spray * 1029) >> 15)) >> 5;       /* +-0.3 s of the 9.6 s bank */
+    if (src.slot >= 0)
+        sw = (fp32)(udiv(((uint32_t)sw >> 4) * (GRAIN_TOTAL >> 6), src.len >> 6) << 4);   /* same 0.3 s */
+    fp32 swin = sw > FP(1) + (FP(1) >> 2) ? sw : FP(1) + (FP(1) >> 2);
+    fp32 seg_lo = x0 + (width / GRAIN_SOURCES) * bank_src, seg_hi = seg_lo + width / GRAIN_SOURCES;
+    for (int i = 0; i < 128; i++) {
+        int32_t h;
+        if (src.slot < 0) {
+            int32_t a = grain_data[2 * i], b = grain_data[2 * i + 1];
+            h = a > b ? a : b;
+        } else {
+            uint32_t s0 = src.start + (uint32_t)(((src.len >> 7) * (uint32_t)i)), s1 = s0 + (src.len >> 7);
+            h = 0;
+            for (uint32_t pi = s0 >> 8; pi <= (s1 >> 8) && pi < 1034; pi++)
+                if (src.peaks[pi] > h)
+                    h = src.peaks[pi];
+        }
+        fp32 x = x0 + ((width >> 7) * i), hh = (h * FP(36)) >> 15;
+        if (hh < FP(1) >> 1)
+            hh = FP(1) >> 1;
+        int colour = DARKBLUE;
+        if (x >= px - swin && x <= px + swin)
+            colour = BLUE;
+        else if (src.slot >= 0 || (x >= seg_lo && x < seg_hi))
+            colour = GREY;
+        vline_fast(r, x, cy - hh, cy + hh, colour);
+    }
+    if (src.slot < 0)
+        for (int i = 0; i <= GRAIN_SOURCES; i++)                    /* ruler ticks at the sound seams */
+            vline_fast(r, x0 + (width / GRAIN_SOURCES) * i, FP(131), FP(135), GREY);
+
+    /* green: grain size as a Hann window above the playhead, as wide as one grain on this scale (10 .. 500 ms;
+     * at least 6 units so short grains stay visible) */
+    {
+        uint32_t len = (441u * exp2_q16_ui((size * 11559) >> 10)) >> 16;      /* samples, as grain.c */
+        fp32 half = (fp32)(udiv((len >> 2) * (uint32_t)(width >> 10), src.len >> 2) << 9);
+        if (half < FP(3))
+            half = FP(3);
+        fp32 hx = 0, hy = 0, hdx = (half * 10923) >> 15;                      /* 2 * half / 12 */
+        for (int i = 0; i <= 12; i++) {
+            int32_t hv = sin_t(0x0AAAAAAAu * (uint32_t)i);                   /* sin(pi i / 12) */
+            hv = (hv * hv) >> 15;                                            /* Hann */
+            fp32 qx = px - half + hdx * i, qy = FP(42) - ((FP(9) >> 5) * hv >> 10);
+            if (i)
+                line_fp(r, hx, hy, qx, qy, FP(3) >> 1, GREEN);
+            hx = qx;
+            hy = qy;
+        }
+    }
+
+    /* playhead with a downward cap, spray bracket underneath */
+    line_fp(r, px, FP(48), px, FP(132), FP(3) >> 1, BLUE);
+    line_fp(r, px - FP(3), FP(45), px + FP(3), FP(45), FP(1), BLUE);
+    line_fp(r, px - FP(3), FP(45), px, FP(49), FP(1), BLUE);
+    line_fp(r, px + FP(3), FP(45), px, FP(49), FP(1), BLUE);
+    if (sw > FP(1)) {
+        line_fp(r, px - sw, FP(137), px + sw, FP(137), FP(3) >> 1, ORANGE);
+        line_fp(r, px - sw, FP(134), px - sw, FP(137), FP(3) >> 1, ORANGE);
+        line_fp(r, px + sw, FP(134), px + sw, FP(137), FP(3) >> 1, ORANGE);
+    }
+
+    /* live grains: 2-px bright runs lighting up the audio they read (rendering voices only) */
+    for (int vi = 0; vi < 6; vi++) {
+        struct grain_voice *gv = (struct grain_voice *)(voice_ram + vi * VOICE_RAM_BYTES);
+        if (gv->owner != OWNER_GRAIN || gv->peak <= 0)
+            continue;
+        gv->peak = 0;
+        for (int gi = 0; gi < GRAINS; gi++) {
+            const struct grain *g = &gv->g[gi];
+            if (!g->wstep)
+                continue;
+            uint32_t sample = g->pos >> 12;
+            if (sample < src.start || sample >= src.start + src.len)
+                continue;
+            /* x of the sample inside the window: (sample - start) / len * width */
+            uint32_t rel = sample - src.start;
+            fp32 gx = x0 + (fp32)(udiv((rel >> 4) * (uint32_t)(width >> 10), src.len >> 4) << 10);
+            int32_t amp = sin_t(g->wph >> 1);                          /* window, Q15 */
+            fp32 hh = ((FP(30) >> 5) * amp) >> 10;
+            if (hh < FP(3))
+                hh = FP(3);
+            int colour = g->mul > 20000 ? LIGHTBLUE : WHITE;         /* shimmer grains light blue */
+            vline_fast(r, gx, cy - hh, cy + hh, colour);
+            vline_fast(r, gx + (FP(1) * 7 >> 3), cy - hh, cy + hh, colour);
+        }
+    }
+}
+
+static uint32_t last_renders RAM = 1;     /* render count at the last frame (live knobs) */
+
+#ifdef UI_DEBUG
+/* ---- diagnostics (PROF1): engine DSP load and UI cost from CYCLES, and the live-knob record ---- */
+
+static char *put_str(char *p, const char *s)
+{
+    while (*s)
+        *p++ = *s++;
+    *p = 0;
+    return p;
+}
+
+static char *put_dec(char *p, uint32_t u)
+{
+    static const uint32_t pow10[] = { 1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1 };
+    int started = 0;
+    for (int i = 0; i < 10; i++) {
+        int d = 0;
+        while (u >= pow10[i]) {
+            u -= pow10[i];
+            d++;
+        }
+        if (d || started || i == 9) {
+            *p++ = (char)('0' + d);
+            started = 1;
+        }
+    }
+    *p = 0;
+    return p;
+}
+
+static uint32_t pct(uint32_t part, uint32_t whole)
+{
+    whole >>= 8;
+    return whole ? udiv((part >> 8) * 100, whole) : 0;
+}
+
+static uint32_t last_frame RAM = 1, ui_cost RAM = 1, live_count RAM = 1;
+
+static void diagnostics(void *r, uint32_t now, const int16_t *k, int live)
+{
+    char buf[40], *p;
+    uint32_t elapsed = now - last_frame;
+    uint32_t max = PROF[0], sum = PROF[1], calls = PROF[2];
+    PROF[0] = 0;
+    PROF[1] = 0;
+    PROF[2] = 0;
+    last_frame = now;
+    live_count += live;
+
+    /* Per render call: average and worst cycles (K). A % of the frame was misleading: render calls from
+     * two contexts overlap in time, so their wall-clock sum can exceed the frame (LOG.md 2026-10-08). */
+    p = put_str(buf, "R ");
+    p = put_dec(p, calls ? udiv(sum, calls) >> 10 : 0);
+    p = put_str(p, "K MAX ");
+    p = put_dec(p, max >> 10);
+    p = put_str(p, "K N ");
+    put_dec(p, calls);
+    text(r, buf, FP(8), FP(22), FP(1), ORANGE);
+
+    p = put_str(buf, "UI ");
+    p = put_dec(p, pct(ui_cost, elapsed));
+    p = put_str(p, "% LIVE ");
+    put_dec(p, live_count & 1023);                              /* frames with live (rendered) knobs */
+    text(r, buf, FP(8), FP(30), FP(1), ORANGE);
+
+    p = put_str(buf, "K ");
+    for (int i = 0; i < 4; i++) {
+        p = put_dec(p, (uint32_t)(uint16_t)k[i]);
+        p = put_str(p, " ");
+    }
+    p = put_str(p, "F ");
+    put_dec(p, elapsed >> 10);
+    text(r, buf, FP(8), FP(38), FP(1), ORANGE);
+}
+
+#endif
+
+/* ---- our FX (fx.json): drawn instead of the filter FX screen they borrow (slot.S _fx_ui_update) ---- */
+
+static int32_t knob_pos(int16_t k)
+{
+    return k < 0 ? 0 : k;
+}
+
+/* Orange = mix: a vertical bar on the right, dark track, orange fill from the bottom. */
+static void mix_bar(void *r, int16_t mix)
+{
+    vline_fast(r, FP(306), FP(30), FP(130), DARKBLUE);
+    fp32 top = FP(130) - (fp32)((knob_pos(mix) * 100) >> 5);   /* 100 units at 32768 (Q22.10: x 1024 / 32768) */
+    if (top < FP(129))
+        line_fp(r, FP(306), FP(130), FP(306), top, FP(4), ORANGE);
+}
+
+/* LFO rate of the ensemble in Hz, Q16: 0.05 * 2^(8 k / 32768) (ensemble.c rate_inc). */
+static uint32_t ens_rate_q16(int32_t k)
+{
+    return ((exp2_q16_ui(k << 4) >> 4) * 3277u) >> 12;
+}
+
+/* Triangle like ensemble.c's tri(), from a Q16 turn: -32768 at 0, +32766 at a half turn. */
+static int32_t tri16(uint32_t u)
+{
+    int32_t x = u & 0xFFFF;
+    return x < 32768 ? 2 * x - 32768 : 2 * (65535 - x) - 32768;
+}
+
+#define ENS_X0 16
+#define ENS_W 274                           /* the last second, oldest left */
+#define ENS_CY 82
+#define ENS_AMP 42
+
+/* One tap's delay sweep over the last second: exact triangle (breakpoints only), phase offset `off` (Q16 turns). */
+static void ens_sweep(void *r, uint32_t now, uint32_t cyc, uint32_t off, int32_t amp, int mirror, int colour,
+                      fp32 width, int fast)
+{
+    if (!cyc)
+        cyc = 1;
+    uint32_t u1 = now + off + (40u << 16), u0 = u1 - cyc;          /* unwrapped Q16 turns */
+    uint32_t u = u0;
+    fp32 xp = 0, yp = 0;
+    for (int n = 0; n < 64; n++) {
+        int32_t t = tri16(u);
+        fp32 x = FP(ENS_X0) + (fp32)udiv((u - u0) * (uint32_t)ENS_W, cyc) * 1024;   /* cyc <= 838861: no overflow */
+        fp32 y = FP(ENS_CY) + (fp32)(((mirror ? t : -t) * amp) >> 5);  /* amp units at t = 32768 */
+        if (n) {
+            if (fast)
+                line_fast(r, xp, yp, x, y, colour);
+            else
+                line_fp(r, xp, yp, x, y, width, colour);
+        }
+        if (u == u1)
+            break;
+        xp = x;
+        yp = y;
+        uint32_t next = (u & ~0x7FFFu) + 0x8000u;                 /* next half-turn breakpoint */
+        u = next < u1 ? next : u1;
+    }
+}
+
+static void draw_ensemble(void *r, const int16_t *k, int stereo)
+{
+    int32_t ens = knob_pos(k[2]);
+    title(r, ens < 4096 ? "CHORUS" : "ENSEMBLE", WHITE);
+    const struct ens *st = ensemble_state ? &ensemble_state[stereo] : 0;
+    uint32_t now = st ? st->lfo >> 16 : 0;
+    uint32_t cyc = ens_rate_q16(knob_pos(k[0]));                  /* turns per second, Q16 */
+    int32_t amp = (knob_pos(k[1]) * ENS_AMP) >> 15;
+    line_fast(r, FP(ENS_X0), FP(ENS_CY), FP(ENS_X0 + ENS_W), FP(ENS_CY), DARKBLUE);
+    for (fp32 x = FP(ENS_X0); x < FP(ENS_X0 + ENS_W); x += FP(8)) {   /* green: depth guides */
+        line_fast(r, x, FP(ENS_CY - amp), x + FP(4), FP(ENS_CY - amp), GREEN);
+        line_fast(r, x, FP(ENS_CY + amp), x + FP(4), FP(ENS_CY + amp), GREEN);
+    }
+    line_fp(r, FP(ENS_X0 + ENS_W + 4), FP(ENS_CY - amp), FP(ENS_X0 + ENS_W + 4), FP(ENS_CY + amp), FP(1), GREEN);
+    if (ens >= 2048) {                      /* white: the two extra taps, brighter with more ensemble */
+        int c = ens < 16384 ? GREY : WHITE;
+        ens_sweep(r, now, cyc, 0x5555, amp, 0, c, FP(1), 1);
+        ens_sweep(r, now, cyc, 0xAAAA, amp, 0, c, FP(1), 1);
+    }
+    if (stereo)                             /* master: R sweeps in anti-phase */
+        ens_sweep(r, now, cyc, 0, amp, 1, DARKBLUE, FP(1), 1);
+    ens_sweep(r, now, cyc, 0, amp, 0, BLUE, FP(2), 0);           /* blue: the sweep, at its rate */
+    mix_bar(r, k[3]);
+}
+
+#define PP_X0 20
+#define PP_W 270                            /* 2.7 s */
+#define PP_CY 82
+#define PP_H 48
+
+static void draw_pingpong(void *r, const int16_t *k, int stereo)
+{
+    title(r, stereo ? "PING PONG" : "DELAY", BLUE);
+    /* time: 20 ms * 2^(6 k / 32768), in 1/100 units of the 2.7 s window: 1 unit = 10 ms */
+    uint32_t t10 = (exp2_q16_ui(knob_pos(k[0]) * 12) * 2u) >> 12;    /* 20 ms = 2 units, Q4 */
+    int32_t g = (knob_pos(k[1]) * 31130) >> 15;                      /* feedback, Q15 (0.95 max) */
+    int32_t mix = knob_pos(k[3]);
+    line_fast(r, FP(PP_X0), FP(PP_CY), FP(PP_X0 + PP_W), FP(PP_CY), DARKBLUE);
+    for (int i = 0; i <= 27; i += 5)                                  /* ruler: 0.5 s */
+        vline_fast(r, FP(PP_X0 + i * 10), FP(PP_CY - 2), FP(PP_CY + 2), DARKBLUE);
+    int32_t dry = ((32767 - mix) * PP_H) >> 15;
+    if (dry > 0)
+        line_fp(r, FP(PP_X0), FP(PP_CY), FP(PP_X0), FP(PP_CY - dry), FP(2), GREY);
+    int32_t a = 32767;                      /* echo level, Q15 */
+    fp32 px = 0, py = 0;
+    for (int e = 1; e <= 64 && a > 300; e++) {
+        uint32_t xq = (uint32_t)e * t10;    /* Q4 units */
+        if (xq >= (uint32_t)PP_W << 4)
+            break;
+        fp32 x = FP(PP_X0) + (fp32)(xq << 6);
+        int32_t h = (int32_t)(((a * mix) >> 15) * PP_H) >> 15;
+        int up = !stereo || (e & 1);        /* L echoes up, R down */
+        fp32 y = up ? FP(PP_CY - h) : FP(PP_CY + h);
+        if (e <= 24)
+            line_fp(r, x, FP(PP_CY), x, y == FP(PP_CY) ? y - FP(1) : y, FP(2), BLUE);
+        else
+            vline_fast(r, x, up ? y : FP(PP_CY), up ? FP(PP_CY) : y, BLUE);
+        fp32 ty = FP(PP_CY - h);            /* green: the decay envelope over the echo tops */
+        if (e > 1 && e <= 24)
+            line_fp(r, px, py, x, ty, FP(1), GREEN);
+        px = x;
+        py = ty;
+        a = (a * g) >> 15;
+    }
+    /* white: tone glyph, top right: a spectrum tilt, dark (falling) .. flat .. bright (rising) */
+    int32_t tilt = ((knob_pos(k[2]) - 16384) * 10) >> 14;             /* -10 .. +10 units */
+    line_fp(r, FP(250), FP(18) - FP(tilt), FP(290), FP(18) + FP(tilt), FP(2), WHITE);
+    vline_fast(r, FP(270), FP(8), FP(28), DARKBLUE);
+    mix_bar(r, k[3]);
+}
+
+#define DS_CX 160
+#define DS_CY 74
+#define DS_HX 64                            /* box half width / height */
+#define DS_HY 56
+
+static void draw_distortion(void *r, const int16_t *k)
+{
+    title(r, distortion_mode_name ? distortion_mode_name(k) : "DISTORT", WHITE);
+    line_fast(r, FP(DS_CX - DS_HX), FP(DS_CY), FP(DS_CX + DS_HX), FP(DS_CY), DARKBLUE);
+    vline_fast(r, FP(DS_CX), FP(DS_CY - DS_HY), FP(DS_CY + DS_HY), DARKBLUE);
+    for (int i = -DS_HX; i < DS_HX; i += 8)                          /* dry: the unity diagonal, dashed */
+        line_fast(r, FP(DS_CX + i), FP(DS_CY) - FP(i) * DS_HY / DS_HX, FP(DS_CX + i + 4),
+                  FP(DS_CY) - FP(i + 4) * DS_HY / DS_HX, GREY);
+    /* blue: drive, how hard the input hits the curve: a bar under the box */
+    fp32 dw = (fp32)((knob_pos(k[0]) * 2 * DS_HX) >> 5);             /* 0 .. 2 * DS_HX units */
+    line_fast(r, FP(DS_CX - DS_HX), FP(DS_CY + DS_HY + 8), FP(DS_CX + DS_HX), FP(DS_CY + DS_HY + 8), DARKBLUE);
+    if (dw > FP(1))
+        line_fp(r, FP(DS_CX - DS_HX), FP(DS_CY + DS_HY + 8), FP(DS_CX - DS_HX) + dw, FP(DS_CY + DS_HY + 8), FP(3),
+                BLUE);
+    /* green: the resonant filter before the shaper, as a small response glyph left of the box (log frequency,
+     * 20 Hz .. 20 kHz): flat in the middle (16384 +- 2048), low-pass 6 kHz -> 150 Hz with rising resonance below,
+     * band-pass focus 350 Hz -> 4 kHz above (distortion.c) */
+    {
+        int32_t g = knob_pos(k[1]);
+        fp32 x0 = FP(14), x1 = FP(82), by = FP(122);
+        if (g < 14336) {
+            int32_t frac = 9557 + ((g * 39995) >> 15);                    /* Q15 log(fc / 20 Hz) / log(1000) */
+            fp32 fx = x0 + (fp32)((frac * 68) >> 5);
+            fp32 bump = (fp32)(((14336 - g) * 18725) >> 15);              /* resonance: up to 8 units at 0 */
+            fp32 px[5] = { x0, fx - FP(5), fx, fx + FP(12), x1 };
+            fp32 py[5] = { by, by, by - bump, by + FP(14), by + FP(14) };
+            for (int i = 0; i < 4; i++) {
+                fp32 a = px[i] < x0 ? x0 : px[i] > x1 ? x1 : px[i], b = px[i + 1] < x0 ? x0 : px[i + 1] > x1 ? x1 : px[i + 1];
+                if (b > a)
+                    line_fp(r, a, py[i], b, py[i + 1], FP(2), GREEN);
+            }
+        } else if (g > 18432) {
+            int32_t frac = 13579 + (((g - 18432) * 26418) >> 15);         /* 350 Hz .. 4 kHz */
+            fp32 fx = x0 + (fp32)((frac * 68) >> 5);
+            fp32 px[5] = { x0, fx - FP(12), fx, fx + FP(12), x1 };
+            fp32 py[5] = { by + FP(8), by + FP(8), by - FP(6), by + FP(8), by + FP(8) };
+            for (int i = 0; i < 4; i++) {
+                fp32 a = px[i] < x0 ? x0 : px[i] > x1 ? x1 : px[i], b = px[i + 1] < x0 ? x0 : px[i + 1] > x1 ? x1 : px[i + 1];
+                if (b > a)
+                    line_fp(r, a, py[i], b, py[i + 1], FP(2), GREEN);
+            }
+        } else {
+            line_fp(r, x0, by, x1, by, FP(2), GREEN);
+        }
+        line_fast(r, x0, by + FP(16), x1, by + FP(16), DARKBLUE);
+    }
+    /* white: the transfer curve (drive, character and auto gain), 64 segments */
+    if (distortion_curve) {
+        fp32 xp = 0, yp = 0;
+        for (int i = 0; i <= 64; i++) {
+            int32_t xin = i * 1024 - 32768;
+            int32_t y = distortion_curve(k, xin > 32767 ? 32767 : xin);
+            fp32 x = FP(DS_CX - DS_HX) + FP(i * 2 * DS_HX) / 64;
+            fp32 yy = FP(DS_CY) - (fp32)((y * DS_HY) >> 5);           /* DS_HY units at 32768 */
+            if (i)
+                line_fp(r, xp, yp, x, yy, FP(2), WHITE);
+            xp = x;
+            yp = yy;
+        }
+    }
+    mix_bar(r, k[3]);
+}
+
+/* ---- SVG screens (TE's retained renderer, notes/svg-route.md): our own documents in content/display/, loaded on
+ * first show (never at boot), only after checking the file exists (TE's loader asserts on a missing file). Nodes
+ * are found once with must = 0; a missing id leaves its pointer 0 and the code skips it. Per frame: group matrices
+ * and the visible flag (byte +0x50), then one render; our line overlay goes on top. ---- */
+
+#define NODE_VISIBLE 0x50
+
+struct svgdoc {
+    void *doc;                              /* first word: TE's render takes a "screen" whose word 0 is the doc */
+    int32_t state;                          /* 0 not tried, 1 loaded, -1 missing (draw the line version) */
+};
+
+static int svg_open(struct svgdoc *d, const char *path, const char *name)
+{
+    if (!d->state) {
+        int fd = te_yaffs_open(path, 0, 0x100);
+        d->state = -1;
+        if (fd >= 0) {
+            te_yaffs_close(fd);
+            d->doc = te_svg_load(name);
+            d->state = d->doc ? 1 : -1;
+        }
+    }
+    return d->state > 0;
+}
+
+static void show(void *node, int on)
+{
+    if (node)
+        ((volatile uint8_t *)node)[NODE_VISIBLE] = on ? 1 : 0;
+}
+
+/* Matrix {a, b, 0, c, d, 0, e, f, 1} (Q10, row vector: x' = a x + c y + e, y' = b x + d y + f). */
+static void set_matrix(void *node, int32_t a, int32_t b, int32_t c, int32_t d, int32_t e, int32_t f)
+{
+    if (!node)
+        return;
+    int32_t m[9] = { a, b, 0, c, d, 0, e, f, 1024 };
+    te_node_matrix(node, m);
+}
+
+/* Rotation by `turn` (uint32 = one turn) about (px, py) (whole units), optionally followed by a translation. */
+static void set_rotation(void *node, uint32_t turn, int32_t px, int32_t py)
+{
+    int32_t c = cos_t(turn) >> 5, sn = sin_t(turn) >> 5;        /* Q10 */
+    set_matrix(node, c, sn, -sn, c, px * (1024 - c) + sn * py, py * (1024 - c) - sn * px);
+}
+
+/* Rotation by `turn` and uniform scale `sc` (Q10) about (px, py) (whole units). */
+static void set_rot_scale(void *node, uint32_t turn, int32_t sc, int32_t px, int32_t py)
+{
+    int32_t c = ((cos_t(turn) >> 5) * sc) >> 10, sn = ((sin_t(turn) >> 5) * sc) >> 10;    /* Q10 */
+    set_matrix(node, c, sn, -sn, c, px * (1024 - c) + sn * py, py * (1024 - c) - sn * px);
+}
+
+/* Vertical scale `sy` (Q10) about y = cy10 (Q10 units). */
+static void set_vscale(void *node, int32_t sy, int32_t cy10)
+{
+    set_matrix(node, 1024, 0, 0, sy, 0, cy10 - ((sy * cy10) >> 10));
+}
+
+/* Render a document; svg_cost() (--svg-cost builds) then shows the kilocycles since the render started (render +
+ * whatever overlay was drawn in between), right-aligned in the bottom corner. */
+static uint32_t svg_t0 RAM = 0;
+
+static void svg_render(void *doc)
+{
+    struct { void *doc; } screen = { doc };
+    svg_t0 = cycles();
+    te_svg_render(&screen);
+}
+
+static void svg_cost(void *r)
+{
+#ifdef SVG_COST
+    char buf[12];
+    uint32_t kc = (cycles() - svg_t0) >> 10, n = 0;
+    do {
+        buf[10 - n++] = '0' + kc % 10;
+        kc /= 10;
+    } while (kc && n < 9);
+    buf[11] = 0;
+    text_fast(r, buf + 11 - n, FP(316) - FP(6) * n, FP(132), FP(1), GREY);
+#else
+    (void)r;
+#endif
+}
+
+/* A cached fill or stroke colour of a node (TE's style getters assert on a missing id: checked with find first),
+ * with its colour from the file. */
+struct recol {
+    uint8_t *p;
+    uint8_t orig[3];
+};
+
+static void recol_init(struct recol *c, void *doc, const char *id, int stroke)
+{
+    struct { void *doc; } screen = { doc };
+    c->p = te_node_find(doc, id, 0) ? (stroke ? te_svg_stroke(&screen, id) : te_svg_fill(&screen, id)) : 0;
+    for (int i = 0; i < 3; i++)
+        c->orig[i] = c->p ? c->p[i] : 0;
+}
+
+/* Colour 0xRRGGBB scaled by v (0 .. 256). */
+static void recol_set(struct recol *c, uint32_t rgb, int32_t v)
+{
+    if (!c->p)
+        return;
+    c->p[0] = (uint8_t)((((rgb >> 16) & 255) * v) >> 8);
+    c->p[1] = (uint8_t)((((rgb >> 8) & 255) * v) >> 8);
+    c->p[2] = (uint8_t)(((rgb & 255) * v) >> 8);
+}
+
+static void recol_fade(struct recol *c, int32_t v)
+{
+    recol_set(c, (uint32_t)c->orig[0] << 16 | (uint32_t)c->orig[1] << 8 | c->orig[2], v);
+}
+
+/* Affine maps (Q10; e, f in Q10 units), x' = a x + c y + e, y' = b x + d y + f. */
+struct aff {
+    int32_t a, b, c, d, e, f;
+};
+
+/* (No struct assignment or by-value structs: GCC turns those into memcpy, and there is no libc.) */
+static void aff_mul(struct aff *m, const struct aff *m1, const struct aff *m2)     /* m2 first, then m1 */
+{
+    m->a = (m1->a * m2->a + m1->c * m2->b) >> 10;
+    m->b = (m1->b * m2->a + m1->d * m2->b) >> 10;
+    m->c = (m1->a * m2->c + m1->c * m2->d) >> 10;
+    m->d = (m1->b * m2->c + m1->d * m2->d) >> 10;
+    m->e = ((m1->a * m2->e + m1->c * m2->f) >> 10) + m1->e;
+    m->f = ((m1->b * m2->e + m1->d * m2->f) >> 10) + m1->f;
+}
+
+static void aff_rot(struct aff *m, uint32_t turn, fp32 px, fp32 py)    /* about (px, py), Q10 units */
+{
+    int32_t c = cos_t(turn) >> 5, sn = sin_t(turn) >> 5;
+    m->a = c;
+    m->b = sn;
+    m->c = -sn;
+    m->d = c;
+    m->e = px - ((c * px - sn * py) >> 10);
+    m->f = py - ((sn * px + c * py) >> 10);
+}
+
+static void set_aff(void *node, const struct aff *m)
+{
+    set_matrix(node, m->a, m->b, m->c, m->d, m->e, m->f);
+}
+
+static void aff_line(void *r, const struct aff *m, fp32 x0, fp32 y0, fp32 x1, fp32 y1, fp32 w, int colour)
+{
+    line_fp(r, ((m->a * x0 + m->c * y0) >> 10) + m->e, ((m->b * x0 + m->d * y0) >> 10) + m->f,
+            ((m->a * x1 + m->c * y1) >> 10) + m->e, ((m->b * x1 + m->d * y1) >> 10) + m->f, w, colour);
+}
+
+/* Deterministic noise, Q15 -1 .. 1, a new value `rate_q8` / 256 times per second (30 fps frame clock). */
+static int32_t jit(uint32_t frame, uint32_t seed, uint32_t rate_q8)
+{
+    uint32_t n = (frame * ((rate_q8 * 8738u) >> 10)) >> 16;
+    uint32_t x = n * 0x9E3779B1u ^ seed * 0x85EBCA77u;
+    x ^= x >> 15;
+    x *= 0x2C1B3C6Du;
+    x ^= x >> 12;
+    return (int32_t)(int16_t)(x >> 16);
+}
+
+/* ensemble: the choir (design/fx/choir.svg; ids and behaviour in its header). */
+enum { C_S, C_HEAD, C_HALO, C_CONE, C_MOUTH, C_SHUT, C_R, C_KINDS };
+static const char *const choir_ids[C_KINDS][3] = {
+    { "s1", "s2", "s3" }, { "head1", "head2", "head3" }, { 0, "halo2", "halo3" }, { 0, "cone2", "cone3" },
+    { "mouth1", "mouth2", "mouth3" }, { "shut1", "shut2", "shut3" }, { "r1", "r2", "r3" } };
+static const char *const note_ids[6] = { "n1", "n2", "n3", "n4", "n5", "n6" };
+/* The backing singers fade in from black with white: these fills and strokes are scaled toward black. Their colour
+ * values are unique in choir.svg (TE may share one style entry between elements of equal colour). */
+static const char *const fade_fill[2][7] = { { "robe2", "hair2", "face2", "book2", "cheek2", "mo2", "cone2" },
+                                             { "robe3", "hair3", "face3", "book3", "cheek3", "mo3", "cone3" } };
+static const char *const fade_stroke[2][4] = { { "robe2", "hair2", "face2", "shut2" },
+                                               { "robe3", "hair3", "face3", "shut3" } };
+#define FADES (2 * (7 + 4))
+static uint8_t *fade_rgba[FADES] RAM = { 0 };
+static uint8_t fade_orig[FADES][3] RAM = { { 0 } };
+static int32_t fade_level RAM = -1;
+static struct svgdoc choir RAM = { 0, 0 };
+static void *choir_node[C_KINDS][3] RAM = { { 0 } };
+static void *choir_note[6] RAM = { 0 };
+static uint32_t choir_frame RAM = 0;
+
+static int choir_ready(void)
+{
+    if (choir.state)
+        return choir.state > 0;
+    if (!svg_open(&choir, "/yaffs2/content/display/choir.svg", "choir.svg"))
+        return 0;
+    for (int k = 0; k < C_KINDS; k++)
+        for (int i = 0; i < 3; i++)
+            if (choir_ids[k][i])
+                choir_node[k][i] = te_node_find(choir.doc, choir_ids[k][i], 0);
+    for (int j = 0; j < 6; j++)
+        choir_note[j] = te_node_find(choir.doc, note_ids[j], 0);
+    struct { void *doc; } screen = { choir.doc };
+    int n = 0;
+    for (int i = 0; i < 2; i++) {                   /* the getters assert on a missing id: check with find first */
+        for (int j = 0; j < 7; j++, n++)
+            fade_rgba[n] = te_node_find(choir.doc, fade_fill[i][j], 0) ? te_svg_fill(&screen, fade_fill[i][j]) : 0;
+        for (int j = 0; j < 4; j++, n++)
+            fade_rgba[n] = te_node_find(choir.doc, fade_stroke[i][j], 0) ? te_svg_stroke(&screen, fade_stroke[i][j]) : 0;
+    }
+    for (n = 0; n < FADES; n++)
+        for (int c = 0; c < 3; c++)
+            fade_orig[n][c] = fade_rgba[n] ? fade_rgba[n][c] : 0;
+    return 1;
+}
+
+/* Screen-side motion phases, clocked by the 6.5 Hz shimmer phase (a steady audio clock): the sway follows the blue
+ * rate exactly up to 1 Hz, then at 0.35x of the excess (12.8 Hz -> ~5 Hz on screen), so it keeps speeding up over
+ * the whole knob without becoming a blur; the star flick runs at a steady 3 Hz. */
+struct view { uint32_t last_vib, sway, flick; };
+static struct view choir_view RAM = { 0, 0, 0 };
+
+static void choir_motion(int32_t rate_k, uint32_t vib)
+{
+    uint32_t dv = vib - choir_view.last_vib;
+    choir_view.last_vib = vib;
+    if (dv > 0x40000000u)                                           /* > a quarter turn: a stall or a jump */
+        dv = 0x40000000u;
+    uint32_t hz = ens_rate_q16(rate_k);                             /* Q16 */
+    uint32_t vhz = hz <= 65536 ? hz : 65536 + (((hz - 65536) * 90) >> 8);
+    uint32_t ratio = ((vhz >> 4) * 10082u) >> 12;                   /* vhz / 6.5, Q16 */
+    choir_view.sway += (dv >> 16) * ratio;
+    choir_view.flick += (dv >> 16) * 30247u;                        /* 3 / 6.5, Q16 */
+}
+
+static void draw_choir(void *r, const int16_t *k, int stereo)
+{
+    static const int32_t xs[3] = { 160, 90, 230 };
+    const struct ens *st = ensemble_state ? &ensemble_state[stereo] : 0;
+    choir_motion(knob_pos(k[0]), st ? st->vib : 0);
+    uint32_t lfo = choir_view.sway, vib = choir_view.flick;
+    int32_t depth = knob_pos(k[1]), ens = knob_pos(k[2]), mix = knob_pos(k[3]);
+    int32_t fade = ens <= 1024 ? 0 : ens >= 16384 ? 256 : ((ens - 1024) * 273) >> 14;   /* 0 .. 256 */
+    int backing = fade > 0, open = mix >= 1638;                     /* singers 2/3 on stage; mouths open (5 %) */
+    if (fade != fade_level) {                       /* white: the backing singers fade in from black */
+        fade_level = fade;
+        for (int n = 0; n < FADES; n++)
+            if (fade_rgba[n])
+                for (int c = 0; c < 3; c++)
+                    fade_rgba[n][c] = (uint8_t)((fade_orig[n][c] * fade) >> 8);
+    }
+    choir_frame++;
+    for (int i = 0; i < 3; i++) {
+        int on = i == 0 || backing;
+        uint32_t off = (uint32_t)i * 0x55555555u;                    /* 120 degrees apart */
+        int32_t t = tri16((lfo + off) >> 16);                       /* -32768 .. 32766 */
+        int32_t sway = (depth * t) >> 15;                           /* Q15 of 9 degrees */
+        set_rotation(choir_node[C_S][i], (uint32_t)(sway * 3277), xs[i], 124);       /* 9 deg = 0.025 turn */
+        set_rotation(choir_node[C_HEAD][i], (uint32_t)(((sway * 19661) >> 15) * 3277), xs[i], 84);
+        set_vscale(choir_node[C_MOUTH][i], 307 + ((mix * 717) >> 15), FP(78) + (FP(1) >> 1));
+        show(choir_node[C_S][i], on);
+        show(choir_node[C_CONE][i], on);
+        show(choir_node[C_MOUTH][i], open);
+        show(choir_node[C_SHUT][i], !open);
+        /* green stars: grow with depth, flick +-20 degrees at the 6.5 Hz shimmer */
+        set_rot_scale(choir_node[C_HALO][i], (vib >> 31) ? 0x0E38E38Eu : 0xF1C71C72u, 614 + ((depth * 922) >> 15),
+                      xs[i], 72);
+        show(choir_node[C_HALO][i], on && depth > 0);
+        if (stereo) {                                               /* master: reflections lean in anti-phase */
+            int32_t tr = tri16((lfo + off + 0x80000000u) >> 16);
+            set_rotation(choir_node[C_R][i], (uint32_t)(-((depth * tr) >> 15) * 3277), xs[i], 124);
+        }
+        show(choir_node[C_R][i], stereo && on);
+    }
+    int notes = (mix * 6 + 16384) >> 15;                            /* round(6 mix) */
+    for (int j = 0; j < 6; j++) {
+        uint32_t u = (choir_frame * 1311u + (uint32_t)j * 10923u) & 0xFFFF;   /* rise: ~0.6 per s at 30 fps */
+        int32_t wob = sin_t(u << 18) >> 4;                          /* +-2 units, Q10 */
+        set_matrix(choir_note[j], 1024, 0, 0, 1024, wob, -(int32_t)((34u * u) >> 6));
+        show(choir_note[j], j < notes);
+    }
+    svg_render(choir.doc);
+    svg_cost(r);
+}
+
+/* pingpong: table tennis (design/fx/pingpong.svg; ids and behaviour in its header). The ball's flights are clocked by
+ * the delay line's write index (audio time); one flight per delay, or a whole multiple of it of at least 0.25 s. */
+enum { P_TOP, P_LEGL, P_LEGR, P_PL, P_PR, P_BATL, P_BATR, P_SMILEL, P_SMILER, P_YELLL, P_YELLR, P_BALL, P_SHADE,
+       P_GLINT, P_GLOW, P_SHADOW, P_TABLE, P_WALL, P_KINDS };
+static const char *const pp_ids[P_KINDS] = { "tabletop", "legL", "legR", "pL", "pR", "batL", "batR", "smilegL",
+    "smilegR", "yellgL", "yellgR", "ball", "ballshade", "ballglint", "glow", "shadow", "table", "wall" };
+#define PIPS 11
+static struct svgdoc tennis RAM = { 0, 0 };
+static void *pp_node[P_KINDS] RAM = { 0 };
+static struct recol pp_ball RAM = { 0, { 0 } };
+static struct recol pp_pip[PIPS][2] RAM = { { { 0, { 0 } } } };
+static int32_t pp_lit RAM = -1, pp_tone RAM = -1;
+struct pp_view { uint32_t last_w, fpos, flights, glow; };
+static struct pp_view pp_view[2] RAM = { { 0, 0, 0, 0 }, { 0, 0, 0, 0 } };
+#define DEG 11930465u                                               /* one degree in uint32 turns */
+#define HIT 5292                                                    /* 0.12 s: the swing after a hit */
+
+static int tennis_ready(void)
+{
+    if (tennis.state)
+        return tennis.state > 0;
+    if (!svg_open(&tennis, "/yaffs2/content/display/pingpong.svg", "pingpong.svg"))
+        return 0;
+    for (int i = 0; i < P_KINDS; i++)
+        pp_node[i] = te_node_find(tennis.doc, pp_ids[i], 0);
+    recol_init(&pp_ball, tennis.doc, "ballbody", 0);
+    char id[6];                                                     /* (no array initialiser: memcpy) */
+    id[0] = 'p', id[1] = 'i', id[2] = 'p', id[5] = 0;
+    for (int j = 0; j < PIPS; j++) {
+        id[3] = j < 9 ? '1' + j : '1';
+        id[4] = j < 9 ? 0 : '0' + j - 9;
+        recol_init(&pp_pip[j][0], tennis.doc, id, 0);
+        recol_init(&pp_pip[j][1], tennis.doc, id, 1);
+    }
+    return 1;
+}
+
+static void translate(void *node, fp32 x, fp32 y)
+{
+    set_matrix(node, 1024, 0, 0, 1024, x, y);
+}
+
+/* One echo arch from (x0, y0) to (x1, y1), peak h above the chord (Q10), in n segments. */
+static void arch(void *r, fp32 x0, fp32 y0, fp32 x1, fp32 y1, fp32 h, int n, fp32 w, int colour)
+{
+    fp32 px = x0, py = y0;
+    for (int i = 1; i <= n; i++) {
+        int32_t t = (int32_t)udiv((uint32_t)i << 10, (uint32_t)n), tt = (t * (1024 - t)) >> 10;
+        fp32 x = x0 + (((x1 - x0) * t) >> 10), y = y0 + (((y1 - y0) * t) >> 10) - ((4 * h * tt) >> 10);
+        if (w)
+            line_fp(r, px, py, x, y, w, colour);
+        else
+            line_fast(r, px, py, x, y, colour);
+        px = x;
+        py = y;
+    }
+}
+
+static void draw_tennis(void *r, const int16_t *k, int stereo)
+{
+    int32_t u = knob_pos(k[0]), g = knob_pos(k[1]), tone = knob_pos(k[2]), mix = knob_pos(k[3]);
+    const struct pp *st = pingpong_state ? &pingpong_state[stereo] : 0;
+    struct pp_view *v = &pp_view[stereo];
+    uint32_t w = st ? st->w : 0, dw = w - v->last_w;
+    v->last_w = w;
+    if (!dw || dw > 44100)                                          /* FX not running: a 30 fps frame of time */
+        dw = 1470;
+    uint32_t d = st && st->d ? (uint32_t)st->d >> 15 : (882u * (exp2_q16_ui(u * 12) >> 8)) >> 8;
+    if (d < 441)
+        d = 441;
+    uint32_t period = d;
+    while (period < 11025)                                          /* at least 0.25 s per flight */
+        period += d;
+    v->fpos += dw;
+    while (v->fpos >= period) {
+        v->fpos -= period;
+        v->flights++;
+    }
+    uint32_t since = v->fpos;
+    int32_t ph = (int32_t)udiv(v->fpos << 10, period);              /* 0 .. 1023 */
+    int right = stereo && (v->flights & 1);                         /* the hitter: R on odd flights (stereo) */
+
+    /* blue: the table length (and the players with its ends) */
+    fp32 half = FP(40) + 2 * u, dx = FP(104) - half;
+    int32_t sx = (half * 10082) >> 20;                              /* half / 104, Q10 */
+    set_matrix(pp_node[P_TOP], sx, 0, 0, 1024, 160 * (1024 - sx), 0);
+    translate(pp_node[P_LEGL], dx, 0);
+    translate(pp_node[P_LEGR], -dx, 0);
+    translate(pp_node[P_PL], dx, 0);
+    translate(pp_node[P_PR], -dx, 0);
+    translate(pp_node[P_WALL], -dx, 0);
+    show(pp_node[P_TABLE], stereo);
+    show(pp_node[P_PR], stereo);
+    show(pp_node[P_WALL], !stereo);
+
+    /* bats: the hitter swings through, the receiver cocks back over the last 40 % of the flight */
+    int32_t hit = since < HIT ? -35 * (int32_t)DEG + 101447 * (int32_t)since : since < 8820 ? 10 * (int32_t)DEG : 0;
+    int32_t recv = ph > 614 ? 581974 * (ph - 614) : 0;
+    int32_t al = right ? recv : hit, ar = right ? hit : recv;
+    set_rotation(pp_node[P_BATL], (uint32_t)-al, 39, 84);
+    set_rotation(pp_node[P_BATR], (uint32_t)ar, 281, 84);
+    int yell = since < HIT;
+    show(pp_node[P_YELLL], yell && !right);
+    show(pp_node[P_SMILEL], !(yell && !right));
+    show(pp_node[P_YELLR], yell && right);
+    show(pp_node[P_SMILER], !(yell && right));
+
+    /* the ball along the newest arch */
+    fp32 xl = FP(158) - half, xr = stereo ? FP(162) + half : FP(155) + half;
+    fp32 y0 = FP(70), y1 = stereo ? FP(70) : FP(74);
+    int32_t t = (stereo ? right : (int)(v->flights & 1)) ? 1024 - ph : ph, tt = (t * (1024 - t)) >> 10;
+    fp32 bx = xl + (((xr - xl) * t) >> 10), by = y0 + (((y1 - y0) * t) >> 10) - ((4 * FP(42) * tt) >> 10);
+    translate(pp_node[P_BALL], bx, by);
+    int32_t ssx = 1024 - (((FP(70) - by) * 10486) >> 20);           /* 1 - h / 100: smaller as the ball flies up */
+    set_matrix(pp_node[P_SHADOW], ssx < 307 ? 307 : ssx, 0, 0, 1024, bx, stereo ? FP(100) : FP(131));
+
+    /* white: the ball's look */
+    int band = tone < 8192 ? 0 : tone < 14746 ? 1 : 2;
+    if (band != pp_tone) {
+        pp_tone = band;
+        recol_set(&pp_ball, band == 0 ? 0x7C7990 : band == 1 ? 0xAEB1DC : 0xFFFFFF, 256);
+    }
+    show(pp_node[P_SHADE], band < 2);
+    show(pp_node[P_GLINT], band == 2);
+    v->glow += dw * 97391u;                                         /* one turn per second */
+    show(pp_node[P_GLOW], tone > 18022);
+    if (tone > 18022)
+        set_rot_scale(pp_node[P_GLOW], v->glow, 358 + ((665 * ((tone - 16384) >> 4)) >> 10), 0, 0);
+
+    /* orange: the scoreboard */
+    int32_t lit = (mix * PIPS + 16384) >> 15;
+    if (lit != pp_lit) {
+        pp_lit = lit;
+        for (int j = 0; j < PIPS; j++)
+            for (int c = 0; c < 2; c++)
+                recol_set(&pp_pip[j][c], j < lit ? 0xFF423F : 0x4E2832, 256);
+    }
+    svg_render(tennis.doc);
+
+    /* green: the echo arches, oldest first, the newest on top */
+    int32_t gq = (g * 31130) >> 15, lv[8], n = 0;
+    for (int32_t a = 32768; a > 1311 && n < 8; a = (a * gq) >> 15)
+        lv[n++] = a;
+    for (int j = n - 1; j >= 0; j--) {
+        fp32 h = FP(6) + ((36 * lv[j]) >> 5);
+        if (j == 0)
+            arch(r, xl, y0, xr, y1, h, 14, FP(2), LIGHTGREEN);
+        else if (j <= 5)
+            arch(r, xl, y0, xr, y1, h, 8, FP(1) + 205, GREEN);
+        else
+            arch(r, xl, y0, xr, y1, h, 16, 0, DARKGREEN);
+    }
+    if (yell) {                                                     /* a swoosh in front of the hitter's bat */
+        fp32 hx = right ? xr : xl;
+        int32_t side = right ? -1 : 1;
+        for (int32_t rr = 10; rr <= 16; rr += 3) {
+            fp32 qx = 0, qy = 0;
+            for (int i = 0; i < 4; i++) {
+                uint32_t a = (10 + 20 * (uint32_t)i) * DEG;
+                fp32 x = hx + side * ((rr * cos_t(a)) >> 5), y = FP(70) + ((rr * sin_t(a)) >> 5);
+                if (i)
+                    line_fast(r, qx, qy, x, y, LIGHTBLUE);
+                qx = x;
+                qy = y;
+            }
+        }
+    }
+    svg_cost(r);
+}
+
+/* distortion: the two pedals (design/fx/pedals.svg; ids and behaviour in its header). */
+#include "wah_table.h"
+enum { D_PEDAL, D_PLATE, D_S1, D_S2, D_S3, D_S4, D_GLOW, D_P1, D_P2, D_P3, D_P4, D_TTOP, D_TSIDE, D_TEND, D_KINDS };
+static const char *const dist_ids[D_KINDS] = { "pedal", "plate", "s1", "s2", "s3", "s4", "glow", "p1", "p2", "p3", "p4",
+                                               "ttop", "tside", "tend" };
+/* Faded with mix toward black; the controls stay unfaded. Each with the styles it has (pedals.svg): TE's style
+ * getters assert (Screen.cpp linestyle_id) when asked for a stroke or fill the element does not have. */
+enum { FF = 1, FS = 2 };
+static const struct { const char *id; uint8_t has; } dist_fade_ids[] = {
+    { "shadow", FF }, { "cableO", FS }, { "plugL", FF | FS }, { "plugR", FF | FS }, { "collar", FF | FS },
+    { "jackL", FF | FS }, { "jackR", FF | FS }, { "hilite", FS }, { "lip", FS }, { "grooves", FF },
+    { "screw", FF | FS }, { "slot", FS }, { "wshadow", FF }, { "wroofL", FF | FS }, { "wroofR", FF | FS },
+    { "wend", FF | FS }, { "wside", FF | FS }, { "wbrk", FF | FS }, { "rubber", FS }, { "chrome", FF | FS },
+    { "shine", FS }, { "wjackI", FS }, { "wjackO", FF | FS }, { "cableI", FS }, { "patch", FS }, { "plugW", FF | FS },
+    { "tendf", FF | FS } };
+#define DIST_FADES (sizeof dist_fade_ids / sizeof dist_fade_ids[0])
+enum { R_BODYF, R_BODYS, R_PLATEB, R_PLAQUE, R_LEDF, R_LEDS, R_RAYS, R_RIBS, R_SPECIAL };
+static struct svgdoc pedals RAM = { 0, 0 };
+static void *dist_node[D_KINDS] RAM = { 0 };
+static struct recol dist_fade[DIST_FADES][2] RAM = { { { 0, { 0 } } } };
+static struct recol dist_rc[R_SPECIAL] RAM = { { 0, { 0 } } };
+static int32_t dist_look RAM = -1;
+static uint32_t dist_frame RAM = 0;
+/* Per mode (TUBE MUFF FUZZ CLIP FOLD CRUSH): body, plaque rim, LED rays. */
+static const uint32_t mode_body[6] = { 0xFFB3B3, 0xE6E7FF, 0x5F4270, 0xFF423F, 0x00475B, 0xAEB1DC };
+static const uint32_t mode_trim[6] = { 0x010000, 0xFF3A5D, 0x010000, 0x010000, 0x010000, 0x010000 };
+static const uint32_t mode_rays[6] = { 0xFF3A5D, 0xFF3A5D, 0xFF90A7, 0xFFFFFF, 0xFF90A7, 0xFF3A5D };
+static const int16_t spark_xy[4][2] = { { 113, 21 }, { 207, 23 }, { 213, 77 }, { 107, 76 } };
+
+static int pedals_ready(void)
+{
+    if (pedals.state)
+        return pedals.state > 0;
+    if (!svg_open(&pedals, "/yaffs2/content/display/pedals.svg", "pedals.svg"))
+        return 0;
+    for (int i = 0; i < D_KINDS; i++)
+        dist_node[i] = te_node_find(pedals.doc, dist_ids[i], 0);
+    for (unsigned i = 0; i < DIST_FADES; i++)
+        for (int c = 0; c < 2; c++)
+            if (dist_fade_ids[i].has & (c ? FS : FF))
+                recol_init(&dist_fade[i][c], pedals.doc, dist_fade_ids[i].id, c);
+    recol_init(&dist_rc[R_BODYF], pedals.doc, "body", 0);
+    recol_init(&dist_rc[R_BODYS], pedals.doc, "body", 1);
+    recol_init(&dist_rc[R_PLATEB], pedals.doc, "plateb", 0);
+    recol_init(&dist_rc[R_PLAQUE], pedals.doc, "plaque", 1);
+    recol_init(&dist_rc[R_LEDF], pedals.doc, "led", 0);
+    recol_init(&dist_rc[R_LEDS], pedals.doc, "led", 1);
+    recol_init(&dist_rc[R_RAYS], pedals.doc, "rays", 1);
+    recol_init(&dist_rc[R_RIBS], pedals.doc, "ribs", 0);
+    return 1;
+}
+
+static int mode_index(const char *s)
+{
+    static const char two[6][2] = { { 'T', 'U' }, { 'M', 'U' }, { 'F', 'U' }, { 'C', 'L' }, { 'F', 'O' }, { 'C', 'R' } };
+    for (int i = 0; i < 6; i++)
+        if (s[0] == two[i][0] && s[1] == two[i][1])
+            return i;
+    return 0;
+}
+
+static void draw_pedals(void *r, const int16_t *k)
+{
+    int32_t d = knob_pos(k[0]), g = knob_pos(k[1]), m = knob_pos(k[3]);
+    const char *word = distortion_mode_name ? distortion_mode_name(k) : "TUBE";
+    int mode = mode_index(word);
+    uint32_t f = ++dist_frame, rate = 2048 + (uint32_t)((4096 * d) >> 15);   /* shake: 8 + 16 d Hz, Q8 */
+    int32_t d15 = (d + ((d * d) >> 15)) >> 1;                       /* ~ d^1.5 */
+    int32_t d115 = (d * (27853 + ((4915 * d) >> 15))) >> 15;        /* ~ d^1.15 */
+
+    /* blue: the box shakes, the foot plate rattles, sparks fly */
+    struct aff shake = { 1024, 0, 0, 1024, (((3277 * d115) >> 15) * jit(f, 1, rate)) >> 15,
+                         (((2048 * d115) >> 15) * jit(f, 2, rate)) >> 15 };
+    uint32_t th = (uint32_t)((((d15 * 655) >> 15) * jit(f, 7, rate)));
+    struct aff rot, pm;
+    aff_rot(&rot, th, FP(160), FP(138));
+    aff_mul(&pm, &rot, &shake);
+    set_aff(dist_node[D_PEDAL], &pm);
+    translate(dist_node[D_PLATE], (((2662 * d115) >> 15) * jit(f, 3, rate)) >> 15,
+              (((1843 * d115) >> 15) * jit(f, 4, rate)) >> 15);
+    static const int32_t spark_at[4] = { 23593, 26214, 28836, 31130 };
+    for (int i = 0; i < 4; i++) {
+        int on = d > spark_at[i] && jit(f, 10 + i, 15 << 8) > -11469;
+        show(dist_node[D_S1 + i], on);
+        if (on)
+            set_rot_scale(dist_node[D_S1 + i], (uint32_t)(9102 * jit(f, 20 + i, 15 << 8)), 819 + ((410 * d) >> 15),
+                          spark_xy[i][0], spark_xy[i][1]);
+    }
+    int glow = m > 0 && d > 983;
+    show(dist_node[D_GLOW], glow);
+    if (glow) {
+        int32_t sc = 563 + ((768 * d) >> 15);
+        sc = (sc * (1024 + ((((61 * d) >> 15) * jit(f, 5, 20 << 8)) >> 15))) >> 10;
+        set_matrix(dist_node[D_GLOW], sc, 0, 0, sc, 160 * (1024 - sc), (97 * (1024 - sc)) >> 1);
+    }
+    for (int i = 0; i < 4; i++)                                     /* knob pointers: -135 .. +135 degrees */
+        set_rotation(dist_node[D_P1 + i], 0xA0000000u + (uint32_t)knob_pos(k[i]) * 98304u, 127 + 22 * i, 34);
+
+    /* green: the wah treadle rocks, heel down (low-pass) .. level .. toe down */
+    int32_t a = g < 14336 ? -(((14336 - g) * 74899) >> 15) : g > 18432 ? ((g - 18432) * 74904) >> 15 : 0;
+    a = a < -32768 ? -32768 : a > 32768 ? 32768 : a;
+    int32_t pos = (a + 32768) * WAH_STEPS, i0 = pos >> 16, fr = (pos & 0xFFFF) >> 6;
+    if (i0 >= WAH_STEPS) {
+        i0 = WAH_STEPS - 1;
+        fr = 1024;
+    }
+    int32_t wm[18];
+    for (int j = 0; j < 18; j++)
+        wm[j] = wah_table[i0][j] + (((wah_table[i0 + 1][j] - wah_table[i0][j]) * fr) >> 10);
+    for (int j = 0; j < 3; j++)
+        set_matrix(dist_node[D_TTOP + j], wm[6 * j], wm[6 * j + 1], wm[6 * j + 2], wm[6 * j + 3], wm[6 * j + 4],
+                   wm[6 * j + 5]);
+
+    /* white: body colour per mode; orange: both pedals fade in from black */
+    int32_t v = 38 + ((218 * m) >> 15);                             /* 0.15 + 0.85 m, of 256 */
+    int32_t look = v | mode << 9 | (m > 0) << 12;
+    if (look != dist_look) {
+        dist_look = look;
+        for (unsigned i = 0; i < DIST_FADES; i++)
+            for (int c = 0; c < 2; c++)
+                recol_fade(&dist_fade[i][c], v);
+        recol_set(&dist_rc[R_BODYF], mode_body[mode], v);
+        recol_set(&dist_rc[R_BODYS], mode_body[mode], v);
+        recol_set(&dist_rc[R_PLATEB], mode_body[mode], v);
+        recol_set(&dist_rc[R_PLAQUE], mode_trim[mode], v);
+        recol_set(&dist_rc[R_LEDF], m > 0 ? 0xFF3A5D : 0x4E2832, m > 0 ? v : 256);
+        recol_set(&dist_rc[R_LEDS], m > 0 ? 0xFF3A5D : 0x4E2832, m > 0 ? v : 256);
+        recol_set(&dist_rc[R_RAYS], mode_rays[mode], 256);
+        recol_set(&dist_rc[R_RIBS], 0x00ED95, 102 + ((154 * v) >> 8));
+    }
+    svg_render(pedals.doc);
+
+    /* the mode word on the plaque, shaking with the box (the static group "dist" is translate(-64, 0)) */
+    pm.e -= FP(64);
+    int len = 0;
+    while (word[len])
+        len++;
+    fp32 step = FP(1) + 819, x = FP(160) - (((6 * len - 2) * step) >> 1), y = FP(59) + 102;
+    int colour = v >= 154 ? WHITE : v >= 90 ? PURPLEGREY : GREY;
+    for (const char *s = word; *s; s++, x += 6 * step)
+        for (const uint8_t *gl = font_seg + font_off[*s - FONT_FIRST]; *gl != 0xFF; gl += 2)
+            aff_line(r, &pm, x + (gl[0] >> 4) * step, y + (gl[0] & 15) * step, x + (gl[1] >> 4) * step,
+                     y + (gl[1] & 15) * step, FP(1) + 512, colour);
+    svg_cost(r);
+}
+
+/* FX screen: id = our FX id (8..), mode = edit mode (0 synth, 1 drum, 3 master), slot = sound slot. */
+void fx_ui_draw(int id, int mode, int slot)
+{
+    void *r = te_raster();
+    const int16_t *k = FX_KNOBS(mode, slot);
+    int kind = id >= 8 && id < 8 + fx_count ? fx_kind[id - 8] : 0;
+    if (kind == FX_ENSEMBLE) {
+        if (choir_ready())
+            draw_choir(r, k, mode == 3);
+        else
+            draw_ensemble(r, k, mode == 3);
+    }
+    else if (kind == FX_PINGPONG) {
+        if (tennis_ready())
+            draw_tennis(r, k, mode == 3);
+        else
+            draw_pingpong(r, k, mode == 3);
+    }
+    else if (kind == FX_DISTORTION) {
+        if (pedals_ready())
+            draw_pedals(r, k);
+        else
+            draw_distortion(r, k);
+    }
+}
+
+void ui_draw(int engine, int slot)
+{
+    uint32_t t0 = cycles();
+    void *r = te_raster();
+    /* Live (LFO-modulated) knobs: the render trampoline copies each call's params; use them while voices
+     * render (the count moved since the last frame), else the stored knobs. */
+    uint32_t renders = PROF[5];
+    int16_t kl[4];
+    const int16_t *k = KNOBS(slot);
+    int live = renders != last_renders;
+    if (live) {
+        const int16_t *p = (const int16_t *)&PROF[3];
+        for (int i = 0; i < 4; i++)
+            kl[i] = p[i];
+        k = kl;
+    }
+    last_renders = renders;
+    int kind = engine >= 15 && engine < 15 + 16 ? ui_kind[engine - 15] : 0;
+    if (kind == KIND_WAVETABLE)
+        draw_wt(r, k);
+    else if (kind == KIND_GRAIN)
+        draw_grain(r, k);
+    else if (kind == KIND_VA)
+        draw_va(r, k);
+    if (hold_on)
+        hold_badge(r);
+    if (chord_on || chord_learning)
+        chord_badge(r);
+#ifdef UI_DEBUG
+    diagnostics(r, t0, k, live);
+#else
+    (void)live;
+    (void)t0;
+#endif
+#ifdef UI_DEBUG
+    ui_cost = cycles() - t0;
+#endif
+}

@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+pingpong.svg - "pingpong" FX screen (Table Tennis). Our own artwork. TE's retained renderer draws it, then our
+immediate-mode overlay (the green echo arches) goes on top. All ids are found once at load (find, assert=0) and cached.
+No text anywhere. Reference geometry: table centre x = 160, top y = 100, drawn at half-length HREF = 104;
+players stand PGAP = 26 beyond each end; bat contact height y = 70; floor y = 132.
+Knobs: u = blue/32767, half = 40 + (104 - 40) * u; g = 0.95 * green/32767; tone = (white - 16384)/16384; mix = orange/32767.
+  tabletop          matrix = scale(half/104, 1) about (160, 100)                                      [blue: table length = delay time]
+  legL / legR       matrix = translate(+-(104 - half), 0)
+  pL / pR           matrix = translate(+-(104 - half), 0)   (players walk in/out with the table ends)
+  batL / batR       extra matrix = rotate(a) about the shoulder (x = player x -+ 17, y = 84):
+                    hitter swings through a = -35 deg -> +10 deg over 0.12 s after its hit, then rests at 0;
+                    receiver cocks back to +20 deg over the last 40 % of the flight (sign mirrored for R)
+  smilegL/R yellgL/R  show yell (open mouth) on the hitter for 0.12 s after the hit, smile otherwise
+  ball              matrix = translate(x, y) along the newest arch (same curve as the overlay arch), once per
+                    flight period T = d * ceil(0.25 s / d) (d = delay time), direction flips every flight (L->R, R->L)
+  ballbody          recolour fill: tone < -0.5 grey, < -0.1 purplegrey, else white (stroke white)            [white: tone]
+  ballshade         shown when tone < -0.1 (dull, heavy ball)
+  ballglint         shown when tone > -0.1
+  glow              shown when tone > 0.1; matrix = rotate(t * 360 deg/s) * scale(0.35 + 0.65 * tone) about the ball centre
+  shadow            matrix = translate(ball x, 100) * scale(1 - 0.5 * h, 1) where h = ball height above the bats / 50 (squash: floor y 131)
+  pip1..pip11       recolour fill+stroke: pip j <= round(11 * mix) orange (wet), others offred (dry); lit from the right [orange: mix]
+  table             hidden for synth/drum FX (mono = squash)
+  wall              shown only for synth/drum FX; matrix = translate(104 - half ... i.e. -( 104 - half ), 0)
+  pR                hidden for synth/drum FX
+  everything else   static (arena barrier, floor, net, scoreboard board + wires).
+Overlay (immediate mode, <= ~56 AA segments, green = feedback):
+  echo k = 0.. while g^k > 0.04 (max 8): an arch bat-face to bat-face (squash: bat to wall), peak 6 + 36 * g^k above the bats;
+  k = 0 lightgreen 2 px, 14 segments; k = 1..5 green 1.2 px, 8 segments; older: darkgreen 1-px framebuffer lines.
+  A short lightblue 1-px swoosh (3 arcs) below/in front of the hitter's bat for 0.12 s after each hit.
+-->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" x="0" y="0" width="320" height="160" viewBox="0 0 320 160">
+  <g id="arena">
+    <rect id="barrier" x="4" y="104" width="312" height="20" fill="#1D2040"/>
+    <path id="barrier_seams" d="M56 104 L56 124 M108 104 L108 124 M160 104 L160 124 M212 104 L212 124 M264 104 L264 124" fill="none" stroke="#383572" stroke-width="1"/>
+    <line id="floor" x1="4" y1="132" x2="316" y2="132" stroke="#AEB1DC" stroke-width="1.5"/>
+    <line id="lip" x1="4" y1="135" x2="316" y2="135" stroke="#383572" stroke-width="1"/>
+  </g>
+  <g id="table">
+    <g id="tabletop">
+      <rect id="slab" x="56" y="100" width="208" height="6" fill="#00475B"/>
+      <line id="edge" x1="56" y1="100" x2="264" y2="100" stroke="#E6E7FF" stroke-width="1.5"/>
+      <line id="underside" x1="60" y1="107.5" x2="260" y2="107.5" stroke="#002826" stroke-width="1.5"/>
+    </g>
+    <g id="legL">
+      <path id="legLd" d="M76 107 L70 132 L68 132 L73 107 Z" fill="#7C7990"/>
+    </g>
+    <g id="legR">
+      <path id="legRd" d="M244 107 L250 132 L252 132 L247 107 Z" fill="#7C7990"/>
+    </g>
+    <g id="net">
+      <line id="netpost" x1="160" y1="88" x2="160" y2="100" stroke="#E6E7FF" stroke-width="1.5"/>
+      <path id="netmesh" d="M157.5 90 L162.5 90 M157.5 92.5 L162.5 92.5 M157.5 95 L162.5 95 M157.5 97.5 L162.5 97.5" fill="none" stroke="#7C7990" stroke-width="1"/>
+      <line id="nettape" x1="157" y1="88.5" x2="163" y2="88.5" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+    </g>
+  </g>
+  <g id="wall">
+    <rect id="wallface" x="264" y="30" width="22" height="102" fill="#353238"/>
+    <path id="bricks" d="M264 40 L286 40 M279 40 L279 50 M264 50 L286 50 M272 50 L272 60 M264 60 L286 60 M279 60 L279 70 M264 70 L286 70 M272 70 L272 80 M264 80 L286 80 M279 80 L279 90 M264 90 L286 90 M272 90 L272 100 M264 100 L286 100 M279 100 L279 110 M264 110 L286 110 M272 110 L272 120 M264 120 L286 120 M279 120 L279 130" fill="none" stroke="#5F4270" stroke-width="1"/>
+    <line id="wallfront" x1="264" y1="30" x2="264" y2="132" stroke="#AEB1DC" stroke-width="2"/>
+    <line id="tin" x1="263" y1="116" x2="286" y2="116" stroke="#BFD8FF" stroke-width="2"/>
+    <line id="courtline" x1="16" y1="130.5" x2="264" y2="130.5" stroke="#383572" stroke-width="1.5"/>
+  </g>
+  <g id="shadow">
+    <path id="shadowd" d="M5 0 C5 0.72 2.76 1.3 0 1.3 C-2.76 1.3 -5 0.72 -5 0 C-5 -0.72 -2.76 -1.3 0 -1.3 C2.76 -1.3 5 -0.72 5 0 Z" fill="#002826" stroke="#002826" stroke-width="0.5"/>
+  </g>
+  <g id="pL">
+    <path id="legsL" d="M25 116 L23 130 M35 116 L37 130" fill="none" stroke="#E6E7FF" stroke-width="3.5" stroke-linecap="round"/>
+    <path id="shoesL" d="M29 130.5 C29 131.6 26.99 132.5 24.5 132.5 C22.01 132.5 20 131.6 20 130.5 C20 129.4 22.01 128.5 24.5 128.5 C26.99 128.5 29 129.4 29 130.5 Z M43 130.5 C43 131.6 40.99 132.5 38.5 132.5 C36.01 132.5 34 131.6 34 130.5 C34 129.4 36.01 128.5 38.5 128.5 C40.99 128.5 43 129.4 43 130.5 Z" fill="#FFFFFF"/>
+    <path id="shortsL" d="M18 106 L42 106 L43 118 L31.5 118 L30 113 L28.5 118 L17 118 Z" fill="#383572"/>
+    <path id="arm2L" d="M21 84 C15 90 16 98 20 102" fill="none" stroke="#E6E7FF" stroke-width="3.5" stroke-linecap="round"/>
+    <path id="shirtL" d="M21 80 C16 82 16 96 17.5 108 L42.5 108 C44 96 44 82 39 80 C34 78 26 78 21 80 Z" fill="#698EFF" stroke="#698EFF" stroke-width="1.5" stroke-linejoin="round"/>
+    <path id="stripeL" d="M17 96 L43 96" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+    <g id="headL">
+      <circle id="faceL" cx="30" cy="62" r="12.5" fill="#E6E7FF"/>
+      <path id="hairL" d="M16.6 63 C15 44 45 44 43.4 63 C39 56 21 56 16.6 63 Z M18 58 C10 56 7 64 9 71 C11 65 14 62 19 63 Z" fill="#383572" stroke="#383572" stroke-width="1" stroke-linejoin="round"/>
+      <path id="bandL" d="M17.2 59 C24 55 36 55 42.8 59" fill="none" stroke="#FFFFFF" stroke-width="2.5"/>
+      <path id="eyesL" d="M30.3 63.5 C30.3 64.6 29.63 65.5 28.8 65.5 C27.97 65.5 27.3 64.6 27.3 63.5 C27.3 62.4 27.97 61.5 28.8 61.5 C29.63 61.5 30.3 62.4 30.3 63.5 Z M38.7 63.5 C38.7 64.6 38.03 65.5 37.2 65.5 C36.37 65.5 35.7 64.6 35.7 63.5 C35.7 62.4 36.37 61.5 37.2 61.5 C38.03 61.5 38.7 62.4 38.7 63.5 Z" fill="#010000"/>
+      <path id="cheekL" d="M24.1 67.5 C24.1 68.27 23.16 68.9 22 68.9 C20.84 68.9 19.9 68.27 19.9 67.5 C19.9 66.73 20.84 66.1 22 66.1 C23.16 66.1 24.1 66.73 24.1 67.5 Z M40.1 67.5 C40.1 68.27 39.16 68.9 38 68.9 C36.84 68.9 35.9 68.27 35.9 67.5 C35.9 66.73 36.84 66.1 38 66.1 C39.16 66.1 40.1 66.73 40.1 67.5 Z" fill="#FF90A7"/>
+      <g id="smilegL">
+        <path id="smileL" d="M30.5 68.5 C31.8 70.5 34.2 70.5 35.5 68.5" fill="none" stroke="#010000" stroke-width="1.3" stroke-linecap="round"/>
+      </g>
+      <g id="yellgL">
+        <path id="yellL" d="M35.2 69.3 C35.2 70.74 34.22 71.9 33 71.9 C31.78 71.9 30.8 70.74 30.8 69.3 C30.8 67.86 31.78 66.7 33 66.7 C34.22 66.7 35.2 67.86 35.2 69.3 Z" fill="#010000" stroke="#010000" stroke-width="0.8"/>
+      </g>
+    </g>
+    <g id="batL">
+      <path id="armL" d="M39 84 C43 87 46 82 49 80" fill="none" stroke="#E6E7FF" stroke-width="3.5" stroke-linecap="round"/>
+      <line id="handleL" x1="48" y1="81" x2="52" y2="76" stroke="#AEB1DC" stroke-width="3.2" stroke-linecap="round"/>
+      <path id="bladeL" d="M60.06 70.29 C59.15 74.61 55.69 77.54 52.34 76.83 C48.99 76.11 47.02 72.03 47.94 67.71 C48.85 63.39 52.31 60.46 55.66 61.17 C59.01 61.89 60.98 65.97 60.06 70.29 Z" fill="#698EFF" stroke="#BFD8FF" stroke-width="1.5"/>
+    </g>
+  </g>
+  <g id="pR">
+    <path id="legsR" d="M285 116 L283 130 M295 116 L297 130" fill="none" stroke="#E6E7FF" stroke-width="3.5" stroke-linecap="round"/>
+    <path id="shoesR" d="M286 130.5 C286 131.6 283.99 132.5 281.5 132.5 C279.01 132.5 277 131.6 277 130.5 C277 129.4 279.01 128.5 281.5 128.5 C283.99 128.5 286 129.4 286 130.5 Z M300 130.5 C300 131.6 297.99 132.5 295.5 132.5 C293.01 132.5 291 131.6 291 130.5 C291 129.4 293.01 128.5 295.5 128.5 C297.99 128.5 300 129.4 300 130.5 Z" fill="#FFFFFF"/>
+    <path id="shortsR" d="M278 106 L302 106 L303 118 L291.5 118 L290 113 L288.5 118 L277 118 Z" fill="#383572"/>
+    <path id="arm2R" d="M299 84 C305 90 304 98 300 102" fill="none" stroke="#E6E7FF" stroke-width="3.5" stroke-linecap="round"/>
+    <path id="shirtR" d="M281 80 C276 82 276 96 277.5 108 L302.5 108 C304 96 304 82 299 80 C294 78 286 78 281 80 Z" fill="#BFD8FF" stroke="#BFD8FF" stroke-width="1.5" stroke-linejoin="round"/>
+    <path id="stripeR" d="M277 96 L303 96" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+    <g id="headR">
+      <circle id="faceR" cx="290" cy="62" r="12.5" fill="#E6E7FF"/>
+      <path id="hairR" d="M276.6 63 C275 44 305 44 303.4 63 C299 56 281 56 276.6 63 Z M284 51 L287 44 L290 50 L294 43 L296 51 Z" fill="#698EFF" stroke="#698EFF" stroke-width="1" stroke-linejoin="round"/>
+      <path id="bandR" d="M277.2 59 C284 55 296 55 302.8 59" fill="none" stroke="#FFFFFF" stroke-width="2.5"/>
+      <path id="eyesR" d="M284.3 63.5 C284.3 64.6 283.63 65.5 282.8 65.5 C281.97 65.5 281.3 64.6 281.3 63.5 C281.3 62.4 281.97 61.5 282.8 61.5 C283.63 61.5 284.3 62.4 284.3 63.5 Z M292.7 63.5 C292.7 64.6 292.03 65.5 291.2 65.5 C290.37 65.5 289.7 64.6 289.7 63.5 C289.7 62.4 290.37 61.5 291.2 61.5 C292.03 61.5 292.7 62.4 292.7 63.5 Z" fill="#010000"/>
+      <path id="cheekR" d="M284.1 67.5 C284.1 68.27 283.16 68.9 282 68.9 C280.84 68.9 279.9 68.27 279.9 67.5 C279.9 66.73 280.84 66.1 282 66.1 C283.16 66.1 284.1 66.73 284.1 67.5 Z M300.1 67.5 C300.1 68.27 299.16 68.9 298 68.9 C296.84 68.9 295.9 68.27 295.9 67.5 C295.9 66.73 296.84 66.1 298 66.1 C299.16 66.1 300.1 66.73 300.1 67.5 Z" fill="#FF90A7"/>
+      <g id="smilegR">
+        <path id="smileR" d="M284.5 68.5 C285.8 70.5 288.2 70.5 289.5 68.5" fill="none" stroke="#010000" stroke-width="1.3" stroke-linecap="round"/>
+      </g>
+      <g id="yellgR">
+        <path id="yellR" d="M289.2 69.3 C289.2 70.74 288.22 71.9 287 71.9 C285.78 71.9 284.8 70.74 284.8 69.3 C284.8 67.86 285.78 66.7 287 66.7 C288.22 66.7 289.2 67.86 289.2 69.3 Z" fill="#010000" stroke="#010000" stroke-width="0.8"/>
+      </g>
+    </g>
+    <g id="batR">
+      <path id="armR" d="M281 84 C277 87 274 82 271 80" fill="none" stroke="#E6E7FF" stroke-width="3.5" stroke-linecap="round"/>
+      <line id="handleR" x1="272" y1="81" x2="268" y2="76" stroke="#AEB1DC" stroke-width="3.2" stroke-linecap="round"/>
+      <path id="bladeR" d="M272.06 67.71 C272.98 72.03 271.01 76.11 267.66 76.83 C264.31 77.54 260.85 74.61 259.94 70.29 C259.02 65.97 260.99 61.89 264.34 61.17 C267.69 60.46 271.15 63.39 272.06 67.71 Z" fill="#698EFF" stroke="#BFD8FF" stroke-width="1.5"/>
+    </g>
+  </g>
+  <g id="score">
+    <line id="wire1" x1="114.5" y1="2" x2="114.5" y2="6" stroke="#7C7990" stroke-width="1"/>
+    <line id="wire2" x1="205.5" y1="2" x2="205.5" y2="6" stroke="#7C7990" stroke-width="1"/>
+    <rect id="board" x="106.5" y="6" width="107" height="13" fill="#353238" stroke="#7C7990" stroke-width="1"/>
+    <circle id="pip1" cx="205" cy="12.5" r="3" fill="#4E2833" stroke="#4E2831" stroke-width="1"/>
+    <circle id="pip2" cx="196" cy="12.5" r="3" fill="#4E2932" stroke="#4E2732" stroke-width="1"/>
+    <circle id="pip3" cx="187" cy="12.5" r="3" fill="#4F2832" stroke="#4D2832" stroke-width="1"/>
+    <circle id="pip4" cx="178" cy="12.5" r="3" fill="#4E2933" stroke="#4E2931" stroke-width="1"/>
+    <circle id="pip5" cx="169" cy="12.5" r="3" fill="#4E2733" stroke="#4E2731" stroke-width="1"/>
+    <circle id="pip6" cx="160" cy="12.5" r="3" fill="#4F2833" stroke="#4F2831" stroke-width="1"/>
+    <circle id="pip7" cx="151" cy="12.5" r="3" fill="#4F2932" stroke="#4F2732" stroke-width="1"/>
+    <circle id="pip8" cx="142" cy="12.5" r="3" fill="#4D2833" stroke="#4D2831" stroke-width="1"/>
+    <circle id="pip9" cx="133" cy="12.5" r="3" fill="#4D2932" stroke="#4D2732" stroke-width="1"/>
+    <circle id="pip10" cx="124" cy="12.5" r="3" fill="#4F2933" stroke="#4F2931" stroke-width="1"/>
+    <circle id="pip11" cx="115" cy="12.5" r="3" fill="#4F2733" stroke="#4E2832" stroke-width="1"/>
+  </g>
+  <g id="ball">
+    <g id="glow">
+      <path id="glowstar" d="M0 -11 L2.86 -2.86 L11 0 L2.86 2.86 L0 11 L-2.86 2.86 L-11 0 L-2.86 -2.86 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="0.8" stroke-linejoin="round"/>
+    </g>
+    <circle id="ballbody" cx="0" cy="0" r="4.6" fill="#FFFFFE" stroke="#FFFFFF" stroke-width="1.2"/>
+    <path id="ballshade" d="M-3.6 1.6 C-2 4.6 2.4 4.8 4.2 1.6 C2.6 2.4 -1.6 2.6 -3.6 1.6 Z" fill="#7C7990" stroke="#7C7990" stroke-width="0.8"/>
+    <circle id="ballglint" cx="-1.5" cy="-1.6" r="1.1" fill="#E6E7FF" stroke="#E6E7FF" stroke-width="0.5"/>
+  </g>
+</svg>

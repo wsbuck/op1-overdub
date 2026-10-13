@@ -1,0 +1,555 @@
+{
+ "source": "op1repacker (https://github.com/op1hacks/op1repacker), assets/presets/iter, MIT License, (c) 2016 op1hacks",
+ "presets": [
+  {
+   "adsr": [
+    1600,
+    9280,
+    22527,
+    3648,
+    2048,
+    4160,
+    4000,
+    4000
+   ],
+   "fx_active": false,
+   "fx_params": [
+    5036,
+    8161,
+    20480,
+    15704,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "filter",
+   "knobs": [
+    12759,
+    3608,
+    11447,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    7168,
+    32767,
+    1024,
+    11040,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "element",
+   "name": "crystal_pad",
+   "octave": 0,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    8256,
+    7162,
+    32767,
+    10688,
+    2048,
+    6464,
+    4000,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    11560,
+    17408,
+    16896,
+    3776,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "phone",
+   "knobs": [
+    32767,
+    5576,
+    23255,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    7680,
+    18991,
+    10880,
+    1920,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "value",
+   "name": "ebullition",
+   "octave": 0,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    6208,
+    7104,
+    16384,
+    1088,
+    2048,
+    5920,
+    4000,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    8952,
+    0,
+    25088,
+    28503,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "punch",
+   "knobs": [
+    32767,
+    32767,
+    32767,
+    32767,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    22888,
+    2296,
+    2298,
+    12720,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "tremolo",
+   "name": "feu_doux",
+   "octave": 0,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    16320,
+    16320,
+    6655,
+    7616,
+    2048,
+    13088,
+    4000,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    5940,
+    24248,
+    22528,
+    25905,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "filter",
+   "knobs": [
+    15383,
+    15057,
+    1968,
+    14760,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    32767,
+    16383,
+    5120,
+    8585,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "random",
+   "name": "iter",
+   "octave": 0,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    64,
+    7104,
+    4607,
+    64,
+    2048,
+    13088,
+    4000,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    3228,
+    7216,
+    12288,
+    19017,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "filter",
+   "knobs": [
+    15383,
+    15057,
+    1968,
+    14760,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    32767,
+    16383,
+    1024,
+    11536,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "random",
+   "name": "korder",
+   "octave": 0,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    576,
+    16320,
+    9215,
+    12224,
+    2048,
+    10912,
+    4000,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    1024,
+    0,
+    0,
+    18431,
+    0,
+    0,
+    0,
+    0
+   ],
+   "fx_type": "cwo",
+   "knobs": [
+    32767,
+    27880,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    7168,
+    32767,
+    4912,
+    2960,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "element",
+   "name": "lotremkords",
+   "octave": -1,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    1600,
+    9152,
+    28160,
+    5184,
+    10240,
+    5440,
+    1952,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    4280,
+    14727,
+    25088,
+    11775,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "punch",
+   "knobs": [
+    9807,
+    12431,
+    7218,
+    27225,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    11264,
+    7280,
+    9472,
+    14000,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "value",
+   "name": "pulse_bass",
+   "octave": -2,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    1600,
+    9280,
+    22527,
+    3648,
+    2048,
+    4160,
+    4000,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    5036,
+    7544,
+    16384,
+    15705,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "filter",
+   "knobs": [
+    8495,
+    12464,
+    32767,
+    9513,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": false,
+   "lfo_params": [
+    5824,
+    20728,
+    1024,
+    9600,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "element",
+   "name": "rezpiano",
+   "octave": 0,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    64,
+    16320,
+    0,
+    8972,
+    2048,
+    64,
+    4000,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    6392,
+    5225,
+    8080,
+    25216,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "filter",
+   "knobs": [
+    5904,
+    32767,
+    29159,
+    29815,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    5360,
+    -32767,
+    2000,
+    2000,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "element",
+   "name": "wonky_bass",
+   "octave": -2,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    64,
+    7616,
+    2560,
+    5184,
+    2048,
+    2752,
+    1952,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    11604,
+    4864,
+    3936,
+    2048,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "phone",
+   "knobs": [
+    3575,
+    12759,
+    31783,
+    29848,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    11264,
+    1376,
+    9472,
+    14000,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "value",
+   "name": "wood_bell",
+   "octave": 1,
+   "synth_version": 2,
+   "type": "iter"
+  },
+  {
+   "adsr": [
+    64,
+    1472,
+    0,
+    5184,
+    2048,
+    2752,
+    1952,
+    4000
+   ],
+   "fx_active": true,
+   "fx_params": [
+    11604,
+    4864,
+    3936,
+    2048,
+    8000,
+    8000,
+    8000,
+    8000
+   ],
+   "fx_type": "phone",
+   "knobs": [
+    3575,
+    12759,
+    31783,
+    29848,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_active": true,
+   "lfo_params": [
+    11264,
+    1376,
+    9472,
+    14000,
+    0,
+    0,
+    0,
+    0
+   ],
+   "lfo_type": "value",
+   "name": "woodblock",
+   "octave": 1,
+   "synth_version": 2,
+   "type": "iter"
+  }
+ ]
+}

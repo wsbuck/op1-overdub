@@ -1,0 +1,26 @@
+# TE firmware and anything derived from it: never commit (PROMPT.md rule 4)
+firmware/
+*.op1
+*.ldr
+*.bin
+*.gzf
+*.rep
+
+# Third-party tool checkouts (not ours to redistribute)
+third_party/
+
+# Ghidra project files (contain TE code)
+*.gpr
+*.rep/
+*.lock
+*.lock~
+
+# Worktrees
+.claude/worktrees/
+
+.DS_Store
+__pycache__/
+*.pyc
+
+# Release bundles (build.py)
+dist/

@@ -1,0 +1,5 @@
+[
+  {"name": "va", "source": "va", "addr": "0x01E10000", "max": "0x10000", "default": [0, 6000, 20000, 9000, 0, 0, 0, 0], "presets": {"saw lead": [0, 6000, 20000, 9000], "detune pad": [0, 22000, 15000, 4000]}, "ui": "va"},
+  {"name": "wavetable", "source": "wt", "addr": "0x02C00000", "max": "0x100000", "default": [0, 2048, 0, 0, 0, 0, 0, 0], "presets": {"analog sweep": [32767, 2048, 0, 0], "pwm strings": [12000, 6144, 0, 22000], "vowel pad": [16384, 10240, 6000, 20000], "organ": [20000, 14336, 0, 0], "sync lead": [16000, 18432, 10000, 9000], "fold bass": [9000, 22528, 4000, 0], "bell keys": [24000, 26624, 0, 0], "digital": [10000, 30720, 12000, 12000]}, "aliases": ["wt"], "ui": "wavetable"},
+  {"name": "grain", "source": "grain", "addr": "0x00820000", "max": "0xE0000", "default": [8000, 22000, 24000, 8000, 0, 0, 0, 0], "presets": {"choir cloud": [2731, 26000, 26000, 12000], "glass shimmer": [19114, 20000, 28000, 30000], "pluck rain": [30037, 6000, 20000, 20000], "frozen pad": [16384, 32767, 32767, 4000], "stutter": [16384, 6000, 18000, 0], "shimmer cloud": [9000, 24000, 30000, 32767]}, "aliases": ["modal"], "ui": "grain"}
+]

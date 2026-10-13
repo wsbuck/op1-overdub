@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+choir.svg - "ensemble" FX screen (The Choir). Our own artwork. Drawn by TE's retained renderer, then our
+immediate-mode overlay on top. All ids below are found once at load (find, assert=0) and cached.
+Pivots: singer i stands at x = XS[i] (s1 160 lead, s2 90, s3 230) on the floor y = 124; neck at y = 84; head centre y = 72.
+phase = live LFO phase (0..1), tri(p) = triangle -1..1, R channel = phase + 0.5.
+  s1, s2, s3       matrix = rotate(theta_i) about (XS[i], 124), theta_i = depth * 9 deg * tri(phase + (i-1)/3)   [blue LFO, green depth]
+  head1..head3     extra matrix = rotate(0.6 * theta_i) about (XS[i], 84) (the head swings a little further)
+  s2, s3           hidden while ensemble = 0                                                                     [white]
+  robe2/3 hair2/3  recolour fill+stroke: ensemble < 0.5 -> fill black, stroke grey/purplegrey (outline);
+  face2/3          >= 0.5 -> fill purplegrey (< 0.75) / white; face2/3 fill lpg once filled, else black with stroke
+  halo2, halo3     (2 green 8-ray stars) shown with s2/s3 when depth > 0; matrix = rotate(+-20 deg, flipped at 6.5 Hz) * scale(0.6 + 0.9 depth) about the head centre  [green]
+  fade (white)     robe/hair/face/book/cheek/mo/shut 2,3 and cone2/3: fill/stroke recoloured from black to these colours as
+                   white goes 1024 -> 16384 (unique colour values: TE may share a style entry between equal colours)
+  cone2, cone3     shown with s2/s3
+  mouth1..3        matrix = scale(1, 0.3 + 0.7 mix) about the mouth centre (XS[i], 78.5); hidden when mix < 0.05    [orange mix]
+  shut1..3         shown only when mix < 0.05 (closed smile)
+  n1..n6           shown for j < round(6 mix); matrix = translate(sin wobble, -34 * ((t * 0.6 + j/6) mod 1)) (notes rise)
+  r1, r2, r3       master FX only (stereo); matrix = rotate(-theta_i(R)) about (XS[i], 124): reflections lean in anti-phase
+                   (r2/r3 also follow s2/s3 visibility). Hidden for synth/drum FX (mono).
+  everything else  static (stage: curtains, cones, floor).
+Overlay (immediate mode, <= 4 AA segments): no text (FX screens carry no text); green motion marks beside the lead head on the side it moves toward (length by depth, 1..4 by rate, shown mid-swing only, none at depth 0);
+darkblue floor X marks where hidden singers would stand.
+-->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" x="0" y="0" width="320" height="160" viewBox="0 0 320 160">
+  <g id="stage">
+    <polygon id="cone2" points="84,2 96,2 122,124 58,124" fill="#1D2041"/>
+    <polygon id="cone3" points="224,2 236,2 262,124 198,124" fill="#1D2041"/>
+    <polygon id="cone1" points="154,2 166,2 192,124 128,124" fill="#1D2040"/>
+    <line id="floor" x1="4" y1="124" x2="316" y2="124" stroke="#AEB1DC" stroke-width="1.5"/>
+    <line id="lip" x1="4" y1="127" x2="316" y2="127" stroke="#383572" stroke-width="1"/>
+    <path id="curtainL" d="M0 0 L38 0 C30 22 22 44 20 62 C19 70 22 76 26 80 C18 82 14 96 14 124 L0 124 Z" fill="#4E2832"/>
+    <path id="curtainR" d="M320 0 L282 0 C290 22 298 44 300 62 C301 70 298 76 294 80 C302 82 306 96 306 124 L320 124 Z" fill="#4E2832"/>
+    <path id="pleats" d="M10 0 C12 30 10 55 13 70 M10 92 C9 104 8 114 8 124 M22 0 C20 28 16 50 17 66 M310 0 C308 30 310 55 307 70 M310 92 C311 104 312 114 312 124 M298 0 C300 28 304 50 303 66" fill="none" stroke="#5F4270" stroke-width="1.2" stroke-linecap="round"/>
+    <path id="ties" d="M14 72 C20 76 26 78 30 77 M306 72 C300 76 294 78 290 77" fill="none" stroke="#FF90A7" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <g id="r2">
+    <polygon id="rf20" points="71.29,126.6 108.71,126.6 107.48,128 72.52,128" fill="#353238"/>
+    <polygon id="rf21" points="73.75,129.4 106.25,129.4 105.02,130.8 74.98,130.8" fill="#353238"/>
+    <polygon id="rf22" points="76.21,132.2 103.79,132.2 102.56,133.6 77.44,133.6" fill="#353238"/>
+    <polygon id="rf23" points="84,135 96,135 96.52,136.4 83.48,136.4" fill="#353238"/>
+    <polygon id="rf24" points="79.03,137.8 100.97,137.8 102.43,139.2 77.57,139.2" fill="#353238"/>
+  </g>
+  <g id="r3">
+    <polygon id="rf30" points="211.29,126.6 248.71,126.6 247.48,128 212.52,128" fill="#353238"/>
+    <polygon id="rf31" points="213.75,129.4 246.25,129.4 245.02,130.8 214.98,130.8" fill="#353238"/>
+    <polygon id="rf32" points="216.21,132.2 243.79,132.2 242.56,133.6 217.44,133.6" fill="#353238"/>
+    <polygon id="rf33" points="224,135 236,135 236.52,136.4 223.48,136.4" fill="#353238"/>
+    <polygon id="rf34" points="219.03,137.8 240.97,137.8 242.43,139.2 217.57,139.2" fill="#353238"/>
+  </g>
+  <g id="r1">
+    <polygon id="rf10" points="141.29,126.6 178.71,126.6 177.48,128 142.52,128" fill="#383572"/>
+    <polygon id="rf11" points="143.75,129.4 176.25,129.4 175.02,130.8 144.98,130.8" fill="#383572"/>
+    <polygon id="rf12" points="146.21,132.2 173.79,132.2 172.56,133.6 147.44,133.6" fill="#383572"/>
+    <polygon id="rf13" points="154,135 166,135 166.52,136.4 153.48,136.4" fill="#383572"/>
+    <polygon id="rf14" points="149.03,137.8 170.97,137.8 172.43,139.2 147.57,139.2" fill="#383572"/>
+  </g>
+  <g id="s2">
+    <path id="robe2" d="M69 124 C72 108 75 94 78.5 88.5 C82 84.5 98 84.5 101.5 88.5 C105 94 108 108 111 124 C98 126 82 126 69 124 Z" fill="#FEFFFF" stroke="#FEFFFF" stroke-width="1.5" stroke-linejoin="round"/>
+    <path id="collar2" d="M84 86.5 L90 94 L96 86.5" fill="none" stroke="#010000" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <path id="book2" d="M78 100 L90 103 L102 100 L102 109 L90 112 L78 109 Z" fill="#353239" stroke="#010000" stroke-width="1.2" stroke-linejoin="round"/>
+    <g id="head2">
+      <circle id="face2" cx="90" cy="72" r="12.5" fill="#E6E7FE" stroke="#E6E7FE" stroke-width="1.5" stroke-linejoin="round"/>
+      <path id="hair2" d="M76.4 75 C73.5 54 106.5 54 103.6 75 C102 68 96 64.5 89 66 C84 67 79 70 76.4 75 Z M96.2 56.5 C96.2 59.04 93.87 61.1 91 61.1 C88.13 61.1 85.8 59.04 85.8 56.5 C85.8 53.96 88.13 51.9 91 51.9 C93.87 51.9 96.2 53.96 96.2 56.5 Z" fill="#FFFEFF" stroke="#FFFEFF" stroke-width="1.5" stroke-linejoin="round"/>
+      <path id="eyes2" d="M83.1 72.5 C84 70.1 86.8 70.1 87.7 72.5 M92.3 72.5 C93.2 70.1 96 70.1 96.9 72.5" fill="none" stroke="#010000" stroke-width="1.4" stroke-linecap="round"/>
+      <path id="cheek2" d="M84 76.5 C84 77.27 83.1 77.9 82 77.9 C80.9 77.9 80 77.27 80 76.5 C80 75.73 80.9 75.1 82 75.1 C83.1 75.1 84 75.73 84 76.5 Z M100 76.5 C100 77.27 99.1 77.9 98 77.9 C96.9 77.9 96 77.27 96 76.5 C96 75.73 96.9 75.1 98 75.1 C99.1 75.1 100 75.73 100 76.5 Z" fill="#FF90A6"/>
+      <g id="mouth2">
+        <path id="mo2" d="M92.9 78.5 C92.9 80.38 91.6 81.9 90 81.9 C88.4 81.9 87.1 80.38 87.1 78.5 C87.1 76.62 88.4 75.1 90 75.1 C91.6 75.1 92.9 76.62 92.9 78.5 Z" fill="#FF423E"/>
+      </g>
+      <path id="shut2" d="M87.2 78 C88.5 79.6 91.5 79.6 92.8 78" fill="none" stroke="#FF413F" stroke-width="1.4" stroke-linecap="round"/>
+      <g id="halo2">
+        <path id="spark2" d="M107.00 50.00 L107.34 56.17 L109.26 54.74 L107.83 56.66 L114.00 57.00 L107.83 57.34 L109.26 59.26 L107.34 57.83 L107.00 64.00 L106.66 57.83 L104.74 59.26 L106.17 57.34 L100.00 57.00 L106.17 56.66 L104.74 54.74 L106.66 56.17 Z M72.00 58.50 L72.31 63.26 L73.84 62.16 L72.74 63.69 L77.50 64.00 L72.74 64.31 L73.84 65.84 L72.31 64.74 L72.00 69.50 L71.69 64.74 L70.16 65.84 L71.26 64.31 L66.50 64.00 L71.26 63.69 L70.16 62.16 L71.69 63.26 Z" fill="#00ED95"/>
+      </g>
+    </g>
+  </g>
+  <g id="s3">
+    <path id="robe3" d="M209 124 C212 108 215 94 218.5 88.5 C222 84.5 238 84.5 241.5 88.5 C245 94 248 108 251 124 C238 126 222 126 209 124 Z" fill="#FEFFFF" stroke="#FEFFFF" stroke-width="1.5" stroke-linejoin="round"/>
+    <path id="collar3" d="M224 86.5 L230 94 L236 86.5" fill="none" stroke="#010000" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <path id="book3" d="M218 100 L230 103 L242 100 L242 109 L230 112 L218 109 Z" fill="#353239" stroke="#010000" stroke-width="1.2" stroke-linejoin="round"/>
+    <g id="head3">
+      <circle id="face3" cx="230" cy="72" r="12.5" fill="#E6E7FE" stroke="#E6E7FE" stroke-width="1.5" stroke-linejoin="round"/>
+      <path id="hair3" d="M216.4 75 C213.5 54 246.5 54 243.6 75 C242 68 236 64.5 229 66 C224 67 219 70 216.4 75 Z M222 62 C224 52 234 48 242 52 C236 53 234 56 237 61 Z" fill="#FFFEFF" stroke="#FFFEFF" stroke-width="1.5" stroke-linejoin="round"/>
+      <path id="eyes3" d="M223.1 72.5 C224 70.1 226.8 70.1 227.7 72.5 M232.3 72.5 C233.2 70.1 236 70.1 236.9 72.5" fill="none" stroke="#010000" stroke-width="1.4" stroke-linecap="round"/>
+      <path id="cheek3" d="M224 76.5 C224 77.27 223.1 77.9 222 77.9 C220.9 77.9 220 77.27 220 76.5 C220 75.73 220.9 75.1 222 75.1 C223.1 75.1 224 75.73 224 76.5 Z M240 76.5 C240 77.27 239.1 77.9 238 77.9 C236.9 77.9 236 77.27 236 76.5 C236 75.73 236.9 75.1 238 75.1 C239.1 75.1 240 75.73 240 76.5 Z" fill="#FF90A6"/>
+      <g id="mouth3">
+        <path id="mo3" d="M232.9 78.5 C232.9 80.38 231.6 81.9 230 81.9 C228.4 81.9 227.1 80.38 227.1 78.5 C227.1 76.62 228.4 75.1 230 75.1 C231.6 75.1 232.9 76.62 232.9 78.5 Z" fill="#FF423E"/>
+      </g>
+      <path id="shut3" d="M227.2 78 C228.5 79.6 231.5 79.6 232.8 78" fill="none" stroke="#FF413F" stroke-width="1.4" stroke-linecap="round"/>
+      <g id="halo3">
+        <path id="spark3" d="M247.00 50.00 L247.34 56.17 L249.26 54.74 L247.83 56.66 L254.00 57.00 L247.83 57.34 L249.26 59.26 L247.34 57.83 L247.00 64.00 L246.66 57.83 L244.74 59.26 L246.17 57.34 L240.00 57.00 L246.17 56.66 L244.74 54.74 L246.66 56.17 Z M212.00 58.50 L212.31 63.26 L213.84 62.16 L212.74 63.69 L217.50 64.00 L212.74 64.31 L213.84 65.84 L212.31 64.74 L212.00 69.50 L211.69 64.74 L210.16 65.84 L211.26 64.31 L206.50 64.00 L211.26 63.69 L210.16 62.16 L211.69 63.26 Z" fill="#00ED95"/>
+      </g>
+    </g>
+  </g>
+  <g id="s1">
+    <path id="robe1" d="M139 124 C142 108 145 94 148.5 88.5 C152 84.5 168 84.5 171.5 88.5 C175 94 178 108 181 124 C168 126 152 126 139 124 Z" fill="#698EFF"/>
+    <path id="collar1" d="M154 86.5 L160 94 L166 86.5" fill="none" stroke="#010000" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <path id="book1" d="M148 100 L160 103 L172 100 L172 109 L160 112 L148 109 Z" fill="#E6E7FF" stroke="#010000" stroke-width="1.2" stroke-linejoin="round"/>
+    <g id="head1">
+      <circle id="face1" cx="160" cy="72" r="12.5" fill="#E6E7FF"/>
+      <path id="hair1" d="M146.4 75 C143.5 54 176.5 54 173.6 75 C172 68 166 64.5 159 66 C154 67 149 70 146.4 75 Z M146.4 75 C145 80 143 82 141 82 C144 79 144.5 74 146.4 70 Z M173.6 75 C175 80 177 82 179 82 C176 79 175.5 74 173.6 70 Z" fill="#698EFF"/>
+      <path id="eyes1" d="M153.1 72.5 C154 70.1 156.8 70.1 157.7 72.5 M162.3 72.5 C163.2 70.1 166 70.1 166.9 72.5" fill="none" stroke="#010000" stroke-width="1.4" stroke-linecap="round"/>
+      <path id="cheek1" d="M154 76.5 C154 77.27 153.1 77.9 152 77.9 C150.9 77.9 150 77.27 150 76.5 C150 75.73 150.9 75.1 152 75.1 C153.1 75.1 154 75.73 154 76.5 Z M170 76.5 C170 77.27 169.1 77.9 168 77.9 C166.9 77.9 166 77.27 166 76.5 C166 75.73 166.9 75.1 168 75.1 C169.1 75.1 170 75.73 170 76.5 Z" fill="#FF90A7"/>
+      <g id="mouth1">
+        <path id="mo1" d="M162.9 78.5 C162.9 80.38 161.6 81.9 160 81.9 C158.4 81.9 157.1 80.38 157.1 78.5 C157.1 76.62 158.4 75.1 160 75.1 C161.6 75.1 162.9 76.62 162.9 78.5 Z" fill="#FF423F"/>
+      </g>
+      <path id="shut1" d="M157.2 78 C158.5 79.6 161.5 79.6 162.8 78" fill="none" stroke="#FF423F" stroke-width="1.4" stroke-linecap="round"/>
+    </g>
+  </g>
+  <g id="notes">
+    <g id="n1">
+      <path id="nd1" d="M143.06 50.76 C143.54 51.94 142.55 53.45 140.86 54.13 C139.17 54.82 137.42 54.41 136.94 53.24 C136.46 52.06 137.45 50.55 139.14 49.87 C140.83 49.18 142.58 49.59 143.06 50.76 Z M142.2 51.2 L143.6 50.6 L143.6 37 L142.2 37 Z M143.6 37 C144.5 41 149.5 42 148 48 C147.5 44 145.5 43 143.6 42 Z" fill="#FF423F"/>
+    </g>
+    <g id="n2">
+      <path id="nd2" d="M191.06 46.76 C191.54 47.94 190.55 49.45 188.86 50.13 C187.17 50.82 185.42 50.41 184.94 49.24 C184.46 48.06 185.45 46.55 187.14 45.87 C188.83 45.18 190.58 45.59 191.06 46.76 Z M190.2 47.2 L191.6 46.6 L191.6 33 L190.2 33 Z" fill="#FFB3B3"/>
+    </g>
+    <g id="n3">
+      <path id="nd3" d="M259.06 44.76 C259.54 45.94 258.55 47.45 256.86 48.13 C255.17 48.82 253.42 48.41 252.94 47.24 C252.46 46.06 253.45 44.55 255.14 43.87 C256.83 43.18 258.58 43.59 259.06 44.76 Z M258.2 45.2 L259.6 44.6 L259.6 31 L258.2 31 Z" fill="#FFB3B3"/>
+    </g>
+    <g id="n4">
+      <path id="nd4" d="M209.06 52.76 C209.54 53.94 208.55 55.45 206.86 56.13 C205.17 56.82 203.42 56.41 202.94 55.24 C202.46 54.06 203.45 52.55 205.14 51.87 C206.83 51.18 208.58 51.59 209.06 52.76 Z M208.2 53.2 L209.6 52.6 L209.6 39 L208.2 39 Z M209.6 39 C210.5 43 215.5 44 214 50 C213.5 46 211.5 45 209.6 44 Z" fill="#FF423F"/>
+    </g>
+    <g id="n5">
+      <path id="nd5" d="M87.06 48.76 C87.54 49.94 86.55 51.45 84.86 52.13 C83.17 52.82 81.42 52.41 80.94 51.24 C80.46 50.06 81.45 48.55 83.14 47.87 C84.83 47.18 86.58 47.59 87.06 48.76 Z M86.2 49.2 L87.6 48.6 L87.6 35 L86.2 35 Z M87.6 35 C88.5 39 93.5 40 92 46 C91.5 42 89.5 41 87.6 40 Z" fill="#FF423F"/>
+    </g>
+    <g id="n6">
+      <path id="nd6" d="M235.06 38.76 C235.54 39.94 234.55 41.45 232.86 42.13 C231.17 42.82 229.42 42.41 228.94 41.24 C228.46 40.06 229.45 38.55 231.14 37.87 C232.83 37.18 234.58 37.59 235.06 38.76 Z M234.2 39.2 L235.6 38.6 L235.6 25 L234.2 25 Z" fill="#FFB3B3"/>
+    </g>
+  </g>
+</svg>
