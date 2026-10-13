@@ -7,6 +7,7 @@ ENGINE >= 100 previews our FX screens: 100 + FX id for the master (stereo) scree
 
 Builds ui.c natively with stand-ins for TE (te_line records segments), draws them at the device's scale
 (SVG 320 x 160 -> 376 x 188 panel, ×1.175) on black, with the unseen bottom (y > 142) shaded.
+CLEAN=1: screenshots for the README (no HOLD/CHORD badges, cropped to what the panel shows).
 Palette colours are TE's colors.svg values (earlier guesses were wrong: offgrey is near-black, purplegrey bright). Default: a few wt and va knob settings.
 """
 import os
@@ -104,7 +105,8 @@ def main():
         size = (int(320 * SCALE), int(160 * SCALE))
         img = svg_base(nodes, size, tmp) if nodes else Image.new("RGB", size, (0, 0, 0))
         d = ImageDraw.Draw(img, "RGBA")
-        d.rectangle([0, 142 * SCALE, 320 * SCALE, 160 * SCALE], fill=(40, 0, 0, 140))
+        if not os.environ.get("CLEAN"):
+            d.rectangle([0, 142 * SCALE, 320 * SCALE, 160 * SCALE], fill=(40, 0, 0, 140))
         n = 0
         for s in segs:
             x0, y0, x1, y1, w, c = (int(v) for v in s.split())
@@ -113,6 +115,8 @@ def main():
                    width=max(1, round(w * f)))
             n += 1
         name = os.path.join(out, f"e{eng}_{'_'.join(map(str, k))}.png")
+        if os.environ.get("CLEAN"):   # screenshots: only what the panel shows (y < 142)
+            img = img.crop((0, 0, size[0], int(142 * SCALE)))
         img.save(name)
         print(f"{name}: {n} segments")
 

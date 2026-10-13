@@ -609,3 +609,9 @@
 - iter presets (templates for ours) now come from `src/slot/iter_presets.json` (op1repacker, MIT) instead of third_party/.
 - `firmware/images/MODS.OP1` sha256 dbd7c8efff937378a8de4f47760ed679e0b2c72f71d6013737bbfea1c3a85181 (SVG8 without --svg-cost; DB pages laid out by apply.py).
 - Result: _pending user flash_.
+
+## 2026-10-13 — Test image 50: OVERDUB.OP1 (engine screens without titles)
+- va, wavetable and grain screens: the title (wave name, bank name, grain source / SAMPLER n) is removed; the pictures already show what the knobs select. FX screens unchanged.
+- README screenshots in `docs/screens/` from the host preview (`CLEAN=1`: no HOLD/CHORD badges, cropped to y < 142).
+- `firmware/images/OVERDUB.OP1` sha256 8d5185b11ed6e4928b2634cdccd7b15b6f30d65762ade53fa8bbcd877d2dd36b (`build.py --version 1.0`). Supersedes MODS.OP1 as the release candidate.
+- Result: _pending user flash_.

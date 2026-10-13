@@ -8,8 +8,20 @@ Not affiliated with or supported by teenage engineering. You flash this at your 
 
 | | |
 |---|---|
+| ![va](docs/screens/va.png) **va** | ![wavetable](docs/screens/wavetable.png) **wavetable** |
+| ![grain](docs/screens/grain.png) **grain** | ![ensemble](docs/screens/ensemble.png) **ensemble** |
+| ![pingpong](docs/screens/pingpong.png) **pingpong** | ![distortion](docs/screens/distortion.png) **distortion** |
+
+Every knob drives part of the picture, in its own colour.
+
+<details><summary>FX screens in motion</summary>
+
+| | |
+|---|---|
 | ![choir](design/fx/choir.gif) | ![pingpong](design/fx/pingpong.gif) |
 | ![pedal modes](design/fx/pedal_modes.gif) | ![wah](design/fx/pedal_wah.gif) |
+
+</details>
 
 ## What's in it
 
@@ -66,6 +78,8 @@ python3 build.py --engines grain --fx distortion --no-hold --name MINE
 Outputs `firmware/images/<NAME>.OP1` and the shareable `dist/overdub-<version>.zip`.
 `firmware/` holds TE's firmware and anything built from it: it is gitignored, never commit or share it.
 DSP is checked in the Blackfin simulator first (`src/engine/test/`, `src/slot/test/`).
+Screens render on the computer too: `python3 src/slot/test/preview.py OUTDIR 15 k0 k1 k2 k3 ...` (engine ids 15 va,
+16 wavetable, 18 grain; 108–110 the FX as master). `CLEAN=1` gives the README screenshots in `docs/screens/`.
 
 ## How it works
 

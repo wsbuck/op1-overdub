@@ -196,6 +196,8 @@ int main(int argc, char **argv)
     for (int i = 0; i < 4; i++)
         host_knobs[i] = (int16_t)atoi(argv[3 + i]);
     int e = atoi(argv[2]);
+    if (getenv("CLEAN"))
+        hold_on = chord_on = 0;   /* screenshots: no HOLD/CHORD badges */
     int frames = getenv("FRAMES") ? atoi(getenv("FRAMES")) : 1;
     host_drawing = frames <= 1;
     if (e >= 100)

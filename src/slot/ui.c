@@ -269,7 +269,6 @@ static void chord_badge(void *r)
 
 /* ---- wavetable: waterfall of the bank's frames, current frame bright ---- */
 
-static const char *const bank_name[BANKS] = { "ANALOG", "PWM", "VOWEL", "ORGAN", "SYNC", "FOLD", "BELL", "DIGITAL" };
 
 #define WT_POINTS 65                        /* 64 segments at shift 0 */
 #define WT_LEVEL 3                          /* 256-sample level: 32 harmonics */
@@ -329,8 +328,7 @@ static void draw_wt(void *r, const int16_t *k)
     int bank = (k[1] < 0 ? 0 : k[1]) >> 12;
     struct warp wp = warp_setup(k[2] < 0 ? 0 : k[2]);
 
-    /* green: bank name and 8 pips (the current one lit) */
-    title(r, bank_name[bank], GREEN);
+    /* green: 8 bank pips (the current one lit) */
     for (int i = 0; i < BANKS; i++) {
         fp32 x = FP(184) + FP(11) * i;
         if (i == bank)
@@ -419,8 +417,7 @@ static void draw_va(void *r, const int16_t *k)
     int32_t mix = wave < 16384 ? wave << 1 : 32767;           /* as va.c */
     uint32_t pw = wave < 16384 ? 0x80000000u : 0x80000000u - (uint32_t)(wave - 16384) * 104858u;
 
-    /* blue: wave (title + shape), green: detune ghost, white: cutoff curve, orange: resonance peak */
-    title(r, wave < 8192 ? "SAW" : wave < 24576 ? "SQUARE" : "PULSE", BLUE);
+    /* blue: wave shape, green: detune ghost, white: cutoff curve, orange: resonance peak */
 
     /* left panel: oscillator (pd.svg axes), osc 2 as a green ghost offset by the detune */
     const fp32 ox = FP(10), ow = FP(136), ocy = FP(90), oamp = FP(11);
@@ -483,7 +480,6 @@ static uint32_t exp2_q16_ui(int32_t y)
     return (m << n) << 1;
 }
 
-static const char *const source_name[GRAIN_SOURCES] = { "CHOIR", "STRINGS", "BELLS", "GLASS", "AIR", "PLUCKS" };
 
 static void draw_grain(void *r, const int16_t *k)
 {
@@ -493,15 +489,6 @@ static void draw_grain(void *r, const int16_t *k)
     int bank_src = (pos * GRAIN_SOURCES) >> 15;
     if (bank_src >= GRAIN_SOURCES)
         bank_src = GRAIN_SOURCES - 1;
-    if (src.slot < 0) {
-        title(r, source_name[bank_src], BLUE);                 /* blue knob picks the sound */
-    } else {
-        static const char digits[] = "12345678";
-        char name[10] = "SAMPLER  ";
-        name[8] = digits[src.slot];
-        name[9] = 0;
-        title(r, name, BLUE);
-    }
     /* white: density as a row of ticks, 1 .. 16 (2 .. 80 grains per second), top right */
     for (int i = 0, n = 1 + ((dens * 15) >> 15); i < n; i++)
         line_fast(r, FP(304) - FP(8) * i, FP(8), FP(304) - FP(8) * i, FP(18), WHITE);
