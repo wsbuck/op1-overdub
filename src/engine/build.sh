@@ -28,7 +28,7 @@ docker run --rm --platform linux/amd64 -v "$HERE":/src:ro -v "$OUT":/out op1-bfi
     printf '.section .rodata\\n.align 4\\n.global _engine_data\\n_engine_data:\\n.incbin \"/out/engine_data.bin\"\\n' > /out/data.S
     bfin-elf-as -o /out/data.o /out/data.S
   fi
-  bfin-elf-ld -nostdlib -T /src/engine.ld -Ttext=$ADDR --defsym=SLOT_SIZE=$MAX -e _render --defsym=_pitch_buf=0xFF801950 --defsym=_prof_stats=0x00800000 --defsym=_voice_ram=0x00810000 --defsym=_te_engine_ids=0xFF8016E4 --defsym=_te_ssamp=0x01DF6F78 --defsym=_te_knobs=0xFF8013C4 --defsym=_te_synth_slot=0x01AAAC0C \
+  bfin-elf-ld -nostdlib -T /src/engine.ld -Ttext=$ADDR --defsym=SLOT_SIZE=$MAX -e _render --defsym=_pitch_buf=0xFF801950 --defsym=_prof_stats=0x00800000 --defsym=_voice_ram=0x00810000 --defsym=_te_engine_ids=0xFF8016E4 --defsym=_te_ssamp=0x01DF6F78 --defsym=_te_knobs=0xFF8013C4 --defsym=_te_synth_slot=0x01AAAC0C $ENGINE_DEFSYMS \
     -o /out/engine.elf /out/tramp.o /out/engine.o $ASM_O $DATA_O
   bfin-elf-objcopy -O binary -j .text /out/engine.elf /out/engine.bin
   bfin-elf-objdump -d /out/engine.elf

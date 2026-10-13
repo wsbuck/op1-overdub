@@ -16,6 +16,8 @@
 #include "dsp.h"
 #include "warp.h"
 #include "wt_layout.h"
+#include "wt_user.h"
+#include "wt_import.h"
 #include "modal_state.h"
 #include "grain_layout.h"
 #include "grain_state.h"
@@ -280,9 +282,9 @@ static void chord_badge(void *r)
 #define WT_DY FP(5)
 
 /* Sample of frame f (or the blend of f and f + 1 by ff, Q15) at phase ph, Q15 range. */
-static int32_t wt_sample(int bank, int f, int32_t ff, uint32_t ph)
+static int32_t wt_sample(const int16_t *base, int f, int32_t ff, uint32_t ph)
 {
-    const int16_t *a = wt_data + (bank * FRAMES + f) * FRAME_STRIDE + level_off[WT_LEVEL];
+    const int16_t *a = base + f * FRAME_STRIDE + level_off[WT_LEVEL];
     uint32_t i = ph >> (32 - 8);
     int32_t s = a[i];
     if (ff) {
@@ -294,7 +296,7 @@ static int32_t wt_sample(int bank, int f, int32_t ff, uint32_t ph)
 
 /* One frame as a polyline of (WT_POINTS - 1) >> shift segments at depth `depth` (Q15 frames from the
  * front): 1-px fast lines when width is 0, else anti-aliased. Returns the right end (x, y). */
-static void wt_frame(void *r, int bank, int f, int32_t ff, const struct warp *wp, int32_t depth, int shift,
+static void wt_frame(void *r, const int16_t *bank, int f, int32_t ff, const struct warp *wp, int32_t depth, int shift,
                      fp32 width, int colour, fp32 *end_x, fp32 *end_y)
 {
     fp32 ox = FP(WT_X0) + ((WT_DX >> 5) * depth >> 10), oy = FP(WT_Y0) - ((WT_DY >> 5) * depth >> 10);
@@ -322,19 +324,83 @@ static void wt_frame(void *r, int bank, int f, int32_t ff, const struct warp *wp
     }
 }
 
+/* SAMPLE bank (wt_user.h): built here, on the UI thread, from the sampler slot's trimmed window, one wti_step
+ * (<= ~3 M cycles) per screen frame, about 13 frames per bank. Rebuilt once the source has been unchanged for 10
+ * frames and differs from the last build; a change during a build abandons it. The engine keeps playing the
+ * published bank meanwhile, and keeps it if the sampler goes away. */
+static struct wti_job wtu_job RAM = { 0, 0, 0, 0, 0, 0, 0, 0 };
+static uint32_t wtu_frame RAM = 0;
+
+static void wt_user_tick(void)
+{
+    struct wt_user *u = &wt_ram;
+    struct wti_work *work = (struct wti_work *)(u + 1);
+    struct grain_src src = grain_source(0, 0);
+    uint32_t sig = 0;
+    if (src.slot >= 0) {
+        /* signature: slot, window, the sampler's peak table over the window, 64 samples */
+        sig = 0x9E3779B9u ^ ((uint32_t)src.slot << 28) ^ (src.start << 3) ^ (src.len * 2654435761u);
+        uint32_t a = src.start >> 8, b = (src.start + src.len) >> 8;
+        int32_t sum = 0;
+        for (uint32_t i = a; i <= b && i < 1034; i++)
+            sum += src.peaks[i];
+        sig = sig * 31u + (uint32_t)sum;
+        uint32_t step = src.len >> 6;
+        for (uint32_t i = 0; i < 64; i++)
+            sig = sig * 31u + (uint16_t)src.audio[src.start + step * i];
+        if (!sig)
+            sig = 1;
+    }
+    if (sig != u->sig) {                        /* changed: wait for it to settle (abandons a build) */
+        u->sig = sig;
+        u->stable = 0;
+        u->building = 0;
+        return;
+    }
+    if (u->building) {
+        int r = wti_step(&wtu_job, work);
+        if (r == 1)
+            return;
+        if (r == 0) {
+            u->pitched = wtu_job.pitched;
+            u->period = wtu_job.p_q16;
+            u->slot = src.slot;
+            __asm__ volatile("" ::: "memory");  /* every frame written before the engine can see it */
+            u->front = u->building;
+        }
+        u->built_sig = sig;
+        u->building = 0;
+        return;
+    }
+    if (!sig || sig == u->built_sig || ++u->stable < 10)
+        return;
+    int target = u->front == 1 ? 2 : 1;         /* never the bank the engine plays */
+    wti_begin(&wtu_job, src.audio + src.start, src.len, src.start, u->bank[target - 1]);
+    u->building = target;
+}
+
 static void draw_wt(void *r, const int16_t *k)
 {
     int32_t pos = k[0] < 0 ? 0 : k[0], uni = k[3] < 0 ? 0 : k[3];
-    int bank = (k[1] < 0 ? 0 : k[1]) >> 12;
+    int bank_i = wt_bank_of(k[1]);
+    const int16_t *bank = wt_bank_base(wt_data, bank_i);
     struct warp wp = warp_setup(k[2] < 0 ? 0 : k[2]);
 
-    /* green: 8 bank pips (the current one lit) */
-    for (int i = 0; i < BANKS; i++) {
-        fp32 x = FP(184) + FP(11) * i;
-        if (i == bank)
-            line_fp(r, x, FP(10), x + FP(7), FP(10), FP(2), GREEN);
+    wt_user_tick();
+    wtu_frame++;
+    /* green: 9 bank pips (the current one lit); the 9th is SAMPLE: blinks while building, off-red while there is
+     * no sample to play (SAMPLE then plays bank 0) */
+    for (int i = 0; i <= BANKS; i++) {
+        fp32 x = FP(174) + FP(11) * i;
+        int colour = i == bank_i ? GREEN : GREY;
+        if (i == BANKS && wt_ram.building && (wtu_frame & 8))
+            colour = i == bank_i ? DARKGREEN : DARKBLUE;
+        else if (i == BANKS && i == bank_i && !wt_ram.front)
+            colour = OFFRED;
+        if (i == bank_i)
+            line_fp(r, x, FP(10), x + FP(7), FP(10), FP(2), colour);
         else
-            line_fast(r, x, FP(10), x + FP(7), FP(10), GREY);
+            line_fast(r, x, FP(10), x + FP(7), FP(10), colour);
     }
     /* white: warp glyph, one sine cycle through the engine's own phase bend (warp.h), x 276..312 */
     {

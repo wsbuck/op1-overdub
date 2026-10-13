@@ -1,6 +1,6 @@
 # Custom wavetables for `wavetable` (firmware 246)
 
-Status: **Research + simulator prototype** (2026-10-13). Nothing built into an image.
+Status: **WTS1 built** (2026-10-13): the SAMPLE bank as designed below (src/engine/wt_user.h, wt.c, ui.c wt_user_tick). Not yet on device.
 Marks: **Confirmed** = read in our code or the binary, or measured in the simulator; **Hypothesis** = inferred, untested on device.
 
 ## Recommendation

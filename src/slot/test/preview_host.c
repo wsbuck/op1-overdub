@@ -11,6 +11,7 @@ int16_t host_knobs[4];
 uint8_t host_palette[20 * 4];
 int16_t wt_data[8 * 12 * 4128];
 int16_t grain_data[256 + 6 * 70560];
+uint32_t wt_ram[(256 + 2 * 12 * 4128 * 2 + 40000) / 4];   /* SAMPLE bank (wt_user.h): nothing built */
 
 int32_t host_matrix[9] = { 1024 };   /* not the rotated-panel form: vline_fast falls back to te_line (recorded) */
 static int32_t host_raster[4] = { 0, -1, 0, 0 };   /* invalid geometry: fast lines fall back to te_line */

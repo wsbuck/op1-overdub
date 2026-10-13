@@ -622,3 +622,14 @@
 - Custom wavetable research and simulator prototype: notes/wavetable-custom.md, src/engine/wt_import.h, src/engine/test/wt_import_*.
 - `firmware/images/OVERDUB.OP1` sha256 77b752ec8123068239ba2e7d79b0fa68592f260a7effee5dce4ce2a755a74384 (`build.py --version 1.0`). Supersedes image 50 as the release candidate.
 - Result: _pending user flash_.
+
+## 2026-10-13 — Test image 52: WTS1.OP1 (wavetable SAMPLE bank)
+- Design: notes/wavetable-custom.md. Green fully clockwise (>= 31744) selects bank 8, SAMPLE: a bank built from the first other sound slot that holds the sampler (grain_source.h), trimmed window, 12 frames.
+- `src/engine/wt_user.h`: shared header + two banks at `_wt_ram` = 0x02CC4000 (FREE region 2; engines.json "ram", reserved; first 256 B zero-filled by a FILL block so `front` = 0 at boot). wavetable `max` lowered to 0xC4000 (engine ends 0x02CC1FEF).
+- wt.c: base pointer per block (`wt_bank_base`); SAMPLE plays the published bank, else bank 0. Existing banks unchanged (wt_check: all passed, max 47,757 cycles per call).
+- ui.c `wt_user_tick` (UI thread, wavetable screen only): signature of slot, window, peak table and 64 samples; rebuild 10 frames after it settles, one `wti_step` per frame (<= ~3.2 M sim cycles), publish by one store into `front`; a change mid-build abandons it; the last bank stays if the sampler goes. 9 bank pips; the 9th blinks while building, off-red when SAMPLE is selected and nothing is built.
+- build_slot.py: engines may declare "ram"/"ram_size" (reserve, 256 B zero FILL, `_<source>_ram` defsym in both links); build.sh takes `ENGINE_DEFSYMS`.
+- Not covered by a test before the device: the tick/publish logic itself (host preview is 64-bit and can't fake the sampler's 32-bit pointers); the builder (wt_import.h) passed its 52 simulator checks.
+- Test: (1) a sampler sound with a sustained pitched note in another slot (e.g. record a held synth note); (2) wavetable, green fully clockwise: pip blinks briefly, then the sample's timbre plays at keyboard pitch; blue morphs through it; (3) move the sampler's trims: rebuild after a moment; (4) other banks unchanged; (5) no sampler slot: off-red pip, bank 0.
+- `firmware/images/WTS1.OP1` sha256 8aeba9a282e088c5c91950ac58fe6b1cf775451b9dc5a53625870bab850c8cb6.
+- Result: _pending user flash_.

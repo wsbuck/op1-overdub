@@ -15,6 +15,7 @@ volatile int32_t te_engine_ids[8];
 int32_t *te_ssamp[8];
 volatile int16_t te_knobs[8][8];
 volatile int32_t te_synth_slot;
+uint32_t wt_ram[(256 + 2 * 12 * 4128 * 2) / 4];   /* wavetable SAMPLE bank (wt_user.h): nothing built */
 /* Fake synth sampler for grain tests (argv[8] = "sampler"): slot 1 holds the sampler with a 440 Hz sine. */
 static int16_t fake_sample[264608 + 16];
 static int32_t fake_sb[0x103c / 4];

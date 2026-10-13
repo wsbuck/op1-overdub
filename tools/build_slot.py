@@ -10,7 +10,9 @@ ENGINES.json (e.g. src/slot/engines.json) lists the engines in id order:
     "aliases": ["old name", ...]}, ...]
 Aliases are extra name-table entries for the same id, so patches saved under an old name still load (TE asserts
 on an unknown engine name, instr_types.cpp:49); only "name" gets a DB row and presets.
-Each engine is src/engine/<source>.c built by src/engine/build.sh at its addr (a FREE region).
+Each engine is src/engine/<source>.c built by src/engine/build.sh at its addr (a FREE region). Optional "ram",
+"ram_size": a FREE SDRAM buffer _<source>_ram shared by the engine and the screen (ui.c), reserved like an FX's; its
+first 256 bytes are zero-filled by the image (a header that must not hold stale values at boot).
 src/slot/slot.S is assembled at --slot-addr with tables generated into DIR/slot_gen.inc from the stock
 image (TE data, never committed). TE's name lookup, producer factory, ScreenId, knob-range and
 per-engine flag-table code is repointed at the grown tables by checked halfword patches
@@ -168,8 +170,9 @@ def main():
     for e in engines:
         out = os.path.join(a.build, e["name"])
         os.makedirs(out, exist_ok=True)
+        ram = f"--defsym=_{e['source']}_ram={e['ram']}" if "ram" in e else ""
         r = subprocess.run([os.path.join(ROOT, "src", "engine", "build.sh"), e["addr"], out, e["max"]],
-                           env=dict(os.environ, ENGINE=e["source"]), capture_output=True, text=True)
+                           env=dict(os.environ, ENGINE=e["source"], ENGINE_DEFSYMS=ram), capture_output=True, text=True)
         open(os.path.join(out, "engine.dis"), "w").write(r.stdout + r.stderr)
         if r.returncode:
             sys.exit(f"engine {e['name']} build failed:\n{r.stdout[-2000:]}{r.stderr[-2000:]}")
@@ -254,7 +257,7 @@ def main():
         "  .bss : { *(.bss) *(.bss.*) *(COMMON) } /DISCARD/ : { *(.comment) } }\n"
         "ASSERT(SIZEOF(.bss) == 0, \"ui.c must not use writable globals\")\n")
 
-    fx_ram = {f"_{f['source']}_ram": int(f["ram"], 16) for f in fxs if "ram" in f}   # FREE SDRAM buffers
+    fx_ram = {f"_{f['source']}_ram": int(f["ram"], 16) for f in fxs + engines if "ram" in f}   # FREE SDRAM buffers
     syms = f"--defsym=_iter_get=0x{ITER_GET:08x} --defsym=_iter_init=0x{ITER_INIT:08x} " + \
         " ".join(f"--defsym={k}=0x{v:08x}" for k, v in {**TE_UI, **data_syms, **fx_ram}.items())
     out = subprocess.run(
@@ -329,6 +332,10 @@ def main():
             lo = int(f["ram"], 16)
             cmd += ["--reserve", f"0x{lo:08x}-0x{lo + int(f['ram_size'], 16):08x}={f['source']}_ram"]
     for e in engines:
+        if "ram" in e:
+            lo = int(e["ram"], 16)
+            cmd += ["--reserve", f"0x{lo:08x}-0x{lo + int(e['ram_size'], 16):08x}={e['source']}_ram",
+                    "--fill", f"0x{lo:08x}-0x{lo + 0x100:08x}=0"]
         cmd += ["--block", f"{e['addr']}={os.path.join(a.build, e['name'], 'engine.bin')}"]
     cmd += ["--block", f"0x{a.slot_addr:08x}={os.path.join(a.build, 'slot.bin')}"]
     cmd += ["--pointer", f"0x{ITER_PAGE_UPDATE_SLOT:08x}=0x{ITER_PAGE_UPDATE:08x}:0x{sym['_ui_update']:08x}"]

@@ -2,7 +2,8 @@
  *
  * Knobs (engine page, 0..0x7FFF, read once per block):
  *   [0] blue   position: morphs through the bank's 12 frames
- *   [1] green  bank: analog, pwm, vowel, organ, sync, fold, bell, digital (gen_wt_data.py)
+ *   [1] green  bank: analog, pwm, vowel, organ, sync, fold, bell, digital (gen_wt_data.py); fully clockwise
+ *              (>= 31744) SAMPLE, built from the sampler slot's sample by the screen (wt_user.h)
  *   [2] white  warp: smooth phase bend, the wave leans (warp.h)
  *   [3] orange unison: fades in a second oscillator, detuned up to +30 cents
  *
@@ -19,6 +20,7 @@
 #include "warp.h"
 
 #include "wt_layout.h"
+#include "wt_user.h"
 
 extern const int16_t engine_data[];
 
@@ -39,10 +41,10 @@ struct look {
     uint32_t mask;
 };
 
-static inline struct look look_at(int bank, int frame, int level)
+static inline struct look look_at(const int16_t *base, int frame, int level)
 {
     struct look l;
-    l.t = engine_data + (bank * FRAMES + frame) * FRAME_STRIDE + level_off[level];
+    l.t = base + frame * FRAME_STRIDE + level_off[level];
     l.shift = 32 - level_bits[level];
     l.mask = (1u << level_bits[level]) - 1;
     return l;
@@ -102,7 +104,7 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
 {
     struct state *s = st;
     int32_t pos = clamp_knob(params[0]);
-    int bank = clamp_knob(params[1]) >> 12;
+    const int16_t *base = wt_bank_base(engine_data, wt_bank_of(params[1]));   /* SAMPLE: read once per block */
     int32_t warp_knob = clamp_knob(params[2]);
     int32_t uni = clamp_knob(params[3]);
 
@@ -126,8 +128,8 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     int lvl = pick_level((uint32_t)pitch[0], warp_knob ? wp.level_q8 : 0, &w);
     int lvl2 = lvl + 1 < LEVELS ? lvl + 1 : lvl;
     struct look lk[4] = {
-        look_at(bank, fr, lvl), look_at(bank, fr + 1, lvl),
-        look_at(bank, fr, lvl2), look_at(bank, fr + 1, lvl2),
+        look_at(base, fr, lvl), look_at(base, fr + 1, lvl),
+        look_at(base, fr, lvl2), look_at(base, fr + 1, lvl2),
     };
 
     uint32_t p1 = s->phase1, p2 = s->phase2;
