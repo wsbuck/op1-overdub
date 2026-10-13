@@ -16,7 +16,7 @@ Sources are linked. "Community" means a third-party claim we haven't checked our
   - Community; the te-boot strings are consistent with this.
 - te-boot is reflashed from an update image when the bundled te-boot's version differs from the installed one.
   - The op1dumps README warns that a bad te-boot requires an external NAND programmer.
-  - **This contradicts the PROMPT.md assumption** that the bootloader is untouched by updates.
+  - **This contradicts the common assumption** that the bootloader is untouched by updates.
 - OTP pages 0x10–0x12, 0xD0–0xD3, 0xDF, 0xD8 are programmed by TE.
   - The XTEA key for encrypted app blocks is believed to be at 0xD0 (community).
 

@@ -1,4 +1,4 @@
-# TE firmware and anything derived from it: never commit (PROMPT.md rule 4)
+# TE firmware and anything derived from it: never commit
 firmware/
 *.op1
 *.ldr

@@ -5,7 +5,7 @@
                [--within LO-HI] [--fill LO-HI=PATTERN ...] [--pointer ADDR=OLD:NEW ...]
                [--half ADDR=OLD:NEW ...] [--reserve LO-HI=WHAT ...]
 
-Safety checks (PROMPT.md rule 1; see notes/memory-map.md):
+Safety checks (never write the bootloader region; see notes/memory-map.md):
   * every new block must lie entirely inside memory the stock app already loads with a plaintext,
     non-fill block (so we only overwrite TE-defined plaintext bytes), or entirely inside one FREE region
     (SDRAM the stock app does not load and that a canary probe showed untouched at runtime)
