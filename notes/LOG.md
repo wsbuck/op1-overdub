@@ -633,3 +633,8 @@
 - Test: (1) a sampler sound with a sustained pitched note in another slot (e.g. record a held synth note); (2) wavetable, green fully clockwise: pip blinks briefly, then the sample's timbre plays at keyboard pitch; blue morphs through it; (3) move the sampler's trims: rebuild after a moment; (4) other banks unchanged; (5) no sampler slot: off-red pip, bank 0.
 - `firmware/images/WTS1.OP1` sha256 8aeba9a282e088c5c91950ac58fe6b1cf775451b9dc5a53625870bab850c8cb6.
 - Result: _pending user flash_.
+
+## 2026-10-13 — Test image 53: WTS2.OP1 (wavetable bank names on change)
+- WTS1 + the wavetable screen shows the bank's name (ANALOG … DIGITAL, SAMPLE, or NO SAMPLE when SAMPLE has nothing built) in green, top left, for 45 screen frames (~1.5 s) whenever green changes the bank, and on first show; hidden otherwise. User: hard to tell the banks apart without names.
+- `firmware/images/WTS2.OP1` sha256 cefcbd915bae3eff09d249d06ecec91e542c7161ffab9cd2bbe17f62f32566ff.
+- Result: _pending user flash_.

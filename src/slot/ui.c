@@ -379,6 +379,12 @@ static void wt_user_tick(void)
     u->building = target;
 }
 
+/* Bank name, shown for ~1.5 s when green changes the bank (and on first show), then hidden */
+static const char *const bank_name[BANKS + 1] = { "ANALOG", "PWM", "VOWEL", "ORGAN", "SYNC", "FOLD", "BELL", "DIGITAL",
+                                                  "SAMPLE" };
+static int32_t wtu_named RAM = -1;
+static uint32_t wtu_name_until RAM = 0;
+
 static void draw_wt(void *r, const int16_t *k)
 {
     int32_t pos = k[0] < 0 ? 0 : k[0], uni = k[3] < 0 ? 0 : k[3];
@@ -402,6 +408,12 @@ static void draw_wt(void *r, const int16_t *k)
         else
             line_fast(r, x, FP(10), x + FP(7), FP(10), colour);
     }
+    if (bank_i != wtu_named) {
+        wtu_named = bank_i;
+        wtu_name_until = wtu_frame + 45;
+    }
+    if ((int32_t)(wtu_name_until - wtu_frame) > 0)
+        title(r, bank_i == BANKS && !wt_ram.front ? "NO SAMPLE" : bank_name[bank_i], GREEN);
     /* white: warp glyph, one sine cycle through the engine's own phase bend (warp.h), x 276..312 */
     {
         fp32 gx = FP(276), gy = FP(28), px = 0, py = 0;
