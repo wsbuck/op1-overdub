@@ -111,7 +111,7 @@ def main():
         shutil.copyfile(os.path.join(ROOT, "tools", f), os.path.join(dist, f))
     shutil.copyfile(os.path.join(ROOT, "LICENSE"), os.path.join(dist, "LICENSE"))
     # The image to flash is the one the bundle produces, so what is tested is what others get.
-    run(sys.executable, os.path.join(dist, "apply.py"), a.stock, image)
+    run(sys.executable, "-B", os.path.join(dist, "apply.py"), a.stock, image)   # -B: no __pycache__ in the bundle
     zipf = shutil.make_archive(dist, "zip", os.path.dirname(dist), os.path.basename(dist))
     print(f"\nimage: {os.path.relpath(image, ROOT)}\npatch: {os.path.relpath(zipf, ROOT)} "
           f"(unzip, then: python3 apply.py op1_246.op1)")
