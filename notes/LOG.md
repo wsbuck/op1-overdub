@@ -691,3 +691,6 @@
 - 55c: `firmware/images/AMPPROBE3.OP1` = grain + inprobe + dprobe, built from commit 5f0dde5 in a clean export (the working tree held the save probe's unfinished edits). sha256 142eedeb8b5896aed72f05c3ac9764915b726683de92be679dfb315dfae46d1d. dprobe is drum id 17 here (18 in 56); sounds store the name, not the id.
 - Lesson: before leaving an image with a drum engine, the saved drum sounds naming it must be deleted, and DRUMPROBE didn't list them. Until the save fix lands, every test image should include `dprobe`.
 - Result: _pending user flash_.
+- AMPPROBE3 on device: stops with `patch.cpp:390 Invalid synth patch wavetable: - error 1`: a synth slot holds a wavetable sound and AMPPROBE3 has no wavetable. **Rule: every test image must register every engine name the user's slots and saved sounds use** (now va, wavetable, grain, inprobe, dprobe).
+- 55d: `firmware/images/AMPPROBE4.OP1` = va, wavetable, grain, inprobe (synth 15-18) + dprobe (drum 19), from commit 72feb26 in a clean export, with the wavetable preset `digital` left out for this image only (177 > 176 synth presets otherwise; 176 exactly now). sha256 d5bcc178adae5eb10466049255a3a1627fd9152704858cf4e1ffaf235e762faa. First image with a 4th synth id (18).
+- Result: _pending user flash_.
