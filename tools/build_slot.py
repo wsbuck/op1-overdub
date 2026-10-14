@@ -8,7 +8,8 @@ ENGINES.json (e.g. src/slot/engines.json) lists the engines in id order:
   [{"name": "va", "source": "va", "addr": "0x01E10000", "max": "0x10000",
     "default": [8 knobs], "presets": {"saw lead": [k0, k1, k2, k3], ...},
     "aliases": ["old name", ...]}, ...]
-Optional "patch": fields set in every preset of that engine (e.g. {"lfo_active": false}).
+Optional "patch": fields set in every preset of that engine (e.g. {"lfo_active": false}); "preset_patch": {preset name:
+fields} for single presets (e.g. an FX on).
 Aliases are extra name-table entries for the same id, so patches saved under an old name still load (TE asserts
 on an unknown engine name, instr_types.cpp:49); only "name" gets a DB row and presets.
 Each engine is src/engine/<source>.c built by src/engine/build.sh at its addr (a FREE region). Optional "ram",
@@ -54,7 +55,7 @@ import ldr  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRST_ID = 15
-UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6}   # must match enum ui_kind in src/slot/ui.c
+UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6, "amp": 7}   # must match enum ui_kind in src/slot/ui.c
 # patch.cpp:616 `synthSynthes_preset_count <= kMaxSynthSynthes_presets` (0xb0 at 0x01a0582a): fixed array
 # of 0x38-byte entries at 0x01DDDB68. Counted without sampler presets (stock 160 + 11 iter + 4 va = 175
 # booted; 183 asserted).
@@ -478,6 +479,7 @@ def main():
                    "--type", e["name"], "--default", json.dumps(e["default"])]
             cmd += [x for name, k in e["presets"].items() for x in ("--preset", f"{name}={','.join(map(str, k))}")]
             cmd += ["--patch", json.dumps(e["patch"])] if "patch" in e else []
+            cmd += [x for name, pp in e.get("preset_patch", {}).items() for x in ("--preset-patch", f"{name}={json.dumps(pp)}")]
             subprocess.run(cmd, check=True)
             src = dst
         if not nsyn:

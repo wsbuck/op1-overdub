@@ -3,9 +3,11 @@
 
   add_engine_db.py IN.db OUT.db --type va --default "[0, 6000, 20000, 9000, 0, 0, 0, 0]"
                    --preset NAME=K0,K1,K2,K3 [--preset ...] [--template-folder iter] [--patch JSON]
+                   [--preset-patch NAME=JSON ...]
 
 Each preset copies the envelope/FX/LFO settings of one preset in --template-folder (in order, cycling)
-and sets type, name and the 4 engine knobs; --patch sets more fields in every preset (e.g. '{"lfo_active": false}').
+and sets type, name and the 4 engine knobs; --patch sets more fields in every preset (e.g. '{"lfo_active": false}'),
+--preset-patch in one preset (after --patch). A preset's fx_params must equal a stock preset's for its fx_type.
 On 246 the engine browser lists only types with presets.
 """
 import argparse
@@ -24,6 +26,8 @@ def main():
     ap.add_argument("--preset", action="append", default=[], metavar="NAME=K0,K1,K2,K3")
     ap.add_argument("--template-folder", default="iter")
     ap.add_argument("--patch", default="{}", help="JSON object of patch fields set in every preset")
+    ap.add_argument("--preset-patch", action="append", default=[], metavar="NAME=JSON",
+                    help="JSON object of patch fields set in one preset (after --patch)")
     a = ap.parse_args()
     if len(json.loads(a.default)) != 8:
         sys.exit("--default must be a JSON list of 8 knob values")
@@ -41,22 +45,37 @@ def main():
     # "Invalid synth patch inprobe:input - error 21" (AMPPROBE). Keep --patch's lists within the stock presets' range.
     extra = json.loads(a.patch)
     stock = [json.loads(r[0]) for r in con.execute("SELECT patch FROM synth_presets")]
-    for field, vals in extra.items():
-        if isinstance(vals, list):
-            seen = [p[field] for p in stock if isinstance(p.get(field), list) and len(p[field]) == len(vals)]
-            for j, v in enumerate(vals):
-                lo, hi = min(s[j] for s in seen), max(s[j] for s in seen)
-                if not lo <= v <= hi:
-                    sys.exit(f"--patch {field}[{j}] = {v} is outside the stock presets' {lo}..{hi}")
+
+    def guard(what, fields):
+        for field, vals in fields.items():
+            if isinstance(vals, list):
+                seen = [p[field] for p in stock if isinstance(p.get(field), list) and len(p[field]) == len(vals)]
+                for j, v in enumerate(vals):
+                    lo, hi = min(s[j] for s in seen), max(s[j] for s in seen)
+                    if not lo <= v <= hi:
+                        sys.exit(f"{what} {field}[{j}] = {v} is outside the stock presets' {lo}..{hi}")
+
+    guard("--patch", extra)
+    per = {}
+    for spec in a.preset_patch:
+        name, _, js = spec.partition("=")
+        per[name] = json.loads(js)
+        guard(f"--preset-patch {name}:", per[name])
     for i, spec in enumerate(a.preset):
         name, _, knobs = spec.partition("=")
         k = [int(v) for v in knobs.split(",")]
         if len(k) != 4 or not all(0 <= v <= 0x7FFF for v in k):
             sys.exit(f"{spec}: need 4 knob values 0..32767")
         patch = dict(templates[i % len(templates)], **extra)
+        patch.update(per.pop(name, {}))
         patch.update(type=a.type, name=name, knobs=k + [0, 0, 0, 0])
+        if patch.get("fx_active") and not any(p.get("fx_type") == patch["fx_type"] and p.get("fx_params") == patch["fx_params"]
+                                              for p in stock):
+            sys.exit(f"{name}: fx_params {patch['fx_params']} are not a stock {patch['fx_type']} preset's")
         con.execute("INSERT INTO synth_presets (patch, folder) VALUES (?, ?)",
                     (json.dumps(patch, separators=(",", ":")), a.type))
+    if per:
+        sys.exit(f"--preset-patch for unknown presets: {', '.join(per)}")
     con.commit()
     con.execute("VACUUM")
     con.close()

@@ -82,7 +82,7 @@ def main():
     subprocess.run([sys.executable, os.path.join(ENGINE, "gen_grain_data.py"), gdata], check=True)
     os.environ["GRAIN_DATA"] = gdata
     exe = os.path.join(tmp, "preview")
-    subprocess.run(["cc", "-std=gnu99", "-O1", "-Wall", "-I", ENGINE, "-I", SLOT,
+    subprocess.run(["cc", "-std=gnu99", "-O1", "-Wall", "-I", ENGINE, "-I", SLOT, "-lm",
                     "-DPALETTE=((const uint8_t *)host_palette)", "-DKNOBS(s)=((const int16_t *)host_knobs)",
                     "-DPROF=((volatile uint32_t *)host_prof)", "-DFX_KNOBS(m,s)=((const int16_t *)host_knobs)", "-DTE_MATRIX=((const int32_t *)host_matrix)",
                     "-include", os.path.join(HERE, "preview_decl.h"),

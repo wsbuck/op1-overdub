@@ -16,6 +16,7 @@ volatile uint32_t te_rx_sel;
 volatile int32_t te_rx[256];
 volatile int32_t te_alt_in[128];
 uint32_t sprobe_ram[16];   /* knob probe's screen record (sprobe.h; device: engines.json "ram") */
+uint32_t amp_ram[4096];    /* amp's shared record (amp.h; device: engines.json "ram"), zero as after boot */
 extern int abi_check(void *self, int16_t *out, const int16_t *params);
 
 int main(void)

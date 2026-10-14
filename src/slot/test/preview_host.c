@@ -8,6 +8,9 @@
 #include "pingpong.h"
 #include "drumprobe.h"
 #include "sprobe.h"
+#include "amp.h"
+#include "amp_tune.h"
+#include <math.h>
 
 int16_t host_knobs[8];   /* K0..K3 from the command line; K4..K7 set per preview */
 uint8_t host_palette[20 * 4];
@@ -23,7 +26,7 @@ volatile int32_t te_engine_ids[8];      /* no sampler slot: grain shows the buil
 int32_t *te_ssamp[8];
 volatile int16_t te_knobs[8][8];
 volatile int32_t te_synth_slot;
-const uint8_t ui_kind[16] = { 1, 2, 3, 4, 5, 6 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain, 19 inprobe, 20 sprobe */
+const uint8_t ui_kind[16] = { 1, 2, 3, 4, 5, 6, 7 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain, 19 inprobe, 20 sprobe, 21 amp */
 /* Audio-input buffers (inprobe.h): a decaying guitar-like wave in TE IN and RAW (MSB-aligned), filled in main(). */
 volatile int16_t te_audio_in[64];
 volatile uint32_t te_rx_sel = 1;
@@ -40,6 +43,37 @@ uint32_t dp_type_hits[2] = { 2, 5 };
 /* Knob probe (engine 20 in previews): the hook's record and the engine's live params, set in main() */
 struct kh_diag knobhook_diag;
 struct sp_ram sprobe_ram;
+/* amp (engine 21 in previews): AMP_DB = input peak dBFS (default -15), AMP_PLAY=1 a note sounds (the engine renders every
+ * frame; else the tuner shows), AMP_HZ = the note TE IN carries (default 110 Hz + 7 cents); FRAMES animates. */
+struct amp_ram amp_ram;
+static double amp_t;
+static void amp_fill(int16_t *dst, int n)
+{
+    double hz = getenv("AMP_HZ") ? atof(getenv("AMP_HZ")) : 110 * pow(2, 7 / 1200.0);
+    double a = 32767 * pow(10, (getenv("AMP_DB") ? atof(getenv("AMP_DB")) : -15) / 20);
+    for (int i = 0; i < n; i++, amp_t += 1 / 44100.0) {
+        double v = 0;
+        for (int h = 1; h <= 6; h++)
+            v += sin(2 * M_PI * hz * h * amp_t + h) / h;
+        dst[i] = (int16_t)(a * v / 1.9);
+    }
+}
+int host_amp_capture(int16_t *dst)
+{
+    amp_fill(dst, AMP_TUNE_N);
+    return 1;
+}
+static void amp_tick(void)
+{
+    int16_t b[64];
+    amp_fill(b, 64);
+    for (int i = 0; i < 64; i++)
+        te_audio_in[i] = b[i];
+    if (getenv("AMP_PLAY") && atoi(getenv("AMP_PLAY"))) {
+        amp_ram.renders += 40;
+        amp_ram.gate_open = 1;
+    }
+}
 uint32_t hold_on = 1;   /* show the indicators in previews */
 uint32_t chord_on = 1, chord_learning = 0;
 int32_t chord_n = 3, chord_iv[4] = {0, 4, 16, 0};   /* root, major 3rd, major 10th */
@@ -256,6 +290,13 @@ int main(int argc, char **argv)
                 host_drawing = 1;
             host_tick(i);
             fx_ui_draw(e % 100, e >= 200 ? 0 : 3, 0);
+        }
+    else if (e == 21)
+        for (int i = 0; i < frames; i++) {
+            if (i == frames - 1)
+                host_drawing = 1;
+            amp_tick();
+            ui_draw(e, 0);
         }
     else
         ui_draw(e, 0);
