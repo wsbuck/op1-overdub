@@ -2,9 +2,12 @@
  * its drawing primitives (line_fp, line_fast, vline_fast, text, text_fast, sin_t, the colour enum, RAM, cycles()).
  * src/slot/test/screens_preview.py renders it on the host with stand-ins for those.
  *
- * harm_tick(k): UI thread, every frame on this screen. Publishes unison and warp from the stored knobs, and when the
- *   drawing changed, builds the table (harm_build.h, ~1.7 M cycles, one per frame at most) into the frame the engine
- *   is neither playing nor fading from, then publishes it (harm.h). Before the first tick the engine plays a sine.
+ * harm_tick(k, u): UI thread, every frame on this screen. Publishes unison and warp from the stored knobs, and when the
+ *   drawing changed, builds the table (harm_build.h, ~1.7 M cycles = ~4.3 ms) into the frame the engine is neither
+ *   playing nor fading from, then publishes it (harm.h). Rate-limited: at most one build every HARM_BUILD_GAP screen
+ *   frames (~0.13 s), so a knob held turning costs ~3 % of the UI thread, not 4.3 ms every frame; the edits in between
+ *   coalesce into the next build, and the last published table keeps playing meanwhile. The first build (nothing
+ *   published yet) is immediate. Before the first tick the engine plays a sine.
  * draw_harm(r, k, u): k = the stored knobs (all 8; not the live ones: TE's LFO would scramble them), u = the edit
  *   state (harm_edit.h).
  *   bottom: 24 bars, height = level (4 px per 3 dB step); off bars are a dark-blue stub; ticks under them (every
@@ -22,6 +25,7 @@
 #include "harm_build.h"
 #include "harm_edit.h"
 #include "warp.h"
+#include "ui_hookdiag.h"
 
 #define HU_X0 10                            /* bar 0 left edge */
 #define HU_PITCH 12
@@ -33,6 +37,7 @@
 #define HU_WY 34
 #define HU_WA 22
 #define HU_SHOW 45                          /* frames a value readout stays (~1.5 s) */
+#define HARM_BUILD_GAP 4                    /* screen frames between table builds at least */
 #ifndef HARM_RAM
 #define HARM_RAM (&harm_ram)
 #endif
@@ -40,7 +45,7 @@
 #define HARM_WORK(h) ((struct wti_work *)((h) + 1))     /* the builder's scratch follows harm_ram (engines.json "ram") */
 #endif
 
-static void harm_tick(const int16_t *k)
+static void harm_tick(const int16_t *k, struct harm_ui *u)
 {
     struct harm_ram *h = HARM_RAM;
     if (!h)
@@ -50,6 +55,9 @@ static void harm_tick(const int16_t *k)
     uint32_t sig = harm_sig(k);
     if (sig == h->sig && h->front)
         return;
+    if (h->front && u->frame - u->build_frame < HARM_BUILD_GAP)
+        return;                             /* coalesce: the next build picks up every edit made meanwhile */
+    u->build_frame = u->frame;
     int target = 1;
     while (target == h->front || target == h->prev)
         target++;
@@ -115,8 +123,8 @@ static int32_t hu_wave(const int16_t *f, const struct warp *wp, uint32_t ph)
 
 static void draw_harm(void *r, const int16_t *k, struct harm_ui *u)
 {
-    harm_tick(k);
     u->frame++;
+    harm_tick(k, u);
     int cur = harm_clamp(u->cursor, 0, HARM_N - 1);
     int tilt = harm_tilt(k), ext = harm_extend(k);
 
@@ -246,6 +254,7 @@ static void draw_harm(void *r, const int16_t *k, struct harm_ui *u)
             hu_bar(r, x, x + FP(2), base - FP(HU_STEP * lvl), base, j < 2 ? GREEN : DARKGREEN);
         }
     }
+    hook_delta_diag(r, FP(8), FP(32), 0);   /* TE's raw encoder delta, under the readout */
 }
 
 #endif

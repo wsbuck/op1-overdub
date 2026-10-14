@@ -1,7 +1,8 @@
-# harm and fm4: implementation (phase 1: DSP, screens, edit functions; off-device)
+# harm and fm4: implementation
 
-Status 2026-10-14: built and verified in the simulator and on the host. **Not integrated**: no ui.c, engines.json,
-build_slot.py or slot.S changes yet, and no image. Designs: notes/harmonic-synth.md, notes/fm-operator.md.
+Status 2026-10-14: phase 1 (DSP, screens, edit functions) built and verified in the simulator and on the host;
+phase 2 (integration into a test image, "Integration as built" below) done, **pending user flash**.
+Designs: notes/harmonic-synth.md, notes/fm-operator.md.
 
 ## Files
 | file | what |
@@ -60,34 +61,50 @@ Run: `python3 src/engine/test/harm_check.py`, `python3 src/engine/test/fm4_check
   change; v0 SHIFT ratios coloured by knob (B blue, C green, D white), `DETUNE n C` in orange; operator pages: the box
   in white with blue/green/white/orange underlines and `C 4.41` / `LVL 11 SWELL` top right.
 
-## Integration once the encoder hook is confirmed (KNOBHOOK probe)
-1. **ui.c**: after the primitives (and before `ui_draw`), `#include "ui_harm.h"` and `#include "ui_fm4.h"`. Define the
-   shared edit state in one place both ui.c and the hook see (e.g. knobhook.c, `.data`):
-   `struct harm_ui harm_ui = {...}; struct fm4_ui fm4_ui = {...};` (`harm_ui_reset` / `fm4_ui_reset` values: zero,
-   `last = -1`, `alg_shown = -1`). In `ui_draw`: `KIND_HARM: draw_harm(r, KNOBS(slot), &harm_ui)` and
-   `KIND_FM4: draw_fm4(r, KNOBS(slot), &fm4_ui)`: **the stored knobs (all 8)**, not the live 4 from tramp.S.
-   Add `"harm": 7, "fm4": 8` to build_slot.py `UI_KINDS` and the enum.
-2. **Hook** (knobhook.c / slot.S `_knob_hook`): build_slot.py allows one hooked engine (`KNOB_HOOK`); make it a list.
-   - harm: `harm_edit(&harm_ui, knob, *delta, knobs); *delta = 0;` then TE's `te_knob_apply` (it stores the patch).
-   - fm4: `if (fm4_edit(&fm4_ui, knob, *delta, knobs) == FM4_DONE) *delta = 0;` then `te_knob_apply`.
-   - Set `HARM_DELTA_SHIFT` / `FM4_DELTA_SHIFT` from what the probe reports TE's delta to be per detent.
-3. **engines.json** (addresses: free space in FREE region 1 after sprobe's RAM; harm's ram must not overlap):
-   ```
-   {"name": "harmonic", "source": "harm", "addr": "0x01EF1000", "max": "0x2000", "ram": "0x01EF3000", "ram_size": "0x10000",
-    "default": [4128, 0, -17185, -26198, -30583, 30584, 26231, 26214], "presets": {...harm below}, "ranges": HARM_ROWS,
-    "knob_hook": true, "ui": "harm"},
-   {"name": "fm4", "source": "fm4", "addr": "0x01F03000", "max": "0x4000",
-    "default": [11585, 13405, 6000, 0, 1536, 1536, 14848, 6000], "presets": {...v0 below}, "ranges": FM4_ROWS, "ui": "fm4"}
-   ```
-   harm's ram holds `struct harm_ram` (24.8 KB) then `struct wti_work` (34.9 KB): 0x10000 is enough. Its first 256 B
-   are zero at boot (front = 0: a sine until the screen first builds).
-4. **Range rows (type 3)**:
-   - HARM_ROWS: 8 x `[-32768, 32767, 32767, 3]` (every knob packed).
-   - FM4_ROWS v0 (no hook): 8 x `[0, 32767, 32767, 3]`. With the hook: knobs 0..3 `[0, 32767, 32767, 3]`, knobs 4..7
-     `[-32768, 32767, 32767, 3]` (packed operators are negative).
-5. **add_engine_db.py** takes 4 knobs 0..32767 and pads zeros: it needs an 8-value form with signed values (checked
-   against the engine's rows) for harm and packed fm4 presets. v0 fm4 presets need 8 values too (knobs 4..7 = ratios).
-   Total synth presets must stay <= 176 (`MAX_SYNTH_PRESETS`): 16 new presets may need `--db-trim`.
+## Integration as built (phase 2, 2026-10-14; test image 59)
+- **engines.json** (both `"test": true`, so release builds are unchanged in behaviour):
+  - `harmonic` (source harm) at `0x01EF1000` (max 0x2000; 3,062 B), ram `0x00801000` size 0xF000 (FREE region 0,
+    between tramp.S's prof stats and voice_ram: amp took 0x01EF8000..0x01F02000, and region 1's tail is only 0xE000;
+    struct harm_ram + struct wti_work = 0xEA48 B on the Blackfin). Rows 8 x `[-32768, 32767, 32767, 3]`.
+  - `fm4` at `0x01EF3000` (max 0x4000; 12,504 B), no ram (per-voice state in voice_ram). Rows knobs 0..3
+    `[0, 32767, 32767, 3]`, 4..7 `[-32768, 32767, 32767, 3]`. Packed presets (the hook builds the operator pages).
+  - Both `"knob_hook": true`. Presets in engines.json order: harm saw, square, organ, clarinet, bell, choir, hollow,
+    glass; fm4 e piano, bell, bass, pluck, metallic, pad, brass, organ (a `--db-trim NAME=6` test image keeps the first 6).
+- **Knob mapping as built**
+  - harm (all 8 stored, packed; harm.h): blue CURSOR (UI only), green LEVEL, white PAINT, orange UNISON; SHIFT blue
+    TILT, SHIFT green EXTEND, SHIFT white STAMP (SAW SQUARE TRIANGLE EVEN ORGAN CLEAR, back to 0 = undo), SHIFT orange
+    WARP. Storage: knob 0 unison/warp/version, 1 tilt/extend, 2..7 the 24 levels.
+  - fm4: MAIN page blue INDEX, green ALGORITHM, white TIME, orange FEEDBACK (plain values, TE applies them, the LFO can
+    target them); SHIFT blue = page MAIN, A, B, C, D; on an operator page blue COARSE, green FINE, white LEVEL, orange
+    ENVELOPE of that operator (knob 4 + op, packed). SHIFT green/white/orange do nothing on a packed sound.
+- **LFO decision: keep the packing.** TE's LFO only ever modulates the per-voice params copy `0xFF801724`, never the
+  stored knobs (notes/knob-hook.md, Confirmed by reading all six LFO call sites). The hook edits and both screens read
+  only the stored knobs (`KNOBS(slot)`, all 8), and harm's engine ignores params (it plays the table and unison/warp the
+  screen publishes), so an LFO on knobs 1-4 does nothing on harm and can't corrupt its drawing. fm4 reads params: knobs
+  0..3 are plain macros (an LFO on them modulates INDEX, ALGORITHM, TIME, FEEDBACK as for any engine); 4..7 (packed
+  operators) are out of the LFO's reach (it targets knobs 1-4 only, device result of test image 57).
+- **Hook**: `KNOB_HOOK id, id, ...` and `_hook_kind` (build_slot.py `HOOK_KINDS`); knobhook.c holds `harm_ui` / `fm4_ui`
+  (.data) shared with the screens (weak in ui.c). harm: `harm_edit` then TE's apply with delta 0; fm4: `fm4_edit`,
+  delta 0 to TE when the hook handled it, TE's own delta for plain MAIN knobs.
+- **Delta per detent unknown**: `hook_steps.h` (any nonzero delta = at least one step; a multiple of the smallest
+  |delta| seen since boot gives 2, 4, ... up to a cap: cursor, PAINT, STAMP, EXTEND, page, FINE, ENVELOPE 1; TILT,
+  COARSE, op LEVEL 2; LEVEL, UNISON, WARP 4). `*_DELTA_SHIFT` stay 0 (the edit functions take steps). Diagnostic: grey
+  `D<last raw delta> M<smallest>` under harm's readout and bottom right on fm4, once the hook has run.
+- **harm table rebuild** (~4.3 ms, UI thread): at most one per `HARM_BUILD_GAP` = 4 screen frames (~0.13 s); edits in
+  between coalesce into the next build, the last published table keeps playing (3 frames, crossfade). Host check
+  (screens_preview.py `ratelimit`): a knob turned every frame for 61 frames builds 15 tables, the last edit is published
+  3 frames after the turning stops.
+- **fm4 screen redesigned as gears** (user design, 2026-10-14; ui_fm4.h): each operator a gear (size and speed from the
+  ratio, log size 10..22 units, speed capped at 4x), the algorithm the gear train (carriers on the bottom row driving the
+  output shaft to the output cycle; modulators meshed with what they modulate, a blue belt to further targets); tooth
+  bite = level x INDEX (barely touching .. deep, the driven gear jittering by bite x sin of the modulator's angle);
+  carriers' level = brightness; envelopes from the voices that rendered since the last frame (fm4.c `blocks` counter in
+  struct fm4_voice, now in fm4.h), so the gears spin up on a note, wind down with each envelope and stand still with no
+  note; feedback a spring-loaded orange pawl on D, chattering while a note sounds; TIME xN (white) and ALG n (green)
+  for ~1.5 s after a change; operator pages: the gear in white with a second rim and knob-coloured marks, values top
+  right. Host preview: 32..51 AA + 230..350 fast segments (boxes design: 48..111 AA).
+- Release builds (va, wavetable, grain): same patch sites and DB rows; the image bytes change because ui.c includes the
+  two screens (as with sprobe in image 57).
 
 ## Proposed presets (all checked in the simulator: level 3000..26000 / 30000, cycles; values within the rows)
 No other patch fields are needed (the template preset's ADSR, FX, LFO; never ADSR attack 0, LOG.md error 21).
@@ -140,10 +157,8 @@ fm4 packed (hook builds; per-operator levels and envelopes):
 - 11 algorithms (fm4.h); Operator's exact numbering was not verifiable, so these are TX81Z's 8 plus three.
 
 ## Open questions
-- TE's encoder delta per detent and acceleration at the hook (sets `*_DELTA_SHIFT`); whether the hook can serve two
-  engines (build_slot.py allows one).
-- Whether TE's LFO can target knobs 4..7 (fm4 reads them from params; harm doesn't care).
-- The harm rebuild costs ~4 ms of one UI frame while editing; to be measured on device (as WTS1).
+- TE's encoder delta per detent and acceleration at the hook: the screens' `D`/`M` readout (image 59) answers it.
+- The harm rebuild costs ~4 ms of one UI frame while editing, now at most every 4th frame; to be felt on device.
 - harm's table is built only while its screen shows: a sound loaded from elsewhere (or another slot) plays the last
   built table, or a sine after boot, until the screen is opened (the SAMPLE bank's limitation).
 - simrun.py / engine.h still say 44.1 kHz; the new checks use simdrive.py at 88.2 kHz. Fixing simrun.py's FS would

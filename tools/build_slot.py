@@ -37,8 +37,9 @@ type and name changed ("preset") and its dbox_data set to 24 x "dbox_default" (e
 dbox presets' range: TE validates factory presets at boot). TE's per-key loader and saver are patched to treat its type
 like "dbox", so its per-key values load and save with the sound.
 Optional "ranges": 8 x [min, max, scale, type] for an engine's knob range row (default: RANGE_ROW, 0..0x7FFF type 0);
-defaults and presets must lie inside it (TE's patch validator rejects other knob values, error 15). "knob_hook": true
-(one engine at most) routes that engine's engine-page encoder turns through src/slot/knobhook.c (notes/knob-hook.md).
+defaults and presets must lie inside it (TE's patch validator rejects other knob values, error 15); presets may then
+give all 8 knob values (signed, checked against the row). "knob_hook": true (any number of synth engines whose source
+is in HOOK_KINDS) routes those engines' engine-page encoder turns through src/slot/knobhook.c (notes/knob-hook.md).
 """
 import argparse
 import json
@@ -55,7 +56,9 @@ import ldr  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRST_ID = 15
-UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6, "amp": 7}   # must match enum ui_kind in src/slot/ui.c
+UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6, "amp": 7, "harm": 8,
+            "fm4": 9}   # must match enum ui_kind in src/slot/ui.c
+HOOK_KINDS = {"sprobe": 1, "harm": 2, "fm4": 3}   # by source; must match knobhook.c's HOOK_* enum
 # patch.cpp:616 `synthSynthes_preset_count <= kMaxSynthSynthes_presets` (0xb0 at 0x01a0582a): fixed array
 # of 0x38-byte entries at 0x01DDDB68. Counted without sampler presets (stock 160 + 11 iter + 4 va = 175
 # booted; 183 asserted).
@@ -196,8 +199,8 @@ def main():
     if len(drums) > 1:
         sys.exit("one drum engine at most (slot.S DRUM_HOOKS)")
     hooked = [FIRST_ID + i for i, e in enumerate(engines) if e.get("knob_hook")]
-    if len(hooked) > 1 or any(e.get("drum") for e in engines if e.get("knob_hook")):
-        sys.exit("one synth engine with \"knob_hook\" at most (slot.S KNOB_HOOK)")
+    if any(e.get("drum") or e["source"] not in HOOK_KINDS for e in engines if e.get("knob_hook")):
+        sys.exit(f"\"knob_hook\" only on synth engines with a knobhook.c handler ({', '.join(HOOK_KINDS)})")
     for e in engines:                   # TE's validator rejects knob values outside the row (patch.cpp, error 15)
         if e.get("drum"):
             continue
@@ -274,7 +277,10 @@ def main():
               + longs(dvt[10:11]) + "    .long _drum_note_off_entry",
               "    .global _drum_id", "_drum_id:", f"    .long {drum_id}"]
     if hooked:
-        g += [f"    KNOB_HOOK {hooked[0]}", "    .align 4"]
+        g += [f"    KNOB_HOOK {', '.join(map(str, hooked))}", "    .align 4"]
+        # knobhook.c's handler per engine id 15.. (0 = not hooked)
+        g += ["    .global _hook_kind", "_hook_kind:", "    .byte " + ", ".join(
+            str(HOOK_KINDS[e["source"]] if e.get("knob_hook") else 0) for e in engines), "    .align 4"]
     g += ["    .global _names", "_names:"]
     g += [f"    .long 0x{NAME_BLOB + o:08x}, {i}    /* {nm} */" for i, (o, nm) in enumerate(zip(NAME_OFFS, names))]
     g += [f"    .long _name{FIRST_ID + i}, {FIRST_ID + i}" for i in range(n)]
@@ -479,6 +485,7 @@ def main():
                    "--type", e["name"], "--default", json.dumps(e["default"])]
             cmd += [x for name, k in e["presets"].items() for x in ("--preset", f"{name}={','.join(map(str, k))}")]
             cmd += ["--patch", json.dumps(e["patch"])] if "patch" in e else []
+            cmd += ["--ranges", json.dumps(e["ranges"])] if "ranges" in e else []
             cmd += [x for name, pp in e.get("preset_patch", {}).items() for x in ("--preset-patch", f"{name}={json.dumps(pp)}")]
             subprocess.run(cmd, check=True)
             src = dst

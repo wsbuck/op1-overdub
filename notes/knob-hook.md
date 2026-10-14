@@ -1,6 +1,8 @@
 # Knob hook: engine data in the 8 synth knob values (firmware 246)
 
-Status: **built (SAVEPROBE.OP1, LOG.md test image 57), not yet tested on device** (2026-10-14).
+Status: **works on device (SAVEPROBE.OP1, LOG.md test image 57, 2026-10-14)**: the hook runs, type-3 rows give 8
+independent knobs, packed raw values survive save, reload and a power cycle. Since then the hook serves several engines
+(sprobe, harm, fm4; "Several engines" below).
 The storage plan of notes/harmonic-synth.md and notes/fm-operator.md: type-3 range rows for 8 independent knobs, and
 an encoder hook that writes packed values into the knob array, which TE then stores in the patch's `"knobs"`.
 **Confirmed** = read in the binary (decompiles in the session scratchpad `save/`) or checked in the simulator;
@@ -23,8 +25,14 @@ an encoder hook that writes packed values into the knob array, which TE then sto
   `max == min`; out-of-range results become 0.5. A -32768..32767 row is safe there.
 - TE's LFO "element" module (`FUN_019c9d44`): target knob = `lfo_params[0] >> 12` (0..7) when the engine's flag
   (`0x018E142C[id]`, 1 for sampler/drum/dbox/dsynth) is 0, else `>> 11`; it modulates through **`FUN_01a1dfec`**
-  itself, not through the encoder handler's call site, so the hook never sees LFO changes. Hypothesis: for a type-3
-  engine an LFO on 4..7 moves those knobs independently.
+  itself, not through the encoder handler's call site, so the hook never sees LFO changes. Device (SAVEPROBE): TE's LFO
+  can only target knobs 1-4 (indices 0..3).
+- **The LFO never writes the stored knobs (Confirmed, 2026-10-14).** All six `FUN_01a1dfec` calls outside the encoder
+  (`0x019CA03C`, `0x019CB2CA`, `0x019CD014`, `0x019CDDD2`, `0x019CED08`, `0x019CFCC4`, the LFO modules) pass a knobs
+  pointer that is the voice params scratch `0xFF801724` (the element LFO: `R3 = 0xFF801724` at `0x019C9E74`, then
+  `[SP + 0xC] = P0 = R3` at `0x019CA036`); no code in the LFO modules references the stored array `0xFF8013C4`. The voice
+  loop copies the stored knobs into that scratch before each render (`0xFFA00A56`), and the LFO modulates the copy. So
+  an LFO on knob 1-4 changes what render receives, never what is stored, saved or drawn from `KNOBS(slot)`.
 
 ## Hook as built
 - build_slot.py points the CALL at `0x01A5063E` to `_knob_hook` (entry.inc `KNOB_HOOK id`): `R2 == id` goes to
@@ -36,6 +44,17 @@ an encoder hook that writes packed values into the knob array, which TE then sto
   all four arguments; register preservation; packing).
 - engines.json `"ranges"`: 8 x `[min, max, scale, type]` per engine; build_slot.py checks defaults and presets
   against it.
+
+## Several engines (2026-10-14)
+- engines.json `"knob_hook": true` on any number of synth engines; build_slot.py emits `KNOB_HOOK id1, id2, ...`
+  (entry.inc: one compare per id, R3/CC only) and `_hook_kind` (a byte per engine id 15..: `HOOK_KINDS` sprobe 1,
+  harm 2, fm4 3) that knobhook.c dispatches on.
+- harm: `harm_edit` on the stored knobs, then TE's function with delta 0 (TE then stores the patch).
+- fm4: `fm4_edit`; plain MAIN-page knobs pass to TE with TE's own delta; page changes and operator-page edits are
+  ours (delta 0 to TE).
+- TE's delta per detent is still unknown: `hook_steps.h` makes every call with a nonzero delta at least one step, and
+  more (powers of two, capped per control) when |delta| is a multiple of the smallest |delta| seen since boot. The
+  harm and fm4 screens show `D<last raw delta> M<smallest>` (grey) once the hook has run, for the user to report.
 
 ## The probe (sprobe, test engine)
 - Row: type 3 on all 8 knobs; 0..32767 for 0..5, -32768..32767 for 6..7.

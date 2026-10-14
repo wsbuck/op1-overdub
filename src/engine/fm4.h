@@ -17,7 +17,8 @@
  *   4..7, packed (the encoder hook's operator pages; all four negative = packed): knob 4 + op =
  *     0x8000 | coarse << 10 | fine << 7 | level << 3 | envelope   (5 + 3 + 4 + 3 bits)
  * Knobs 0..3 are plain in both forms, so TE's LFO can modulate them. Knobs 4..7 are read from the per-voice params
- * too: if TE's LFO could target them it would scramble packed values (Hypothesis that it can't; notes/fm-operator.md).
+ * too; TE's LFO can't target them (it targets knobs 1-4 only: device, test image 57), and it only ever modulates that
+ * params copy, never the stored knobs (notes/knob-hook.md).
  */
 #ifndef FM4_H
 #define FM4_H
@@ -74,6 +75,20 @@ struct fm4_patch {
     int32_t time_q16;                       /* log2 of the envelope time scale, Q16, -2 .. +2 octaves */
     int32_t fb;                             /* 0..32767 = 0 .. 1.4 rad */
     int32_t detune;                         /* v0 knob 7, 0..32767 */
+};
+
+/* Per-voice state in a voice_ram slot (fm4.c); the screen (ui_fm4.h) reads env and blocks. */
+#define OWNER_FM4 0x464D3420u               /* "FM4 " */
+struct fm4_voice {
+    uint32_t owner;                         /* OWNER_FM4 */
+    uint32_t ph[FM4_OPS];
+    int32_t env[FM4_OPS];                   /* Q30 */
+    int32_t g[FM4_OPS];                     /* gains at the end of the last block: phase units (modulators) or Q15 */
+    int32_t fbg;                            /* feedback gain at the end of the last block */
+    int32_t s1, s2;                         /* D's last two outputs, Q15 */
+    int32_t dc_x, dc_y;
+    int32_t alg;                            /* algorithm of the last block (+1; 0 = none) */
+    uint32_t blocks;                        /* render calls (the screen: did this voice render since its last frame) */
 };
 
 static inline int fm4_is_packed(const int16_t *k)

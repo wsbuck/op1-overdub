@@ -1,5 +1,5 @@
 /* Host tests for the harm and fm4 edit functions (src/slot/harm_edit.h, fm4_edit.h), the harm table builder
- * (src/engine/harm_build.h) and fm4's knob decoding (src/engine/fm4.h).
+ * (src/engine/harm_build.h), fm4's knob decoding (src/engine/fm4.h) and the hook's delta -> steps (hook_steps.h).
  *   cc -std=gnu99 -O1 -Wall -Wextra -Werror -I src/slot -I src/engine src/slot/test/synth_edit_test.c -lm -o /tmp/se && /tmp/se
  * Prints FAIL lines and a summary; exits non-zero if anything failed. */
 #include <math.h>
@@ -10,6 +10,7 @@
 #include "harm_build.h"
 #include "harm_edit.h"
 #include "fm4_edit.h"
+#include "hook_steps.h"
 
 static int fails, checks;
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d ", __FILE__, __LINE__); printf(__VA_ARGS__); \
@@ -298,8 +299,41 @@ static void test_fm4(void)
     CHECK(p.coarse[3] == 0 && p.ratio[3] == 32768, "D coarse clamps at 0.5");
 }
 
+/* TE's raw delta -> steps, for whatever TE's delta per detent turns out to be */
+static void test_hook_steps(void)
+{
+    static const int32_t per_detent[] = { 1, 3, 64, 256, 512, 4096, 32767 };
+    for (unsigned j = 0; j < sizeof per_detent / sizeof *per_detent; j++) {
+        int32_t d = per_detent[j], dmin = 0;
+        CHECK(hook_steps(&dmin, 0, 4) == 0 && dmin == 0, "delta 0: no step, nothing learnt");
+        CHECK(hook_steps(&dmin, d, 1) == 1 && hook_steps(&dmin, -d, 1) == -1 && dmin == d, "one detent of %d: one step", d);
+        CHECK(hook_steps(&dmin, d, 4) == 1 && hook_steps(&dmin, -d, 4) == -1, "one detent of %d, cap 4: one step", d);
+        if (d <= 8191) {
+            CHECK(hook_steps(&dmin, 2 * d, 4) == 2 && hook_steps(&dmin, -4 * d, 4) == -4 &&
+                  hook_steps(&dmin, 100 * d, 4) == 4, "accelerated deltas of %d: 2, 4, capped 4", d);
+            CHECK(hook_steps(&dmin, 100 * d, 1) == 1, "cap 1: one step however fast (%d)", d);
+        }
+        CHECK(dmin == d, "dmin stays one detent (%d, %d)", d, dmin);
+    }
+    /* a fast first turn: the first delta is its own step, then a slow detent becomes the unit */
+    int32_t dmin = 0;
+    CHECK(hook_steps(&dmin, 40, 4) == 1 && dmin == 40, "first (fast) delta: 1 step");
+    CHECK(hook_steps(&dmin, 5, 4) == 1 && dmin == 5 && hook_steps(&dmin, 40, 4) == 4, "learns the slow detent");
+    dmin = 30000;
+    CHECK(hook_steps(&dmin, 32767, 8) == 1 && hook_steps(&dmin, -32768, 8) == -1, "no overflow near 32768");
+    /* through harm_edit: a 24-step cursor walk of any detent size moves one bar per call */
+    struct harm_ui u;
+    int16_t k[8] = { 0 };
+    harm_ui_reset(&u);
+    dmin = 0;
+    for (int i = 0; i < 5; i++)
+        harm_edit(&u, 0, hook_steps(&dmin, 512, 1), k);
+    CHECK(u.cursor == 5, "cursor: 5 detents of 512 = 5 bars (%d)", u.cursor);
+}
+
 int main(void)
 {
+    test_hook_steps();
     test_harm_pack();
     test_harm_edit();
     test_harm_build();

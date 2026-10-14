@@ -6,10 +6,17 @@
 #include <string.h>
 #include <stdint.h>
 #include "sprobe.h"
+#include "harm_edit.h"
+#include "fm4_edit.h"
 
 typedef void (*entry_t)(void);
 int fx_abi_call(entry_t entry, void *self, void *a1, void *a2, void *a3);
 extern void knob_hook(void), drum_type_eq_load(void), drum_type_eq_save(void);
+
+/* build_slot.py's table: ids 20 sprobe, 21 harm, 22 fm4 (HOOK_KINDS), 23 not hooked */
+const uint8_t hook_kind[47] = { [5] = 1, [6] = 2, [7] = 3 };
+extern struct harm_ui harm_ui;
+extern struct fm4_ui fm4_ui;
 
 /* TE stand-ins */
 int16_t te_knobs[8 * 8];                   /* 0xFF8013C4 */
@@ -24,7 +31,8 @@ void te_knob_apply(int32_t knob, int16_t *delta, int32_t id, int16_t *knobs)    
     last_id = id;
     last_knobs = knobs;
     int32_t v = knobs[knob] + *delta;
-    knobs[knob] = (int16_t)(v < 0 ? 0 : v > 32767 ? 32767 : v);
+    int32_t lo = id == 21 || (id == 22 && knob >= 4) ? -32768 : 0;      /* harm's and fm4's rows (engines.json) */
+    knobs[knob] = (int16_t)(v < lo ? lo : v > 32767 ? 32767 : v);
 }
 struct value { const char *s; uint32_t pad[3]; };   /* TE's 16-byte JSON value, as far as these calls go */
 static int eqs, strs, frees, bad_free;
@@ -101,6 +109,56 @@ int main(void)
     expect(sp_edits(k[6]) == 1, "probe: a K6 without the mark restarts the count");
     uint32_t e = 4095;
     expect(sp_edits(sp_k6(e + 1, 0)) == 0 && sp_k7(sp_k6(0, 0)) < 0, "packing wraps at 4096 edits, K7 always >= 0x8000");
+
+    /* harm (id 21), slot 4, with a delta of 512 per detent: TE gets delta 0 after harm_edit */
+    int16_t *h = te_knobs + 4 * 8;
+    for (int i = 0; i < 8; i++)
+        h[i] = 0;
+    h[0] = harm_k0(0, 0);
+    knobhook_diag.dmin = 0;                /* the probe's turns above taught it 1: start as after a boot */
+    int before = applied;
+    turn(1, 512, 21, 4);
+    expect(applied == before + 1 && last_delta == 0 && last_knob == 1 && last_id == 21 && harm_level(h, 0) == 1,
+           "harm level: one detent = one step, TE called with delta 0");
+    expect(knobhook_diag.delta == 512 && knobhook_diag.dmin == 512 && knobhook_diag.slot == 4,
+           "harm: diag records the raw delta and dmin");
+    turn(0, 2048, 21, 4);
+    turn(0, 2048, 21, 4);
+    expect(harm_ui.cursor == 2, "harm cursor: a fast turn still moves one bar per call");
+    turn(1, 4 * 512, 21, 4);
+    expect(harm_level(h, 2) == 4 && h[0] == harm_k0(0, 0), "harm level: 4 x the slow detent = 4 steps");
+    turn(7, -512, 21, 4);
+    turn(3, 1024, 21, 4);
+    expect(harm_uni(h) == 2 && harm_warp(h) == 0, "harm unison +2, warp clamps at 0");
+    turn(9, 512, 21, 4);
+    expect(last_knob == 9 && last_delta == 512, "harm: an unknown knob index goes to TE untouched");
+
+    /* fm4 (id 22), slot 5: MAIN plain knobs pass to TE with TE's delta */
+    int16_t *f = te_knobs + 5 * 8;
+    int16_t v0[8] = { 11585, 13405, 6000, 0, 1536, 1536, 14848, 6000 };
+    for (int i = 0; i < 8; i++)
+        f[i] = v0[i];
+    turn(0, 512, 22, 5);
+    expect(last_delta == 512 && last_knob == 0 && f[0] == 11585 + 512 && fm4_ui.page == 0, "fm4 MAIN: blue passes to TE");
+    turn(4, 512, 22, 5);
+    expect(last_delta == 0 && fm4_ui.page == 1 && fm4_is_packed(f), "fm4 SHIFT blue: page A, the sound packed, TE delta 0");
+    struct fm4_patch p;
+    fm4_decode(f, &p);
+    int lvl = p.level[0];
+    turn(2, -512, 22, 5);
+    fm4_decode(f, &p);
+    expect(last_delta == 0 && p.level[0] == lvl - 1 && f[2] == 6000, "fm4 page A: white = A's level -1, knob 2 untouched");
+    turn(4, 4096, 22, 5);
+    expect(fm4_ui.page == 2, "fm4 page: one page per call however fast");
+    turn(4, -512, 22, 5);
+    turn(4, -512, 22, 5);
+    expect(fm4_ui.page == 0, "fm4 back to MAIN");
+    turn(1, 300, 22, 5);
+    expect(last_delta == 300 && f[1] == 13405 + 300, "fm4 MAIN green passes (TE's own delta)");
+
+    /* not hooked (id 23) */
+    turn(2, 77, 23, 6);
+    expect(last_id == 23 && last_delta == 77 && last_knob == 2, "id 23 (not hooked): TE's call untouched");
 
     /* drum type compare */
     int r, n;

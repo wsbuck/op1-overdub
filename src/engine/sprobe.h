@@ -40,12 +40,13 @@ struct sp_ram {
 };
 extern struct sp_ram sprobe_ram;
 
-/* Hook -> screen (slot block .data). */
+/* Hook -> screen (slot block .data). Shared by every hooked engine (sprobe, harm, fm4). */
 struct kh_diag {
-    uint32_t calls;                        /* hook calls since boot (encoder turns on sprobe's engine page) */
-    int32_t knob, delta;                   /* the last turn */
-    int16_t w6, w7;                        /* what the hook last wrote into knobs 6, 7 */
+    uint32_t calls;                        /* hook calls since boot (encoder turns on a hooked engine's page) */
+    int32_t knob, delta;                   /* the last turn: knob and TE's raw delta */
+    int16_t w6, w7;                        /* sprobe: what the hook last wrote into knobs 6, 7 */
     int32_t slot;                          /* the slot it wrote */
+    int32_t dmin;                          /* smallest nonzero |delta| since boot (hook_steps.h; 0 none yet) */
 };
 extern struct kh_diag knobhook_diag;
 

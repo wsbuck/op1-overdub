@@ -16,7 +16,8 @@
  *     index and the feedback are scaled down (bisection, 8 steps) until it doesn't: what folds over then lands above
  *     28 kHz, which TE's 2:1 decimation removes. An operator above 0.5 fs (its own sine would alias) fades out from
  *     0.4375 fs.
- * State: TE's 32 B hold only the note-on flag; the rest is in a 4 KB voice_ram slot (OWNER_FM4, as grain/modal).
+ * State: TE's 32 B hold only the note-on flag; the rest is in a 4 KB voice_ram slot (OWNER_FM4, as grain/modal;
+ * struct fm4_voice in fm4.h: the screen reads the envelopes of the voices that rendered since its last frame).
  */
 #include "engine.h"
 #include "dsp.h"
@@ -26,7 +27,6 @@
 
 extern uint8_t voice_ram[];
 
-#define OWNER_FM4 0x464D3420u               /* "FM4 " */
 #define DC_R 2145953825                     /* 1 - 2 pi 10 / 88200, Q31 */
 #define RAD 20861                           /* phase units per radian per Q15 sample value: 2^32 / 2 pi / 32768 */
 #define IMAX (8 * RAD)                      /* level 15 x INDEX 2x: 8 rad */
@@ -37,17 +37,6 @@ extern uint8_t voice_ram[];
 struct state {                              /* TE voice object +4 .. +0x23 */
     uint32_t note_on;                       /* 0x80000000 after TE's note-on */
     uint32_t spare[7];
-};
-
-struct fm4_voice {
-    uint32_t owner;                         /* OWNER_FM4 */
-    uint32_t ph[FM4_OPS];
-    int32_t env[FM4_OPS];                   /* Q30 */
-    int32_t g[FM4_OPS];                     /* gains at the end of the last block: phase units (modulators) or Q15 */
-    int32_t fbg;                            /* feedback gain at the end of the last block */
-    int32_t s1, s2;                         /* D's last two outputs, Q15 */
-    int32_t dc_x, dc_y;
-    int32_t alg;                            /* algorithm of the last block (+1; 0 = none) */
 };
 
 struct blk {
@@ -185,6 +174,7 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     const int alg = p.alg;
     int fresh = s->note_on == 0x80000000u || !v->alg;
     s->note_on = 0;
+    v->blocks++;                                    /* the screen: this voice rendered since its last frame */
 
     /* operator increments, ramped from pitch[0] to pitch[127] (inc x ratio mod 2^32, without a 64-bit multiply) */
     uint32_t i0 = (uint32_t)pitch[0], i1 = (uint32_t)pitch[ENGINE_BLOCK - 1];

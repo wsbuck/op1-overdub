@@ -10,6 +10,10 @@
 #include "sprobe.h"
 #include "amp.h"
 #include "amp_tune.h"
+#include "harm.h"
+#include "wt_import.h"
+#include "harm_edit.h"
+#include "fm4_edit.h"
 #include <math.h>
 
 int16_t host_knobs[8];   /* K0..K3 from the command line; K4..K7 set per preview */
@@ -26,7 +30,14 @@ volatile int32_t te_engine_ids[8];      /* no sampler slot: grain shows the buil
 int32_t *te_ssamp[8];
 volatile int16_t te_knobs[8][8];
 volatile int32_t te_synth_slot;
-const uint8_t ui_kind[16] = { 1, 2, 3, 4, 5, 6, 7 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain, 19 inprobe, 20 sprobe, 21 amp */
+const uint8_t ui_kind[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain,
+                                                               * 19 inprobe, 20 sprobe, 21 amp, 22 harm, 23 fm4 */
+/* harm and fm4 (engines 22, 23): K47="k4,k5,k6,k7" sets knobs 4..7 (the packed ones), DELTA=n the hook's last raw
+ * delta, FM4_PLAY=1 a note sounding on fm4 (voice 0 renders every frame, envelopes full). harm's table is built on the
+ * host as on the device. */
+struct host_harm_s { struct harm_ram h; struct wti_work w; } host_harm;
+struct harm_ui harm_ui = { .last = -1 };
+struct fm4_ui fm4_ui = { .last = -1, .alg_shown = -1 };
 /* Audio-input buffers (inprobe.h): a decaying guitar-like wave in TE IN and RAW (MSB-aligned), filled in main(). */
 volatile int16_t te_audio_in[64];
 volatile uint32_t te_rx_sel = 1;
@@ -282,6 +293,20 @@ int main(int argc, char **argv)
         sprobe_ram.live[4] = 17500;
         sprobe_ram.renders = 90;
     }
+    if (e == 22 || e == 23) {
+        const char *k47 = getenv("K47");
+        for (int i = 0; k47 && i < 4; i++) {
+            host_knobs[4 + i] = (int16_t)atoi(k47);
+            k47 = strchr(k47, ',');
+            k47 = k47 ? k47 + 1 : 0;
+        }
+        if (getenv("DELTA")) {
+            int d = atoi(getenv("DELTA"));
+            knobhook_diag = (struct kh_diag){ 7, 1, d, 0, 0, 0, d < 0 ? -d : d };
+        }
+        if (e == 23 && getenv("PAGE"))
+            fm4_ui.page = atoi(getenv("PAGE"));
+    }
     if (e == 300)
         drum_ui_draw(0, 18);
     else if (e >= 100)
@@ -296,6 +321,19 @@ int main(int argc, char **argv)
             if (i == frames - 1)
                 host_drawing = 1;
             amp_tick();
+            ui_draw(e, 0);
+        }
+    else if (e == 23)
+        for (int i = 0; i < frames; i++) {
+            if (i == frames - 1)
+                host_drawing = 1;
+            if (getenv("FM4_PLAY")) {      /* voice 0 renders, envelopes full */
+                struct fm4_voice *v = (struct fm4_voice *)voice_ram;
+                v->owner = OWNER_FM4;
+                v->blocks += 23;
+                for (int op = 0; op < FM4_OPS; op++)
+                    v->env[op] = 32767 << 15;
+            }
             ui_draw(e, 0);
         }
     else

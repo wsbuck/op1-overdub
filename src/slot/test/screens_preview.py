@@ -7,6 +7,7 @@ Builds screens_main.c natively (stand-ins for ui.c's primitives; harm's table is
 draws each segment at the device's scale like preview.py: SVG 320 x 160 -> 376 x 188 panel (x1.175), x3 for viewing,
 on black, the unseen bottom (y > 142) shaded. Fast (1-px) lines are drawn one panel pixel wide, as on the device.
 Writes one PNG per named setting below and prints the AA / fast line counts (AA lines cost ~20k cycles each on device).
+Then checks harm_tick's rate limit (a table build at most every HARM_BUILD_GAP frames while a knob turns).
 """
 import os
 import subprocess
@@ -57,16 +58,24 @@ SETTINGS = [
     ("harm_stamp", "harm", harm([15, 0, 12, 0, 10, 0, 9, 0, 9, 0, 8, 0, 8, 0, 7, 0, 7, 0, 6, 0, 6, 0, 6, 0]),
      ["cursor=2", "last=6", "stamp=2"]),
     ("harm_badges", "harm", harm(SAW, uni=20), ["cursor=5", "badges=1"]),
+    ("harm_delta", "harm", harm(SAW, tilt=-4), ["cursor=23", "delta=-32768"]),
     ("fm4_v0_alg1", "fm4", [16384, alg(1), 16384, 8000, 2048, 3072, 1024, 0], ["alg_shown=1"]),
     ("fm4_v0_alg5_detune", "fm4", [12000, alg(5), 8000, 0, 1024 + 512, 4096, 2048, 20000], []),
-    ("fm4_alg2_epiano", "fm4", [14000, alg(2), 20000, 3000, op(1), op(1, 0, 13, 2), op(14, 0, 9, 1), op(1, 1, 11, 6)],
+    ("fm4_alg1_low_index_still", "fm4", [4000, alg(1), 16384, 0, op(1), op(2, 0, 12, 5), op(3, 0, 10, 3), op(5, 0, 8, 1)],
      []),
-    ("fm4_alg6", "fm4", [20000, alg(6), 16384, 12000, op(1), op(2, 0, 12, 5), op(3, 0, 10, 3), op(5, 4, 8, 1)],
-     ["alg_shown=1"]),
+    ("fm4_alg1_high_index_playing", "fm4", [32767, alg(1), 16384, 0, op(1), op(2, 0, 15, 5), op(3, 0, 14, 3),
+                                             op(5, 0, 15, 0)], ["play=20"]),
+    ("fm4_alg2_epiano_playing", "fm4", [14000, alg(2), 20000, 3000, op(1), op(1, 0, 13, 2), op(14, 0, 9, 1),
+                                        op(1, 1, 11, 6)], ["play=8"]),
+    ("fm4_alg6_feedback_playing", "fm4", [20000, alg(6), 16384, 32767, op(1), op(2, 0, 12, 5), op(3, 0, 10, 3),
+                                          op(5, 4, 8, 1)], ["play=12"]),
     ("fm4_alg8_page_c", "fm4", [16384, alg(8), 16384, 20000, op(1), op(2), op(4, 5, 11, 7), op(7, 0, 9, 2)],
      ["page=3"]),
-    ("fm4_alg11_organ", "fm4", [0, alg(11), 16384, 0, op(1), op(2, 0, 12), op(4, 0, 10), op(8, 0, 8)], []),
+    ("fm4_alg9_one_drives_three", "fm4", [24000, alg(9), 16384, 8000, op(0), op(2, 0, 13), op(4, 0, 10), op(31, 0, 12, 4)],
+     ["play=15"]),
+    ("fm4_alg11_organ", "fm4", [0, alg(11), 16384, 0, op(1), op(2, 0, 12), op(4, 0, 10), op(8, 0, 8)], ["play=30"]),
     ("fm4_badges", "fm4", [16384, alg(9), 16384, 32767, op(1), op(3), op(5), op(1, 0, 15, 4)], ["badges=1"]),
+    ("fm4_delta", "fm4", [16384, alg(1), 16384, 32767, op(1), op(3), op(5), op(1, 0, 15, 4)], ["page=4", "delta=-512"]),
 ]
 
 
@@ -93,6 +102,9 @@ def main():
         path = os.path.join(out, name + ".png")
         img.save(path)
         print(f"{path}: {res.stderr.strip()}")
+    res = subprocess.run([exe, "ratelimit"], capture_output=True, text=True)   # harm_tick's build rate limit
+    print(res.stdout.strip(), "ok" if res.returncode == 0 else "FAILED")
+    sys.exit(res.returncode)
 
 
 if __name__ == "__main__":

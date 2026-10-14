@@ -51,6 +51,7 @@ struct harm_ui {
     int16_t undo[6];                        /* knobs 2..7 before the first stamp */
     int32_t last;                           /* knob of the last turn that did something, -1 none */
     uint32_t last_frame;                    /* its frame */
+    uint32_t build_frame;                   /* the screen: frame of the last table build (ui_harm.h harm_tick) */
 };
 
 static inline int harm_clamp(int v, int lo, int hi)

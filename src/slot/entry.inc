@@ -133,17 +133,19 @@ _drum_type_eq_save:
     .endm
 
 /* Synth encoder hook (knobhook.c, notes/knob-hook.md): replaces CALL FUN_01a1dfec at 0x01A5063E in TE's engine-page
- * encoder handler (R0 knob, R1 int16 *delta, R2 engine id, [SP + 12] the slot's knobs). Engine \id goes to
- * knobhook_turn(knob, delta, id, knobs) (FX_STEREO_ENTRY moves the 4th argument); every other id jumps to TE's function
- * with all four arguments untouched. */
-    .macro KNOB_HOOK id
+ * encoder handler (R0 knob, R1 int16 *delta, R2 engine id, [SP + 12] the slot's knobs). Engine ids \ids (one or more,
+ * each 15..61) go to knobhook_turn(knob, delta, id, knobs) (FX_STEREO_ENTRY moves the 4th argument); every other id
+ * jumps to TE's function with all four arguments untouched. Only R3 and CC change before that jump (scratch). */
+    .macro KNOB_HOOK ids:vararg
     .text
     .align 4
     .global _knob_hook
 _knob_hook:
+    .irp id, \ids
     R3 = \id;
     CC = R2 == R3;
     IF CC JUMP 1f;
+    .endr
     JUMP.L _te_knob_apply;
 1:  JUMP.L _knob_hook_entry;
     FX_STEREO_ENTRY _knob_hook_entry, _knobhook_turn

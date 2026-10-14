@@ -13,6 +13,8 @@
  * inprobe (a test engine): the input buffer it reads, live, with numbers to report.
  * sprobe (a test engine): the 8 stored knob values, what the encoder hook (knobhook.c) wrote, and the render params.
  * amp: a blackface combo front (drive rumbles and sparks, tone lights the cloth, gate meter, cab speakers, tuner).
+ * harm (ui_harm.h): the 24 drawn harmonic bars and the table it builds; fm4 (ui_fm4.h): operators as a gear train.
+ * Both draw from the 8 stored knobs (never the LFO-modulated live ones) and the encoder hook's edit state (knobhook.c).
  * drum_ui_draw: the drum probe (a test drum engine) on the dbox screen it borrows: what TE handed the engine.
  */
 #include <stdint.h>
@@ -63,7 +65,8 @@ extern uint32_t hold_on;                  /* hold.c */
 extern uint32_t chord_on, chord_learning; /* hold.c: CHORD mode and its learned shape */
 extern int32_t chord_n, chord_iv[];
 extern const uint8_t ui_kind[];           /* screen kind per engine id 15.. (build_slot.py, from engines.json) */
-enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4, KIND_INPROBE = 5, KIND_SPROBE = 6, KIND_AMP = 7 };   /* = UI_KINDS in build_slot.py */
+enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4, KIND_INPROBE = 5, KIND_SPROBE = 6, KIND_AMP = 7,
+       KIND_HARM = 8, KIND_FM4 = 9 };   /* = UI_KINDS in build_slot.py */
 extern const int16_t grain_data[] __attribute__((weak));        /* granular engine: overview[GRAIN_OVERVIEW], then the bank */
 /* Our FX (fx.json; build_slot.py generates fx_kind/fx_count). Weak: an image without one of them still links. */
 extern const uint8_t fx_kind[];           /* screen kind per FX id 8.. */
@@ -920,6 +923,15 @@ void drum_ui_draw(int slot, int id)
             line_fp(r, x + (FP(3) >> 1), FP(50), x + (FP(3) >> 1), FP(50) - h, FP(3), GREEN);
     }
 }
+
+/* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the
+ * encoder hook writes it, the screens read it). Weak: builds without the hook still link (a local state then). ---- */
+#include "ui_harm.h"
+#include "ui_fm4.h"
+extern struct harm_ui harm_ui __attribute__((weak));
+extern struct fm4_ui fm4_ui __attribute__((weak));
+static struct harm_ui harm_ui_local RAM = { .last = -1 };
+static struct fm4_ui fm4_ui_local RAM = { .last = -1, .alg_shown = -1 };
 
 /* ---- knob probe (src/engine/sprobe.c, src/slot/knobhook.c, notes/knob-hook.md): the 8 stored knobs, the hook ---- */
 
@@ -2175,6 +2187,10 @@ void ui_draw(int engine, int slot)
         draw_inprobe(r, k);
     else if (kind == KIND_SPROBE)
         draw_sprobe(r, slot);
+    else if (kind == KIND_HARM)             /* the stored knobs, all 8 (packed; never the live copy) */
+        draw_harm(r, KNOBS(slot), &harm_ui ? &harm_ui : &harm_ui_local);
+    else if (kind == KIND_FM4)
+        draw_fm4(r, KNOBS(slot), &fm4_ui ? &fm4_ui : &fm4_ui_local);
     else if (kind == KIND_AMP)
         draw_amp(r, k);
     if (hold_on)
