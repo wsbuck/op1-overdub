@@ -687,3 +687,7 @@
 - Fix: attack 64. `add_engine_db.py` now refuses any `--patch` list value outside the stock presets' range for that field.
 - `firmware/images/AMPPROBE2.OP1` sha256 86ee1c9e40b502ac24734371a9f41aa205cb554e0f77223faadbb4d6485eca00 (grain + inprobe; otherwise as 55). Test steps as 55.
 - Result: _pending user flash_.
+- AMPPROBE2 on device: boots past the inprobe preset, then stops with `Invalid drum patch 20760319_2255: error 1` (unknown engine name). That is the drum sound the user saved during DRUMPROBE (56): the save did write it, it just wasn't listed. TE validates saved drum sounds at boot, so every image without `dprobe` stops on it.
+- 55c: `firmware/images/AMPPROBE3.OP1` = grain + inprobe + dprobe, built from commit 5f0dde5 in a clean export (the working tree held the save probe's unfinished edits). sha256 142eedeb8b5896aed72f05c3ac9764915b726683de92be679dfb315dfae46d1d. dprobe is drum id 17 here (18 in 56); sounds store the name, not the id.
+- Lesson: before leaving an image with a drum engine, the saved drum sounds naming it must be deleted, and DRUMPROBE didn't list them. Until the save fix lands, every test image should include `dprobe`.
+- Result: _pending user flash_.
