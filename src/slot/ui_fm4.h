@@ -1,27 +1,29 @@
-/* fm4 screen (notes/fm-operator.md "Screen"; gear design 2026-10-14, SVG version), for inclusion into src/slot/ui.c
+/* fm4 screen (notes/fm-operator.md "Screen"; gear design, SVG version 2, 2026-10-14), for inclusion into src/slot/ui.c
  * after its drawing primitives (line_fp, line_fast, text, text_fast, sin_t, cos_t, udiv, the colour enum, RAM,
- * voice_ram) and, with UI_HAS_SVG, its SVG helpers (svg_open, svg_render, show, set_aff, aff_mul, aff_rot, recol_*).
- * src/slot/test/screens_preview.py renders the line version on the host; src/slot/test/preview.py the SVG one.
+ * voice_ram) and, with UI_HAS_SVG, its SVG helpers (svg_open, svg_render, show, set_matrix, set_aff, aff_mul, aff_rot,
+ * recol_*). src/slot/test/screens_preview.py renders the line version on the host; src/slot/test/preview.py the SVG.
  *
  * draw_fm4(r, k, u): k = the sound's 8 stored knobs, u = the edit state (fm4_edit.h).
- *   Each operator is a gear (design/synth/fm4.svg: teeth, rim, three spokes, hub), the algorithm is the gear train,
- *   fitted and centred on the screen below the readouts and the HOLD/CHORD badges. Carriers sit on the bottom row;
- *   each modulator meshes with the gear it modulates (one that modulates several meshes with the nearest and drives
- *   the others through a blue belt).
- *   size: the ratio (log scale, 0.5 small .. 48 large); speed: the ratio too (capped at 4x so the teeth don't strobe),
- *     times the operator's envelope, read from the voices that rendered since the last frame (fm4.c blocks); with no
- *     note sounding the gears stand still. Meshing gears turn opposite ways.
- *   blue (INDEX) x a modulator's level = tooth bite: barely touching .. meshed deep, the modulator gear dark blue ..
- *     blue, and the driven gear jitters as it turns (its angle + bite x sin of the modulator's angle: phase modulation).
- *   carriers: level = brightness (grey .. white).
+ *   Every operator is a gear and the algorithm is the gear train (design/synth/fm4.svg). All gears share one tooth pitch,
+ *   so a size is a tooth count (fu_teeth, from the ratio) and any two mesh truly: a modulator sits at its driver's pitch
+ *   radius plus its own (minus nothing at full bite, plus 0.8 of the tooth depth at none: the teeth barely touch), on
+ *   the layout's side of it, swung around the driver until it clears the other gears, and its angle is locked to the
+ *   driver's (a tooth of one in a gap of the other): the train turns like a real one, modulators driven by carriers.
+ *   Carriers (the operators you hear) spin by their own envelope x ratio (capped at 4x), read from the voices that
+ *   rendered since the last frame (fm4.c blocks): still in silence. They stand on legs on a floor and each drives a
+ *   "sound maker" below it (the style's: a speaker cone that pumps, a music-box tine that is plucked, a bearing block
+ *   that glows) with its level x envelope; their face lights with it. Modulators are open spoked gears.
+ *   blue (INDEX) x a modulator's level x its envelope (its level x INDEX when still) = tooth bite (how deep the mesh)
+ *     and the modulator's colour (dark blue .. blue). Carriers: level = brightness (grey .. white).
  *   green: ALGORITHM rearranges the train; ALG n shows for ~1.5 s after a change, top left.
- *   white: TIME (the envelopes run faster or slower); TIME xN shows for ~1.5 s after a change.
+ *   white: TIME (envelopes faster or slower); TIME xN shows for ~1.5 s after a change.
  *   orange: FEEDBACK: a spring-loaded pawl on D's teeth, bigger with feedback, chattering while a note sounds.
+ *   A note starting gives the train a small bounce on its legs.
  *   operator pages (hook): the selected gear white with an outer ring and knob-coloured marks under it (blue ratio,
  *     green fine, white level, orange envelope), its values top left (C 4.41 / LVL 11 SWELL).
- *   labels: letter and ratio beside each modulator (outside the train), under each carrier.
- *   v0 (plain knobs): DETUNE n C in orange for ~1.5 s after a change; ratio labels of B, C, D in their SHIFT knob's
- *     colour.
+ *   labels: letter and ratio beside each gear, placed where they hit no gear or other label.
+ *   The train is fitted into the screen below the readouts and the HOLD/CHORD badges at one fixed scale (smaller only
+ *   when it doesn't fit), so sizes compare across algorithms.
  * Without the SVG (file missing, or the host harness) the gears are drawn as 1-px polylines at the same places.
  */
 #ifndef UI_FM4_H
@@ -31,23 +33,28 @@
 #include "modal_state.h"
 #include "ui_hookdiag.h"
 
-#define FU_COL 26                           /* layout half-column pitch (base units) */
-#define FU_ROW 16                           /* layout row pitch (direction only: flat enough that siblings clear) */
-#define FU_X0 36                            /* the train's box on screen (labels fit beside it) */
-#define FU_X1 284
-#define FU_Y0 41                            /* below the readouts and the HOLD/CHORD badges */
-#define FU_Y1 137                           /* the safe area's bottom (labels beside the gears) */
-#define FU_KMAX 2560                        /* largest fit scale, Q10 (2.5) */
+#define FU_COL 26                           /* layout half-column pitch (direction only) */
+#define FU_ROW 16                           /* layout row pitch (direction only) */
+#define FU_X0 30                            /* the train's box on screen */
+#define FU_X1 290
+#define FU_Y0 42                            /* below the readouts and the HOLD/CHORD badges (y <= 39) */
+#define FU_Y1 139
+#define FU_KFIX 1434                        /* the scale, Q10 (1.4), unless the train doesn't fit */
 #define FU_SHOW 45
-#define FU_TOOTH 4                          /* tooth height, base units */
-#define FU_TIP 20                           /* tip radius of the gears in fm4.svg */
+#define FU_HDEPTH 1741                      /* half the tooth depth, Q10 units (gen_fm4.py DEPTH / 2) */
+#define FU_LEG 40                           /* the legs' drawn height (gen_fm4.py LEG) */
+#define FU_FOOT 17                          /* the sound maker's height under the floor, units */
+#define FU_SIZES 5
 #ifndef FM4_VOICES
 #define FM4_VOICES (voice_ram)              /* engines' per-voice RAM: fm4.c's struct fm4_voice per TE voice 0..5 */
 #endif
 
-/* (half column, row) of A, B, C, D per algorithm: the direction a modulator sits from what it drives */
+static const uint8_t fu_teeth[FU_SIZES] = { 8, 11, 14, 18, 23 };          /* = gen_fm4.py SIZES */
+static const int32_t fu_rp[FU_SIZES] = { 7822, 10756, 13689, 17600, 22489 };   /* pitch radii: teeth x 6 / 2 pi, Q10 */
+
+/* (half column, row) of A, B, C, D per algorithm: the side a modulator sits on from what it drives */
 static const uint8_t fu_layout[FM4_ALGS][FM4_OPS][2] = {
-    { { 0, 0 }, { 1, 1 }, { 0, 2 }, { 1, 3 } },    /* the stack zigzags: less tall, bigger gears */
+    { { 0, 0 }, { 1, 1 }, { 0, 2 }, { 1, 3 } },    /* the stack zigzags */
     { { 1, 0 }, { 1, 1 }, { 0, 2 }, { 2, 2 } },
     { { 1, 0 }, { 0, 1 }, { 0, 2 }, { 2, 1 } },
     { { 1, 0 }, { 0, 1 }, { 2, 1 }, { 2, 2 } },
@@ -59,13 +66,14 @@ static const uint8_t fu_layout[FM4_ALGS][FM4_OPS][2] = {
     { { 0, 0 }, { 2, 0 }, { 4, 0 }, { 4, 1 } },
     { { 0, 0 }, { 2, 0 }, { 4, 0 }, { 6, 0 } },
 };
-static const uint8_t fu_width[FM4_ALGS] = { 1, 2, 2, 2, 2, 4, 3, 2, 4, 4, 6 };   /* widest half column */
 
 static int16_t fu_prev[8] RAM = { 0 };      /* knobs at the last frame (what changed) */
 static int32_t fu_detune_frame RAM = -1000;
 static int32_t fu_time_frame RAM = -1000;
 static uint32_t fu_ang[FM4_OPS] RAM = { 0 };     /* gear angles, 2^32 = one turn */
 static uint32_t fu_blocks[6] RAM = { 0 };   /* fm4_voice.blocks of TE voices 0..5 at the last frame */
+static int32_t fu_bounce RAM = 0;           /* note-start bounce, Q15, decaying */
+static int32_t fu_was_playing RAM = 0;
 
 static char *fu_str(char *p, const char *s)
 {
@@ -99,35 +107,54 @@ static uint32_t fu_isqrt(uint32_t n)
     return s;
 }
 
-/* gear radius (units, Q10) from the ratio (Q16): 10 at 0.5 .. 22 at 48, log scale */
-static fp32 fu_radius(uint32_t ratio)
+/* size index from the ratio (Q16): 8 teeth at 0.5 .. 23 at 16 and above (quarter octaves) */
+static int fu_size(uint32_t ratio)
 {
-    uint32_t v = ratio >> 11, l = 0;        /* ratio x 32: 16 at 0.5, 1536 at 48 */
-    while (v >= 32) {                       /* log2 in quarter octaves */
+    uint32_t v = ratio >> 11, l = 0;        /* ratio x 32 */
+    while (v >= 32) {
         v >>= 1;
         l += 4;
     }
-    l += v >= 27 ? 3 : v >= 23 ? 2 : v >= 19 ? 1 : 0;      /* 0 at ratio <= 0.5, 4 at 1 .. 26 at 48 */
-    return FP(10) + (fp32)(l * 473);        /* 12 units over 26 quarter octaves */
+    l += v >= 27 ? 3 : v >= 23 ? 2 : v >= 19 ? 1 : 0;
+    return l < 3 ? 0 : l < 7 ? 1 : l < 11 ? 2 : l < 17 ? 3 : 4;
 }
 
-/* A gear: n teeth around centre (x, y), outer radius ro, turned by a */
-static void fu_gear(void *r, fp32 x, fp32 y, fp32 ro, uint32_t a, int n, int colour)
+/* direction of (dx, dy) as a turn (1/64 resolution: the layout's directions; y down) */
+static uint32_t fu_dir(int32_t dx, int32_t dy)
 {
-    fp32 ri = ro - FP(FU_TOOTH);
-    uint32_t q = udiv(0x40000000u, (uint32_t)n);      /* a quarter tooth */
-    fp32 px = 0, py = 0, fx = 0, fy = 0;
-    for (int i = 0; i < 4 * n; i++, a += q) {
-        fp32 rr = (i & 3) < 2 ? ro : ri;
-        fp32 qx = x + (((rr >> 5) * cos_t(a)) >> 10), qy = y - (((rr >> 5) * sin_t(a)) >> 10);
-        if (i)
-            line_fast(r, px, py, qx, qy, colour);
-        else {
-            fx = qx;
-            fy = qy;
+    uint32_t best = 0;
+    int32_t bd = -0x7FFFFFFF;
+    for (uint32_t i = 0; i < 64; i++) {
+        uint32_t t = i << 26;
+        int32_t d = (dx * (cos_t(t) >> 5) + dy * (sin_t(t) >> 5)) >> 4;
+        if (d > bd) {
+            bd = d;
+            best = t;
         }
-        px = qx;
-        py = qy;
+    }
+    return best;
+}
+
+/* A gear as a 1-px polyline: n teeth, tooth 0 centred at angle a (as the SVG's), pitch radius rp */
+static void fu_gear(void *r, fp32 x, fp32 y, fp32 rp, uint32_t a, int n, int colour)
+{
+    fp32 ro = rp + FU_HDEPTH, ri = rp - FU_HDEPTH;
+    uint32_t st = udiv(0xFFFFFFFFu, (uint32_t)n), o1 = (st >> 6) * 23, o2 = (st >> 6) * 11;
+    fp32 px = 0, py = 0, fx = 0, fy = 0;
+    for (int i = 0; i < n; i++, a += st) {
+        const uint32_t ang[4] = { a - o1, a - o2, a + o2, a + o1 };
+        for (int j = 0; j < 4; j++) {
+            fp32 rr = j == 0 || j == 3 ? ri : ro;
+            fp32 qx = x + (((rr >> 5) * cos_t(ang[j])) >> 10), qy = y + (((rr >> 5) * sin_t(ang[j])) >> 10);
+            if (i || j)
+                line_fast(r, px, py, qx, qy, colour);
+            else {
+                fx = qx;
+                fy = qy;
+            }
+            px = qx;
+            py = qy;
+        }
     }
     line_fast(r, px, py, fx, fy, colour);
 }
@@ -136,37 +163,86 @@ static void fu_gear(void *r, fp32 x, fp32 y, fp32 ro, uint32_t a, int n, int col
 /* ---- the SVG document (design/synth/fm4.svg): found once, cached ---- */
 static struct svgdoc fu_doc RAM = { 0, 0 };
 static int32_t fu_found RAM = 0;
-static void *fu_g[FM4_OPS] RAM = { 0 }, *fu_sel[FM4_OPS] RAM = { 0 }, *fu_belt[2] RAM = { 0 }, *fu_pawl RAM = 0;
-static struct recol fu_body[FM4_OPS] RAM = { { 0, { 0 } } }, fu_hub[FM4_OPS] RAM = { { 0, { 0 } } };
-static struct recol fu_beltc[2] RAM = { { 0, { 0 } } }, fu_pawlc[3] RAM = { { 0, { 0 } } };
+static void *fu_g[FM4_OPS] RAM = { 0 }, *fu_v[FM4_OPS][FU_SIZES] RAM = { { 0 } };
+static void *fu_vm[FM4_OPS][FU_SIZES] RAM = { { 0 } }, *fu_vc[FM4_OPS][FU_SIZES] RAM = { { 0 } };
+static void *fu_vsel[FM4_OPS][FU_SIZES] RAM = { { 0 } };
+static void *fu_leg[FM4_OPS] RAM = { 0 }, *fu_foot[FM4_OPS] RAM = { 0 }, *fu_cone[FM4_OPS] RAM = { 0 };
+static void *fu_tine[FM4_OPS] RAM = { 0 }, *fu_floor RAM = 0, *fu_belt[2] RAM = { 0 }, *fu_pawl RAM = 0;
+static struct recol fu_body[FM4_OPS][FU_SIZES] RAM = { { { 0, { 0 } } } }, fu_hub[FM4_OPS][FU_SIZES] RAM = { { { 0, { 0 } } } };
+static struct recol fu_face[FM4_OPS][FU_SIZES] RAM = { { { 0, { 0 } } } }, fu_wave[FM4_OPS] RAM = { { 0, { 0 } } };
+static struct recol fu_tinec[FM4_OPS] RAM = { { 0, { 0 } } }, fu_beltc[2] RAM = { { 0, { 0 } } }, fu_pawlc[3] RAM = { { 0, { 0 } } };
+
+static void fu_id(char *b, char g, int op, int j, const char *tail)       /* "ga3body", "sbleg" */
+{
+    *b++ = g;
+    *b++ = (char)('a' + op);
+    if (j >= 0)
+        *b++ = (char)('0' + j);
+    fu_str(b, tail);
+}
 
 static int fu_svg(void)
 {
     if (!svg_open(&fu_doc, "/yaffs2/content/display/fm4.svg", "fm4.svg"))
         return 0;
     if (!fu_found) {
-        static const char *const g[FM4_OPS] = { "ga", "gb", "gc", "gd" };
-        static const char *const body[FM4_OPS] = { "gabody", "gbbody", "gcbody", "gdbody" };
-        static const char *const hub[FM4_OPS] = { "gahub", "gbhub", "gchub", "gdhub" };
-        static const char *const sel[FM4_OPS] = { "gasel", "gbsel", "gcsel", "gdsel" };
-        static const char *const pawl[3] = { "arm", "pivot", "spring" };
         void *d = fu_doc.doc;
-        for (int i = 0; i < FM4_OPS; i++) {
-            fu_g[i] = te_node_find(d, g[i], 0);
-            fu_sel[i] = te_node_find(d, sel[i], 0);
-            recol_init(&fu_body[i], d, body[i], 1);
-            recol_init(&fu_hub[i], d, hub[i], 1);
+        char id[16];
+        for (int op = 0; op < FM4_OPS; op++) {
+            fu_id(id, 'g', op, -1, "");
+            fu_g[op] = te_node_find(d, id, 0);
+            for (int j = 0; j < FU_SIZES; j++) {
+                fu_id(id, 'g', op, j, "");
+                fu_v[op][j] = te_node_find(d, id, 0);
+                fu_id(id, 'g', op, j, "m");
+                fu_vm[op][j] = te_node_find(d, id, 0);
+                fu_id(id, 'g', op, j, "c");
+                fu_vc[op][j] = te_node_find(d, id, 0);
+                fu_id(id, 'g', op, j, "sel");
+                fu_vsel[op][j] = te_node_find(d, id, 0);
+                fu_id(id, 'g', op, j, "body");
+                recol_init(&fu_body[op][j], d, id, 1);
+                fu_id(id, 'g', op, j, "hub");
+                recol_init(&fu_hub[op][j], d, id, 1);
+                fu_id(id, 'g', op, j, "face");
+                recol_init(&fu_face[op][j], d, id, 0);
+            }
+            fu_id(id, 's', op, -1, "leg");
+            fu_leg[op] = te_node_find(d, id, 0);
+            fu_id(id, 's', op, -1, "foot");
+            fu_foot[op] = te_node_find(d, id, 0);
+            fu_id(id, 's', op, -1, "cone");
+            fu_cone[op] = te_node_find(d, id, 0);
+            fu_id(id, 's', op, -1, "tine");
+            fu_tine[op] = te_node_find(d, id, 0);
+            if (fu_tine[op])
+                recol_init(&fu_tinec[op], d, id, 1);
+            fu_id(id, 's', op, -1, "wave");
+            recol_init(&fu_wave[op], d, id, 1);
         }
+        fu_floor = te_node_find(d, "floor", 0);
         fu_belt[0] = te_node_find(d, "belt1", 0);
         fu_belt[1] = te_node_find(d, "belt2", 0);
         recol_init(&fu_beltc[0], d, "belt1", 1);
         recol_init(&fu_beltc[1], d, "belt2", 1);
         fu_pawl = te_node_find(d, "pawl", 0);
-        for (int i = 0; i < 3; i++)
-            recol_init(&fu_pawlc[i], d, pawl[i], 1);
+        recol_init(&fu_pawlc[0], d, "arm", 1);
+        recol_init(&fu_pawlc[1], d, "pivot", 1);
+        recol_init(&fu_pawlc[2], d, "spring", 1);
         fu_found = 1;
     }
     return 1;
+}
+
+/* 0xRRGGBB a .. b by t (Q15) */
+static uint32_t fu_mix(uint32_t a, uint32_t b, int32_t t)
+{
+    uint32_t o = 0;
+    for (int sh = 0; sh < 24; sh += 8) {
+        int32_t x = (int32_t)((a >> sh) & 255), y = (int32_t)((b >> sh) & 255);
+        o |= (uint32_t)(x + (((y - x) * t) >> 15)) << sh;
+    }
+    return o;
 }
 #endif
 
@@ -174,6 +250,20 @@ static const uint32_t fu_rgb[19] = {        /* the palette entries used here, as
     [DARKBLUE] = 0x383572, [LIGHTBLUE] = 0xBFD8FF, [BLUE] = 0x698EFF, [GREY] = 0x7C7990, [PURPLEGREY] = 0xAEB1DC,
     [17] = 0xE6E7FF, [WHITE] = 0xFFFFFF, [ORANGE] = 0xFF423F, [OFFRED] = 0x4E2832,
 };
+
+/* does the box (x0, y0)-(x1, y1) hit a gear (outer radius ro, a margin m) or leave the screen? */
+static int fu_hits(fp32 x0, fp32 y0, fp32 x1, fp32 y1, const fp32 *cx, const fp32 *cy, const fp32 *ro, int n)
+{
+    if (x0 < FP(4) || x1 > FP(316) || y0 < FP(41) || y1 > FP(140))
+        return 1;
+    for (int i = 0; i < n; i++) {
+        fp32 nx = cx[i] < x0 ? x0 : cx[i] > x1 ? x1 : cx[i], ny = cy[i] < y0 ? y0 : cy[i] > y1 ? y1 : cy[i];
+        int32_t dx = (nx - cx[i]) >> 8, dy = (ny - cy[i]) >> 8, rr = (ro[i] + FP(1)) >> 8;
+        if (dx * dx + dy * dy < rr * rr)
+            return 1;
+    }
+    return 0;
+}
 
 static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
 {
@@ -210,48 +300,56 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
             env[op] = e > env[op] ? (e > 32767 ? 32767 : e) : env[op];
         }
     }
+    if (playing && !fu_was_playing)
+        fu_bounce = 32767;
+    fu_was_playing = playing;
+    fu_bounce = (fu_bounce * 27) >> 5;      /* x 0.84 per frame */
 
-    /* the train in base units (Q10): carriers on a row at y 0, modulators placed from their target, meshing at a
-     * centre distance of both radii minus the bite (level x INDEX, Q15) */
+    /* sizes, bite (Q15: level x INDEX, x the envelope while playing) */
     int32_t ix = p.index * 2 > 32767 ? 32767 : p.index * 2;      /* INDEX 1x (mid knob 0.5x .. ) = full bite */
-    int32_t eff[FM4_OPS];
-    fp32 rad[FM4_OPS], cx[FM4_OPS], cy[FM4_OPS];
-    int depth[FM4_OPS], prim[FM4_OPS], side[FM4_OPS];
+    int32_t bite[FM4_OPS], eff[FM4_OPS];
+    int sz[FM4_OPS];
+    fp32 rp[FM4_OPS], ro[FM4_OPS], cx[FM4_OPS], cy[FM4_OPS];
+    uint32_t th[FM4_OPS];
+    int depth[FM4_OPS], prim[FM4_OPS];
     for (int op = 0; op < FM4_OPS; op++) {
         eff[op] = (fm4_level[p.level[op]] * ix) >> 15;
-        rad[op] = fu_radius(p.ratio[op]);
+        bite[op] = playing ? (eff[op] * env[op]) >> 15 : eff[op];
+        sz[op] = fu_size(p.ratio[op]);
+        rp[op] = fu_rp[sz[op]];
+        ro[op] = rp[op] + FU_HDEPTH;
+        prim[op] = -1;
+        depth[op] = 0;
+        th[op] = 0;
     }
     /* carriers left to right (layout columns increase with the index), packed by size: each column as wide as the
-     * largest gear standing in it, 6 units apart */
-    fp32 carx[FM4_OPS], prevx = 0, prevw = 0;
+     * largest gear standing in it, more where a gear stands between two carriers */
+    fp32 prevx = 0, prevw = 0;
     int ncar = 0, prevc = 0;
     for (int op = 0; op < FM4_OPS; op++) {
         if (!(car >> op & 1))
             continue;
         int c = fu_layout[p.alg][op][0];
-        fp32 w = 0, gap = FP(6);
+        fp32 w = 0, gap = FP(8);
         for (int j = 0; j < FM4_OPS; j++) {
             int cj = fu_layout[p.alg][j][0];
-            if (cj == c && rad[j] > w)
-                w = rad[j];
-            if (ncar && cj > prevc && cj < c && rad[j] + FP(6) > gap)
-                gap = rad[j] + FP(6);       /* a gear standing between the two columns (alg 8's C) */
+            if (cj == c && ro[j] > w)
+                w = ro[j];
+            if (ncar && cj > prevc && cj < c && 2 * ro[j] + FP(4) > gap)
+                gap = 2 * ro[j] + FP(4);
         }
-        carx[op] = ncar++ ? prevx + prevw + w + gap : 0;
-        prevx = carx[op];
+        cx[op] = ncar++ ? prevx + prevw + w + gap : 0;
+        cy[op] = 0;
+        prevx = cx[op];
         prevw = w;
         prevc = c;
     }
+    /* modulators: on the layout's side of their driver, at both pitch radii + 0.8 tooth depth x (1 - bite), swung
+     * around the driver (7.5 degree steps, alternating) until clear of every gear placed so far */
     for (int op = 0; op < FM4_OPS; op++) {
-        prim[op] = -1;
-        depth[op] = 0;
-        side[op] = fu_layout[p.alg][op][0] * 2 < fu_width[p.alg] ? -1 : 1;
-        if (car >> op & 1) {
-            cx[op] = carx[op];
-            cy[op] = 0;
+        if (car >> op & 1)
             continue;
-        }
-        int best = -1, bd = 99;             /* the target nearest in the layout (lower index first) */
+        int best = -1, bd = 99;
         for (int t = 0; t < op; t++)
             if (fm4_mods[p.alg][t] >> op & 1) {
                 int d = fu_layout[p.alg][op][0] - fu_layout[p.alg][t][0];
@@ -261,82 +359,111 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
                     best = t;
                 }
             }
-        if (best < 0) {                     /* not in any algorithm; stay safe */
+        if (best < 0) {
             cx[op] = cy[op] = 0;
             continue;
         }
         prim[op] = best;
         depth[op] = depth[best] + 1;
         int32_t dx = (fu_layout[p.alg][op][0] - fu_layout[p.alg][best][0]) * FU_COL;
-        int32_t dy = (fu_layout[p.alg][best][1] - fu_layout[p.alg][op][1]) * FU_ROW;   /* up = negative y */
-        side[op] = dx < 0 ? -1 : dx > 0 ? 1 : 0;
-        uint32_t len = fu_isqrt((uint32_t)(dx * dx + dy * dy));
-        fp32 dist = rad[best] + rad[op] - ((FP(FU_TOOTH) * eff[op]) >> 15);
-        uint32_t ox = udiv((uint32_t)(dx < 0 ? -dx : dx) * (uint32_t)dist, len);
-        uint32_t oy = udiv((uint32_t)(dy < 0 ? -dy : dy) * (uint32_t)dist, len);
-        cx[op] = cx[best] + (dx < 0 ? -(fp32)ox : (fp32)ox);
-        cy[op] = cy[best] + (dy < 0 ? -(fp32)oy : (fp32)oy);
-    }
-    for (int op = 0; op < FM4_OPS; op++) {  /* straight above its target: the label goes where no sibling is */
-        if (side[op] || prim[op] < 0)
-            continue;
-        int l = 0, rt = 0;
-        for (int j = 0; j < FM4_OPS; j++)
-            if (j != op && prim[j] == prim[op])
-                l |= side[j] < 0, rt |= side[j] > 0;
-        side[op] = l && rt ? 0 : l ? 1 : rt ? -1 : fu_layout[p.alg][op][0] * 2 < fu_width[p.alg] ? -1 : 1;
+        int32_t dy = (fu_layout[p.alg][best][1] - fu_layout[p.alg][op][1]) * FU_ROW;
+        uint32_t t0 = fu_dir(dx, dy);
+        fp32 dist = rp[best] + rp[op] + (((FU_HDEPTH * 13) >> 3) * (32767 - bite[op]) >> 15);
+        int32_t best_gap = -0x7FFFFFFF;
+        for (int s = 0; s < 25; s++) {      /* up to +-90 degrees: the clearest spot, the layout's side first */
+            int32_t step = (s + 1) >> 1;
+            uint32_t t = t0 + (uint32_t)((s & 1) ? step : -step) * 0x05555555u;   /* 7.5 degrees */
+            fp32 x = cx[best] + (((dist >> 5) * cos_t(t)) >> 10), y = cy[best] + (((dist >> 5) * sin_t(t)) >> 10);
+            int32_t gap = 0x7FFFFFFF;       /* the smallest clearance to any other gear, units^2 / 16 */
+            for (int j = 0; j < FM4_OPS; j++) {
+                if (j == op || j == best || (j > op && !(car >> j & 1)) || (j < op && prim[j] < 0 && !(car >> j & 1)))
+                    continue;
+                int32_t ddx = (x - cx[j]) >> 8, ddy = (y - cy[j]) >> 8, rr = (ro[op] + ro[j] + FP(2)) >> 8;
+                int32_t g = ddx * ddx + ddy * ddy - rr * rr;
+                gap = g < gap ? g : gap;
+            }
+            if (y > -(ro[op] >> 1))         /* stay above the carriers' row */
+                gap -= 0x100000;
+            if (gap > best_gap) {
+                best_gap = gap;
+                cx[op] = x;
+                cy[op] = y;
+                th[op] = t;
+            }
+            if (gap >= 0)
+                break;
+        }
     }
 
-    /* fit: scale k (Q10, at most FU_KMAX) and centre the train's bounding box in the screen box */
+    /* fit: one scale (smaller only if needed), centred in the box; the floor under the carriers, feet below it */
+    fp32 floor_y, fx0, fx1;
+    int32_t kk;
     {
         fp32 x0 = FP(9999), x1 = -FP(9999), y0 = FP(9999), y1 = -FP(9999);
+        fx0 = FP(9999), fx1 = -FP(9999), floor_y = -FP(9999);
         for (int op = 0; op < FM4_OPS; op++) {
-            x0 = cx[op] - rad[op] < x0 ? cx[op] - rad[op] : x0;
-            x1 = cx[op] + rad[op] > x1 ? cx[op] + rad[op] : x1;
-            y0 = cy[op] - rad[op] < y0 ? cy[op] - rad[op] : y0;
-            y1 = cy[op] + rad[op] > y1 ? cy[op] + rad[op] : y1;
+            x0 = cx[op] - ro[op] < x0 ? cx[op] - ro[op] : x0;
+            x1 = cx[op] + ro[op] > x1 ? cx[op] + ro[op] : x1;
+            y0 = cy[op] - ro[op] < y0 ? cy[op] - ro[op] : y0;
+            y1 = cy[op] + ro[op] > y1 ? cy[op] + ro[op] : y1;
+            if (car >> op & 1) {
+                floor_y = cy[op] + ro[op] + FP(3) > floor_y ? cy[op] + ro[op] + FP(3) : floor_y;
+                fx0 = cx[op] - FP(12) < fx0 ? cx[op] - FP(12) : fx0;
+                fx1 = cx[op] + FP(12) > fx1 ? cx[op] + FP(12) : fx1;
+            }
         }
-        if (p.fb > 0) {                     /* the pawl and its spring: up to 2.15 / 1.75 radii above / right of D */
-            fp32 py = cy[3] - ((rad[3] * 2202) >> 10), px = cx[3] + ((rad[3] * 1792) >> 10);
+        y1 = floor_y + FP(FU_FOOT);
+        x0 = fx0 < x0 ? fx0 : x0;
+        x1 = fx1 > x1 ? fx1 : x1;
+        if (p.fb > 0) {                     /* the pawl and its spring at 1.2x: up to 2.45 / 2 tip radii above / right of D */
+            fp32 py = cy[3] - ((ro[3] * 2509) >> 10), px = cx[3] + ((ro[3] * 2048) >> 10);
             y0 = py < y0 ? py : y0;
             x1 = px > x1 ? px : x1;
         }
         uint32_t kx = udiv((uint32_t)(FU_X1 - FU_X0) << 20, (uint32_t)(x1 - x0));
         uint32_t ky = udiv((uint32_t)(FU_Y1 - FU_Y0) << 20, (uint32_t)(y1 - y0));
-        int32_t kk = (int32_t)(kx < ky ? kx : ky);
-        kk = kk > FU_KMAX ? FU_KMAX : kk;
+        kk = (int32_t)(kx < ky ? kx : ky);
+        kk = kk > FU_KFIX ? FU_KFIX : kk;
         fp32 mx = (x0 + x1) >> 1, my = (y0 + y1) >> 1;
+        fp32 bounce = (fu_bounce * (cos_t(u->frame * 0x2AAAAAAAu) >> 5)) >> 13;    /* up to ~4 units, ringing */
+        fp32 ox = FP((FU_X0 + FU_X1) / 2), oy = FP((FU_Y0 + FU_Y1) / 2);
         for (int op = 0; op < FM4_OPS; op++) {
-            cx[op] = FP((FU_X0 + FU_X1) / 2) + (((cx[op] - mx) >> 4) * kk >> 6);
-            cy[op] = FP((FU_Y0 + FU_Y1) / 2) + (((cy[op] - my) >> 4) * kk >> 6);
-            rad[op] = (rad[op] >> 4) * kk >> 6;
+            cx[op] = ox + (((cx[op] - mx) >> 4) * kk >> 6);
+            cy[op] = oy + (((cy[op] - my) >> 4) * kk >> 6) + (bounce > 0 ? bounce : 0);
+            rp[op] = (rp[op] >> 4) * kk >> 6;
+            ro[op] = (ro[op] >> 4) * kk >> 6;
+        }
+        floor_y = oy + (((floor_y - my) >> 4) * kk >> 6);
+        fx0 = ox + (((fx0 - mx) >> 4) * kk >> 6);
+        fx1 = ox + (((fx1 - mx) >> 4) * kk >> 6);
+    }
+
+    /* turn: carriers by their own speed (ratio, capped at 4x, x envelope); every modulator locked to its driver: the
+     * driver's tooth phase at the contact direction th, mirrored into a gap of the modulator */
+    for (int op = 0; op < FM4_OPS; op++) {
+        if (car >> op & 1) {
+            uint32_t rq = p.ratio[op] > (4u << 16) ? 4u << 16 : p.ratio[op];
+            fu_ang[op] += rq * (uint32_t)(env[op] >> 5);  /* 1/64 turn per frame at 1:1, full */
+        } else if (prim[op] >= 0) {
+            int t = prim[op];
+            uint32_t ph = (th[op] - fu_ang[t]) * fu_teeth[sz[t]];       /* the driver's tooth phase there */
+            uint32_t n = fu_teeth[sz[op]];
+            fu_ang[op] = th[op] + 0x80000000u - udiv(ph, n) - udiv(0x80000000u, n);
         }
     }
 
-    /* turn: speed ~ ratio (capped at 4x) x envelope; meshing gears turn opposite ways */
-    uint32_t fjit[FM4_OPS] = { 0, 0, 0, 0 };
-    for (int op = 0; op < FM4_OPS; op++) {
-        uint32_t rq = p.ratio[op] > (4u << 16) ? 4u << 16 : p.ratio[op];
-        uint32_t sp = rq * (uint32_t)(env[op] >> 5);              /* 1/64 turn per frame at 1:1, full */
-        fu_ang[op] += depth[op] & 1 ? -sp : sp;
-    }
-    for (int op = 1; op < FM4_OPS; op++)    /* the driven gears jitter: bite x sin(modulator angle) */
-        for (int t = 0; t < op; t++)
-            if (fm4_mods[p.alg][t] >> op & 1) {
-                int32_t a = (eff[op] * env[op]) >> 15;
-                fjit[t] += (uint32_t)(((a * sin_t(fu_ang[op])) >> 15) << 12);    /* up to 1/32 turn */
-            }
-
     /* colours: carriers by level, modulators by bite, the selected page white */
     int col[FM4_OPS];
+    int32_t pulse[FM4_OPS];                 /* carriers: what they send to their sound maker, Q15 */
     for (int op = 0; op < FM4_OPS; op++) {
         int lv = p.level[op];
+        pulse[op] = (car >> op & 1) && playing ? (fm4_level[lv] * env[op]) >> 15 : 0;
         if (page == op + 1)
             col[op] = WHITE;
         else if (car >> op & 1)
             col[op] = !lv ? DARKBLUE : lv < 6 ? GREY : lv < 11 ? PURPLEGREY : lv < 14 ? 17 : WHITE;
         else
-            col[op] = !lv || eff[op] < 2048 ? DARKBLUE : eff[op] < 12000 ? LIGHTBLUE : BLUE;
+            col[op] = !lv || bite[op] < 2048 ? DARKBLUE : bite[op] < 12000 ? LIGHTBLUE : BLUE;
     }
     int mc = p.index < 2048 ? DARKBLUE : p.index < 12000 ? LIGHTBLUE : BLUE;
     fp32 chat = playing && (u->frame & 1) ? (p.fb * 3) >> 5 : 0;   /* pawl chatter, 0 .. 3 units */
@@ -359,18 +486,52 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
                     recol_set(&fu_beltc[nb], fu_rgb[p.level[op] ? mc : DARKBLUE], 256);
                     show(fu_belt[nb++], 1);
                 }
+        /* the floor and the carriers' stands and sound makers */
+        set_matrix(fu_floor, (int32_t)(((fx1 - fx0) * 655) >> 16), 0, 0, 1024, fx0, floor_y);
         for (int op = 0; op < FM4_OPS; op++) {
-            int32_t s = (rad[op] * 3277) >> 16;            /* radius / FU_TIP, Q10 */
-            uint32_t a = fu_ang[op] + fjit[op];
-            int32_t c = ((cos_t(a) >> 5) * s) >> 10, sn = ((sin_t(a) >> 5) * s) >> 10;
-            set_matrix(fu_g[op], c, sn, -sn, c, cx[op], cy[op]);
-            recol_set(&fu_body[op], fu_rgb[col[op]], 256);
-            recol_set(&fu_hub[op], fu_rgb[col[op]], 256);
-            show(fu_sel[op], page == op + 1);
+            int c = car >> op & 1;
+            show(fu_leg[op], c);
+            show(fu_foot[op], c);
+            if (!c)
+                continue;
+            int32_t sy = (int32_t)(((floor_y - cy[op]) * 1638) >> 16);         /* / FU_LEG, Q10 */
+            set_matrix(fu_leg[op], kk, 0, 0, sy, cx[op], cy[op]);
+            set_matrix(fu_foot[op], kk, 0, 0, kk, cx[op], floor_y);
+            int32_t wob = (sin_t(u->frame * 0x4CCCCCCCu) + 32768) >> 1;       /* 0 .. 1 at 0.3 of the frame rate */
+            int32_t cs = 1024 + ((pulse[op] * ((wob * 307) >> 15)) >> 15);     /* the cone pumps: up to 1.3x */
+            set_matrix(fu_cone[op], cs, 0, 0, cs, 0, FP(8));
+            if (fu_tine[op]) {              /* plucked when a pin (a tooth) passes */
+                uint32_t tp = fu_ang[op] * fu_teeth[sz[op]];
+                int32_t bend = (pulse[op] * (sin_t(tp) >> 5)) >> 10;            /* Q15 x 32 */
+                struct aff m;
+                aff_rot(&m, (uint32_t)(bend * 3600), 0, FP(3));
+                set_aff(fu_tine[op], &m);
+                recol_set(&fu_tinec[op], fu_mix(0xAEB1DC, 0xFFB3B3, pulse[op]), 256);
+            }
+            recol_set(&fu_wave[op], fu_mix(0x1D2040, 0x698EFF, pulse[op]), 256);
+        }
+        for (int op = 0; op < FM4_OPS; op++) {
+            int c = car >> op & 1;
+            int32_t sc = kk;
+            int32_t a = (int32_t)fu_ang[op], cs = ((cos_t((uint32_t)a) >> 5) * sc) >> 10, sn = ((sin_t((uint32_t)a) >> 5) * sc) >> 10;
+            set_matrix(fu_g[op], cs, sn, -sn, cs, cx[op], cy[op]);
+            for (int j = 0; j < FU_SIZES; j++)
+                show(fu_v[op][j], j == sz[op]);
+            int j = sz[op];
+            show(fu_vm[op][j], !c);
+            show(fu_vc[op][j], c);
+            show(fu_vsel[op][j], page == op + 1);
+            recol_set(&fu_body[op][j], fu_rgb[col[op]], 256);
+            recol_set(&fu_hub[op][j], fu_rgb[col[op]], 256);
+            if (c && fu_face[op][j].p) {    /* the face lights with the sound */
+                uint32_t o = (uint32_t)fu_face[op][j].orig[0] << 16 | (uint32_t)fu_face[op][j].orig[1] << 8 |
+                             fu_face[op][j].orig[2];
+                recol_set(&fu_face[op][j], fu_mix(o, 0x698EFF, pulse[op] >> 1), 256);
+            }
         }
         show(fu_pawl, p.fb > 0);
-        if (p.fb > 0) {                     /* D's translate x scale, then the size about the tooth contact, then chatter */
-            int32_t s = (rad[3] * 3277) >> 16, f = 717 + ((p.fb * 512) >> 15);
+        if (p.fb > 0) {                     /* D's axle x its tip radius / 20, then the size about the tooth contact, then chatter */
+            int32_t s = (ro[3] * 3277) >> 16, f = 717 + ((p.fb * 512) >> 15);
             struct aff g = { s, 0, 0, s, cx[3], cy[3] }, sc = { f, 0, 0, f, 0, 0 }, rot, in, m;
             sc.e = (14479 * (1024 - f)) >> 10;              /* the contact (14.14, -14.14) stays put */
             sc.f = (-14479 * (1024 - f)) >> 10;
@@ -379,7 +540,7 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
             aff_mul(&m, &g, &in);
             set_aff(fu_pawl, &m);
             for (int i = 0; i < 3; i++)
-                recol_set(&fu_pawlc[i], p.fb < 4096 ? 0x4E2832 + (uint32_t)i : 0xFF423F - (uint32_t)i, 256);
+                recol_set(&fu_pawlc[i], p.fb < 4096 ? 0x4E2832 : 0xFF423F, 256);
         }
         svg_render(fu_doc.doc);
     } else
@@ -389,34 +550,41 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
             for (int t = 0; t < op; t++)
                 if (fm4_mods[p.alg][t] >> op & 1 && t != prim[op])
                     line_fp(r, cx[op], cy[op], cx[t], cy[t], FP(1) + ((eff[op] * 3) >> 5), p.level[op] ? mc : DARKBLUE);
+        line_fast(r, fx0, floor_y, fx1, floor_y, GREY);
+        for (int op = 0; op < FM4_OPS; op++)
+            if (car >> op & 1) {
+                line_fast(r, cx[op], cy[op], cx[op] - ((FP(7) * kk) >> 10), floor_y, GREY);
+                line_fast(r, cx[op], cy[op], cx[op] + ((FP(7) * kk) >> 10), floor_y, GREY);
+            }
         if (p.fb > 0) {                                 /* the pawl */
             int pc = p.fb < 4096 ? OFFRED : ORANGE;
             fp32 len = FP(4) + ((p.fb * 9) >> 5);
-            fp32 rimx = cx[3] + ((rad[3] * 23170) >> 15), rimy = cy[3] - ((rad[3] * 23170) >> 15);
+            fp32 rimx = cx[3] + ((ro[3] * 23170) >> 15), rimy = cy[3] - ((ro[3] * 23170) >> 15);
             fp32 ax = rimx + len, ay = rimy - len;
             line_fp(r, ax, ay, rimx + chat, rimy - chat, FP(3) >> 1, pc);
-            fp32 sx = ax, sy = ay;
-            for (int i = 1; i <= 4; i++) {
-                fp32 nx = ax + (i & 1 ? FP(3) : -FP(1)), ny = ay - FP(2) * i;
-                line_fast(r, sx, sy, nx, ny, pc);
-                sx = nx;
-                sy = ny;
-            }
         }
         for (int op = 0; op < FM4_OPS; op++) {
-            int teeth = 3 + (int)(rad[op] >> 11);
-            uint32_t a = fu_ang[op] + fjit[op];
-            fu_gear(r, cx[op], cy[op], rad[op], a, teeth, col[op]);
+            fu_gear(r, cx[op], cy[op], rp[op], fu_ang[op], fu_teeth[sz[op]], col[op]);
             if (page == op + 1)
-                fu_gear(r, cx[op], cy[op], rad[op] - 862, a, teeth, col[op]);
-            fp32 hr = rad[op] - FP(FU_TOOTH + 2);
-            line_fast(r, cx[op], cy[op], cx[op] + (((hr >> 5) * cos_t(a)) >> 10), cy[op] - (((hr >> 5) * sin_t(a)) >> 10),
-                      col[op]);
+                fu_gear(r, cx[op], cy[op], rp[op] - 862, fu_ang[op], fu_teeth[sz[op]], col[op]);
         }
     }
 
-    /* labels: letter and ratio beside each modulator (outside the train), under each carrier; operator page marks */
+    /* labels: letter and ratio, where they hit no gear and no other label (beside, outside first; then the other
+     * side, above, below); operator page marks */
     static const char *const letter[FM4_OPS] = { "A", "B", "C", "D" };
+    fp32 lb[FM4_OPS][4], ocx[2 * FM4_OPS], ocy[2 * FM4_OPS], oro[2 * FM4_OPS];
+    int nob = 0;
+    for (int op = 0; op < FM4_OPS; op++) {  /* obstacles: the gears, and the carriers' legs and feet */
+        ocx[nob] = cx[op];
+        ocy[nob] = cy[op];
+        oro[nob++] = ro[op];
+        if (car >> op & 1) {
+            ocx[nob] = cx[op];
+            ocy[nob] = floor_y + ((FP(6) * kk) >> 10);
+            oro[nob++] = (FP(11) * kk) >> 10;
+        }
+    }
     for (int op = 0; op < FM4_OPS; op++) {
         int sel = page == op + 1;
         char buf[12];
@@ -425,17 +593,35 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
         int lc = sel ? WHITE : GREY;
         if (!p.packed && op)
             lc = op == 1 ? BLUE : op == 2 ? GREEN : WHITE;        /* v0: the SHIFT knob that sets it */
-        fp32 lx, ly;
-        if (car >> op & 1) {                /* carriers: lower left, clear of the modulators above */
-            lx = cx[op] - ((rad[op] * 3) >> 2) - tw;
-            ly = cy[op] + ((rad[op] * 3) >> 2) - FP(4);
-        } else {
-            lx = side[op] < 0 ? cx[op] - rad[op] - FP(3) - tw : side[op] > 0 ? cx[op] + rad[op] + FP(4) : cx[op] - (tw >> 1);
-            ly = side[op] ? cy[op] - FP(4) : cy[op] - rad[op] - FP(11);
+        int out = prim[op] >= 0 ? (cx[op] < cx[prim[op]] ? -1 : 1) : (cx[op] < FP(160) ? -1 : 1);
+        fp32 cand[6][2] = {
+            { out < 0 ? cx[op] - ro[op] - FP(3) - tw : cx[op] + ro[op] + FP(4), cy[op] - FP(4) },
+            { out < 0 ? cx[op] + ro[op] + FP(4) : cx[op] - ro[op] - FP(3) - tw, cy[op] - FP(4) },
+            { cx[op] - (tw >> 1), cy[op] - ro[op] - FP(11) },
+            { out < 0 ? cx[op] - ro[op] - tw : cx[op] + ro[op], cy[op] - ro[op] - FP(6) },
+            { out < 0 ? cx[op] - ro[op] - tw : cx[op] + ro[op], cy[op] + ro[op] - FP(2) },
+            { cx[op] - (tw >> 1), cy[op] + ro[op] + FP(3) },
+        };
+        int pick = 0;
+        for (int c = 0; c < 6; c++) {
+            fp32 x0 = cand[c][0], y0 = cand[c][1], x1 = x0 + tw, y1 = y0 + FP(9);
+            int bad = fu_hits(x0, y0, x1, y1, ocx, ocy, oro, nob);
+            for (int j = 0; j < op && !bad; j++)
+                bad = x0 < lb[j][2] && x1 > lb[j][0] && y0 < lb[j][3] && y1 > lb[j][1];
+            if (!bad) {
+                pick = c;
+                break;
+            }
         }
-        text_fast(r, buf, lx, ly, FP(1), lc);
+        lb[op][0] = cand[pick][0];
+        lb[op][1] = cand[pick][1];
+        lb[op][2] = cand[pick][0] + tw;
+        lb[op][3] = cand[pick][1] + FP(9);
+        text_fast(r, buf, cand[pick][0], cand[pick][1], FP(1), lc);
         if (sel) {                          /* knob-coloured marks: ratio, fine, level, envelope */
-            fp32 y = cy[op] + rad[op] + FP(3), x = cx[op] - FP(10);
+            fp32 y = cy[op] + ro[op] + FP(3), x = cx[op] - FP(10);
+            if (car >> op & 1)
+                y = cy[op] - ro[op] - FP(5);
             line_fp(r, x, y, x + FP(4), y, FP(2), BLUE);
             line_fp(r, x + FP(5), y, x + FP(9), y, FP(2), GREEN);
             line_fp(r, x + FP(10), y, x + FP(14), y, FP(2), WHITE);

@@ -82,7 +82,8 @@ def main():
     SVG_DIR = os.path.join(tmp, "display")
     os.makedirs(SVG_DIR)
     for name, sub in SVG_PATHS.items():
-        with open(os.path.join(DESIGN, sub, name), "rb") as src, open(os.path.join(SVG_DIR, name), "wb") as dst:
+        path = os.environ.get("FM4_SVG") if name == "fm4.svg" and os.environ.get("FM4_SVG") else os.path.join(DESIGN, sub, name)
+        with open(path, "rb") as src, open(os.path.join(SVG_DIR, name), "wb") as dst:   # FM4_SVG: another fm4 design
             dst.write(src.read())
     data = os.path.join(tmp, "wt.bin")
     subprocess.run([sys.executable, os.path.join(ENGINE, "gen_wt_data.py"), data], check=True)

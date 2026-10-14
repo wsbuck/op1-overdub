@@ -150,6 +150,25 @@ int main(void)
     expect(last_delta == 0 && p.level[0] == lvl - 1 && f[2] == 6000, "fm4 page A: white = A's level -1, knob 2 untouched");
     turn(4, 4096, 22, 5);
     expect(fm4_ui.page == 2, "fm4 page: one page per call however fast");
+    /* the device's delta: 1024 per detent (SYNTH3: D1024 M1024); page B */
+    knobhook_diag.dmin = 0;
+    fm4_decode(f, &p);
+    int c0 = p.coarse[1], f0 = p.fine[1], l0 = p.level[1], e0 = p.env[1];
+    turn(0, 1024, 22, 5);
+    turn(1, 1024, 22, 5);
+    turn(2, -1024, 22, 5);
+    turn(3, 1024, 22, 5);
+    fm4_decode(f, &p);
+    expect(knobhook_diag.dmin == 1024 && p.coarse[1] == c0 + 1 && p.fine[1] == f0 + 1 && p.level[1] == l0 - 1 &&
+           p.env[1] == e0 + 1, "1024 per detent: coarse, fine, level, envelope one step each");
+    turn(0, 2048, 22, 5);
+    turn(1, 3072, 22, 5);
+    turn(3, 4096, 22, 5);
+    fm4_decode(f, &p);
+    expect(p.coarse[1] == c0 + 3 && p.fine[1] == f0 + 2 && p.env[1] == e0 + 2,
+           "accelerated 2048..4096: coarse 2 steps, fine and envelope still one");
+    turn(4, -1024, 22, 5);
+    expect(fm4_ui.page == 1, "1024: one page back");
     turn(4, -512, 22, 5);
     turn(4, -512, 22, 5);
     expect(fm4_ui.page == 0, "fm4 back to MAIN");
