@@ -37,12 +37,23 @@ def main():
         "SELECT patch FROM synth_presets WHERE folder=? ORDER BY id", (a.template_folder,))]
     if a.preset and not templates:
         sys.exit(f"no presets in folder {a.template_folder!r} to use as templates")
+    # TE validates every field when a patch loads (patch.cpp:390) and stops at boot on a bad one: attack 0 gave
+    # "Invalid synth patch inprobe:input - error 21" (AMPPROBE). Keep --patch's lists within the stock presets' range.
+    extra = json.loads(a.patch)
+    stock = [json.loads(r[0]) for r in con.execute("SELECT patch FROM synth_presets")]
+    for field, vals in extra.items():
+        if isinstance(vals, list):
+            seen = [p[field] for p in stock if isinstance(p.get(field), list) and len(p[field]) == len(vals)]
+            for j, v in enumerate(vals):
+                lo, hi = min(s[j] for s in seen), max(s[j] for s in seen)
+                if not lo <= v <= hi:
+                    sys.exit(f"--patch {field}[{j}] = {v} is outside the stock presets' {lo}..{hi}")
     for i, spec in enumerate(a.preset):
         name, _, knobs = spec.partition("=")
         k = [int(v) for v in knobs.split(",")]
         if len(k) != 4 or not all(0 <= v <= 0x7FFF for v in k):
             sys.exit(f"{spec}: need 4 knob values 0..32767")
-        patch = dict(templates[i % len(templates)], **json.loads(a.patch))
+        patch = dict(templates[i % len(templates)], **extra)
         patch.update(type=a.type, name=name, knobs=k + [0, 0, 0, 0])
         con.execute("INSERT INTO synth_presets (patch, folder) VALUES (?, ?)",
                     (json.dumps(patch, separators=(",", ":")), a.type))

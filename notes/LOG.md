@@ -681,3 +681,9 @@
 - Result (2026-10-14, device): boots; synth, drum sampler and dbox unchanged. `drum probe` is listed alphabetically in the dbox folder (row 4). All 24 keys play, pitch rising per key, noise on alternate keys. Knobs edit only the pressed key and are audible. Screen photo: ID 18, IN 3, ROW 1 (row 9 copied); dbox ranges K0 -24320..24832 (S 6208), K1-K6 0..32767 (S 10485, K4 4915), K7 S 8192; worst render 29,820 cycles per call (233 per sample, budget 76,800). Rendered values lag the written ones until the key is hit again (note-on reads the params). Velocity over MIDI not tested.
 - **Saving fails**: saving the sound doesn't create a snapshot. Per-key edits survive switching drum slots (they stay in `0x01AAADB4`). Hypothesis: TE's saver writes no `dbox_data` for type `dprobe` (it only writes it for "dbox"), so the saved sound fails dbox validation and is dropped. Next: make the per-key loader/saver treat `dprobe` as `dbox`.
 - Reboot with the probe in a drum slot: boots, the probe is still loaded in the slot.
+
+## 2026-10-14 — Test image 55 result, and 55b: AMPPROBE2.OP1
+- AMPPROBE (55) on device: stops at boot with `..\src\db2\patch.cpp:390 Invalid synth patch inprobe:input - error 21` (photo). Cause (Hypothesis, strong): the probe preset's `--patch` set ADSR attack to 0; all 169 stock synth presets have attack >= 64 (stock ranges: adsr min [64, 64, 0, 64, 2048, 64, 4000, 4000], max [13888, 16320, 32767, 16320, 14336, 12864, 31743, 32767]). TE validates factory presets' fields and asserts.
+- Fix: attack 64. `add_engine_db.py` now refuses any `--patch` list value outside the stock presets' range for that field.
+- `firmware/images/AMPPROBE2.OP1` sha256 86ee1c9e40b502ac24734371a9f41aa205cb554e0f77223faadbb4d6485eca00 (grain + inprobe; otherwise as 55). Test steps as 55.
+- Result: _pending user flash_.
