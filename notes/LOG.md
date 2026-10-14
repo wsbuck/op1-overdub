@@ -778,3 +778,8 @@
 - Report: the `D`/`M` values (slow single detent, fast spin, on both engines) and whether cursor/level/page steps feel right; harm: drawing/sound match, stamp/undo, rebuild responsiveness, clicks; fm4: all 11 algorithms sound and draw distinctly, gear motion (readable? too busy?), operator pages; save/reload/reboot for both; LFO results; any crash, freeze or assert text (photo).
 - **Don't save sounds with `harmonic`, `fm4`, `amp`, `sprobe` or `inprobe` unless the next image includes them.**
 - Result: _pending user flash_.
+
+## 2026-10-14 — Test image 60: SYNTH2.OP1 (SYNTH1 + the redesigned amp screen)
+- Same engines, ids and preset trims as SYNTH1 (59), built from commit 1ec16dd (amp screen: small oblique combo, src/slot/ui_amp.h) in a clean export. te-boot identical to stock.
+- `firmware/images/SYNTH2.OP1` sha256 4c6311548bfc6eda0272bb4b4d6eaf578f5ff2b4f2428dba4f19a21eb88d5440. Supersedes AMP1 (58) and SYNTH1 (59) for testing: amp steps as 58, harm/fm4 steps as 59.
+- Result: _pending user flash_.
