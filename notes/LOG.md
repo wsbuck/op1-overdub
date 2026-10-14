@@ -788,4 +788,5 @@
 - Same engines, ids and preset trims as SYNTH2 (60), built from commit 82f439e in a clean export; adds content/display/fm4.svg (7731 B). te-boot identical to stock.
 - `firmware/images/SYNTH3.OP1` sha256 f047fda195e6e2059f0ce2a032f9dd3b9434408ae995afcdd5fb1567298d72d8. Test steps as 58 (amp) and 59 (harm, fm4); also how the gear screen looks and runs on the device.
 - Known from the preview: in some algorithms gears overlap rather than mesh (1, 6), labels collide, and sizes differ between algorithms.
+- Partial result (2026-10-14, device): boots. fm4 "sounding really good". Encoder delta: **D1024 M1024**, i.e. 1024 per detent on fm4. User wants carriers ("base gear / osc") easier to tell apart, and the screen more TE-inspired, fun and polished. harm, amp: pending.
 - Result: _pending user flash_.
