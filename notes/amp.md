@@ -62,18 +62,20 @@ initialises the rest when `magic` is wrong).
   note-on while not the owner, fades in from 0. Non-owners at gain 0 output silence.
 - **DSP once per block**, by the first voice to render in it (so state runs on through handovers).
 
-## Screen
-A 1960s blackface combo front (user's direction): tolex outline, black control panel with silver piping, sparkle
-grille with the speakers behind it, red pilot jewel. Line primitives only (no SVG asset): ~25 AA lines plus 1-px fast
-lines and dots.
-- **blue** (drive): the panel knob; the cabinet and speakers rumble (offset ∝ drive² × input level) and sparks fly
-  from the speakers (above half drive, by drive × level). Only while a note sounds: clean or idle stays still.
-- **green** (tone): the cloth's sparkle density and colour (sparse grey → dense silver/white) and the speaker glow
-  (warm off-red → dark green → light blue).
-- **white** (gate): the threshold mark on the panel's level meter (−60 … 0 dBFS); the meter is light blue and the lamp
-  white while the gate is open (the engine's state while playing, the level vs threshold otherwise).
-- **orange** (cab): the speakers behind the cloth: none (DI), 1, 2 or 4.
-- **jewel**: halo rings grow with the input level.
+## Screen (src/slot/ui_amp.h)
+A small combo amp in an oblique view, about 56 % of the width (front face, top with a carrying handle, right side, a
+floor shadow), drawn like TE's object screens (the phone and boxer FX, tombola): thin lavender (purplegrey) outlines
+at one weight, grey for inner structure, the knob colours only where a knob acts, a few moving details. Redesigned
+after the user's review of the first, full-width blackface front (too flat, cluttered dot grille). ~50 AA lines at
+most (with sparks and the tuner); the rest are 1-px fast lines.
+- **blue** (drive): the panel's blue knob; the combo and its speakers rumble (offset ∝ drive² × input level) and sparks
+  fly from the speakers above half drive (by drive × level). Only while a note sounds: clean or idle stays still.
+- **green** (tone): the cloth's glints and the speakers' dust caps in green shades, dim and few (dark) → bright and
+  many (bright), and the weave (dark grey → dark blue); one glint twinkles at a time.
+- **white** (gate): the threshold mark on the panel's level meter (−60 … 0 dBFS); the meter is light blue and the
+  lamp white while the gate is open (the engine's state while playing, level vs threshold otherwise).
+- **orange** (cab): the speakers behind the cloth: none ("DI"), 1, 2 or 4.
+- The panel knobs are small cylinders in their colours; the red pilot jewel's rays grow with the input.
 - **tuner** (top left, only while no note sounds): note, octave, cents needle on a ±50 scale, green within 3 cents;
   "--" when there is nothing to read. Every 4th frame, when TE IN has signal (above −50 dBFS), the UI thread polls TE IN
   for 13 consecutive blocks (18.9 ms: a block is new when `te_rx_sel` toggles or its samples change; refused if a block
