@@ -94,31 +94,30 @@ Run: `python3 src/engine/test/harm_check.py`, `python3 src/engine/test/fm4_check
   between coalesce into the next build, the last published table keeps playing (3 frames, crossfade). Host check
   (screens_preview.py `ratelimit`): a knob turned every frame for 61 frames builds 15 tables, the last edit is published
   3 frames after the turning stops.
-- **fm4 screen: a gear train through the SVG route** (user design; version 3 after SYNTH3's feedback: carriers must read
-  as the operators you hear, more TE-like charm, true meshing, no label collisions, consistent sizes). Same route as
-  the FX screens (`_ui_update` runs in the same screen-update context as `_fx_ui_update`): lazy `svg_open`, nodes found
-  once with must = 0, matrices / visibility / recolours per frame, one `svg_render`, our text on top; without the file
-  the same layout as 1-px polylines (screens_preview.py). `design/synth/fm4.svg` from `gen_fm4.py --style speaker`
-  (default; `musicbox` and `flywheel` are the alternatives the user can pick).
-  - **Real gears**: one tooth pitch (6 units) for all, so a size is a tooth count (8, 11, 14, 18, 23 by ratio) and each
-    operator group holds one variant per size. A modulator sits at both pitch radii from its driver (+0.8 tooth depth
-    at zero bite: barely touching .. fully meshed with level x INDEX x envelope), on the layout's side, swung in 7.5
-    degree steps up to 90 degrees to the clearest spot; its angle is locked to the driver's (the driver's tooth phase at
-    the contact, mirrored into a gap), so the train turns like a real one and never overlaps. Carriers spin by ratio x
-    envelope (capped at 4x); everything is still in silence.
-  - **Carriers vs modulators**: carriers have a solid face (lit with level x envelope), stand on legs on a floor and
-    each drives a sound maker under it (speaker: a cabinet whose cone pumps and whose sound waves light up; music box:
-    a comb whose tine is plucked as each tooth passes; flywheel: a heavy disc with a counterweight on a bearing block).
-    Modulators are open, spoked, blue by bite. A note starting bounces the train on its legs.
-  - **Layout**: carriers packed by size on the floor (more room where a gear stands between two); one fixed scale (1.4)
-    for every algorithm unless the train (with the pawl at full size) doesn't fit x 30..290, y 42..139, so sizes
-    compare and the HOLD/CHORD badges stay clear. Labels: six candidate spots per gear, the first that hits no gear,
-    stand, foot or earlier label.
-  - **Cost / memory (unverified on device)**: 207 elements in the file (5 size variants x 4 operators; one variant
-    each visible), 38 KB; the persistent tree is roughly 40-60 KB of TE's heap. Visible per frame: about 30-45 elements
-    plus ~150 overlay segments. Stroke widths: one scale for the whole train, so they are consistent within a screen.
+- **fm4 screen: a gear train through the SVG route** (user design; version 4: SYNTH3's look, carriers grey .. white
+  (white = the gear you hear), modulators blue, with v3's true meshing; the v3 stands/speakers and the music-box and
+  flywheel styles were dropped at the user's choice). Same route as the FX screens (`_ui_update` runs in the same
+  screen-update context as `_fx_ui_update`): lazy `svg_open`, nodes found once with must = 0, matrices / visibility /
+  recolours per frame, one `svg_render`, our text on top; without the file the same layout as 1-px polylines
+  (screens_preview.py). `design/synth/fm4.svg` from `gen_fm4.py`.
+  - **Art** (after TE's tape reels, crank LFO, clock): 1.5-unit outlines, chunky teeth with rounded tips, a black-filled
+    body so overlaps stay clean, a thin dark-blue inner ring, three rounded grey spokes, a ringed hub. Outline and hub
+    are recoloured: carriers grey / purple-grey / light / white by level, modulators dark blue (little bite) or blue
+    (never light blue, which read as white), the selected operator white with its ring.
+  - **Real gears**: one tooth pitch (6 units), so a size is a tooth count, 3 sizes (9, 14, 21 teeth: ratio 0.5 .. 1.5,
+    2 .. 5, 6 and above) to keep the document small (78 elements, 23 KB; v3's 5 sizes were 207 / 38 KB). Trade-off:
+    ratios within a band look the same size; the label gives the exact ratio. A modulator sits at both pitch radii from
+    its driver (+0.8 tooth depth at zero bite: barely touching .. fully meshed with level x INDEX x envelope), on the
+    layout's side, swung in 7.5 degree steps up to 90 degrees to the clearest spot, its angle locked to the driver's
+    (the driver's tooth phase at the contact, mirrored into a gap): the train turns like a real one. Carriers spin by
+    ratio x envelope (capped at 4x); everything is still in silence; a note starting gives the train a small hop.
+  - **Layout**: carriers packed by size on one row; one fixed scale (1.4) for every algorithm unless the train (with
+    the pawl at full size) doesn't fit x 30..290, y 42..139, so sizes compare and the HOLD/CHORD badges stay clear.
+    Labels: six candidate spots per gear, the first that hits no gear or earlier label.
   - **Encoder**: 1024 per detent on the device (SYNTH3: D1024 M1024); hook_steps.h gives exactly one step per detent
     for every control, 2..4 only for accelerated multiples (coarse, level, unison, warp); knobhook_check covers it.
+  - Unverified on device: the render cost (about 25-30 visible elements plus ~150 overlay segments) and whether TE's
+    renderer scales stroke widths with the node matrix (one scale per screen, so widths are consistent within it).
 - Release builds (va, wavetable, grain): same patch sites and DB rows; the image bytes change because ui.c includes the
   two screens (as with sprobe in image 57).
 

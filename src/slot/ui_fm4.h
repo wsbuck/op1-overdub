@@ -10,18 +10,18 @@
  *   the layout's side of it, swung around the driver until it clears the other gears, and its angle is locked to the
  *   driver's (a tooth of one in a gap of the other): the train turns like a real one, modulators driven by carriers.
  *   Carriers (the operators you hear) spin by their own envelope x ratio (capped at 4x), read from the voices that
- *   rendered since the last frame (fm4.c blocks): still in silence. They stand on legs on a floor and each drives a
- *   "sound maker" below it (the style's: a speaker cone that pumps, a music-box tine that is plucked, a bearing block
- *   that glows) with its level x envelope; their face lights with it. Modulators are open spoked gears.
+ *   rendered since the last frame (fm4.c blocks): still in silence. Carriers turn grey .. white with their level
+ *   (white = the gear you hear); modulators are blue.
  *   blue (INDEX) x a modulator's level x its envelope (its level x INDEX when still) = tooth bite (how deep the mesh)
- *     and the modulator's colour (dark blue .. blue). Carriers: level = brightness (grey .. white).
+ *     and the modulator's colour (dark blue .. blue).
  *   green: ALGORITHM rearranges the train; ALG n shows for ~1.5 s after a change, top left.
  *   white: TIME (envelopes faster or slower); TIME xN shows for ~1.5 s after a change.
  *   orange: FEEDBACK: a spring-loaded pawl on D's teeth, bigger with feedback, chattering while a note sounds.
- *   A note starting gives the train a small bounce on its legs.
+ *   A note starting gives the train a small hop.
  *   operator pages (hook): the selected gear white with an outer ring and knob-coloured marks under it (blue ratio,
  *     green fine, white level, orange envelope), its values top left (C 4.41 / LVL 11 SWELL).
  *   labels: letter and ratio beside each gear, placed where they hit no gear or other label.
+ *   Sizes: 3 tooth counts (9, 14, 21) by ratio: 0.5 .. 1.5 small, 2 .. 5 middle, 6 and above large.
  *   The train is fitted into the screen below the readouts and the HOLD/CHORD badges at one fixed scale (smaller only
  *   when it doesn't fit), so sizes compare across algorithms.
  * Without the SVG (file missing, or the host harness) the gears are drawn as 1-px polylines at the same places.
@@ -42,15 +42,13 @@
 #define FU_KFIX 1434                        /* the scale, Q10 (1.4), unless the train doesn't fit */
 #define FU_SHOW 45
 #define FU_HDEPTH 1741                      /* half the tooth depth, Q10 units (gen_fm4.py DEPTH / 2) */
-#define FU_LEG 40                           /* the legs' drawn height (gen_fm4.py LEG) */
-#define FU_FOOT 17                          /* the sound maker's height under the floor, units */
-#define FU_SIZES 5
+#define FU_SIZES 3
 #ifndef FM4_VOICES
 #define FM4_VOICES (voice_ram)              /* engines' per-voice RAM: fm4.c's struct fm4_voice per TE voice 0..5 */
 #endif
 
-static const uint8_t fu_teeth[FU_SIZES] = { 8, 11, 14, 18, 23 };          /* = gen_fm4.py SIZES */
-static const int32_t fu_rp[FU_SIZES] = { 7822, 10756, 13689, 17600, 22489 };   /* pitch radii: teeth x 6 / 2 pi, Q10 */
+static const uint8_t fu_teeth[FU_SIZES] = { 9, 14, 21 };                  /* = gen_fm4.py SIZES */
+static const int32_t fu_rp[FU_SIZES] = { 8800, 13689, 20534 };             /* pitch radii: teeth x 6 / 2 pi, Q10 */
 
 /* (half column, row) of A, B, C, D per algorithm: the side a modulator sits on from what it drives */
 static const uint8_t fu_layout[FM4_ALGS][FM4_OPS][2] = {
@@ -107,7 +105,7 @@ static uint32_t fu_isqrt(uint32_t n)
     return s;
 }
 
-/* size index from the ratio (Q16): 8 teeth at 0.5 .. 23 at 16 and above (quarter octaves) */
+/* size index from the ratio (Q16), in quarter octaves: 0.5 .. 1.5 small, 2 .. 5 middle, 6 and above large */
 static int fu_size(uint32_t ratio)
 {
     uint32_t v = ratio >> 11, l = 0;        /* ratio x 32 */
@@ -116,7 +114,7 @@ static int fu_size(uint32_t ratio)
         l += 4;
     }
     l += v >= 27 ? 3 : v >= 23 ? 2 : v >= 19 ? 1 : 0;
-    return l < 3 ? 0 : l < 7 ? 1 : l < 11 ? 2 : l < 17 ? 3 : 4;
+    return l < 7 ? 0 : l < 14 ? 1 : 2;
 }
 
 /* direction of (dx, dy) as a turn (1/64 resolution: the layout's directions; y down) */
@@ -164,15 +162,11 @@ static void fu_gear(void *r, fp32 x, fp32 y, fp32 rp, uint32_t a, int n, int col
 static struct svgdoc fu_doc RAM = { 0, 0 };
 static int32_t fu_found RAM = 0;
 static void *fu_g[FM4_OPS] RAM = { 0 }, *fu_v[FM4_OPS][FU_SIZES] RAM = { { 0 } };
-static void *fu_vm[FM4_OPS][FU_SIZES] RAM = { { 0 } }, *fu_vc[FM4_OPS][FU_SIZES] RAM = { { 0 } };
-static void *fu_vsel[FM4_OPS][FU_SIZES] RAM = { { 0 } };
-static void *fu_leg[FM4_OPS] RAM = { 0 }, *fu_foot[FM4_OPS] RAM = { 0 }, *fu_cone[FM4_OPS] RAM = { 0 };
-static void *fu_tine[FM4_OPS] RAM = { 0 }, *fu_floor RAM = 0, *fu_belt[2] RAM = { 0 }, *fu_pawl RAM = 0;
+static void *fu_vsel[FM4_OPS][FU_SIZES] RAM = { { 0 } }, *fu_belt[2] RAM = { 0 }, *fu_pawl RAM = 0;
 static struct recol fu_body[FM4_OPS][FU_SIZES] RAM = { { { 0, { 0 } } } }, fu_hub[FM4_OPS][FU_SIZES] RAM = { { { 0, { 0 } } } };
-static struct recol fu_face[FM4_OPS][FU_SIZES] RAM = { { { 0, { 0 } } } }, fu_wave[FM4_OPS] RAM = { { 0, { 0 } } };
-static struct recol fu_tinec[FM4_OPS] RAM = { { 0, { 0 } } }, fu_beltc[2] RAM = { { 0, { 0 } } }, fu_pawlc[3] RAM = { { 0, { 0 } } };
+static struct recol fu_beltc[2] RAM = { { 0, { 0 } } }, fu_pawlc[3] RAM = { { 0, { 0 } } };
 
-static void fu_id(char *b, char g, int op, int j, const char *tail)       /* "ga3body", "sbleg" */
+static void fu_id(char *b, char g, int op, int j, const char *tail)       /* "ga2body" */
 {
     *b++ = g;
     *b++ = (char)('a' + op);
@@ -194,33 +188,14 @@ static int fu_svg(void)
             for (int j = 0; j < FU_SIZES; j++) {
                 fu_id(id, 'g', op, j, "");
                 fu_v[op][j] = te_node_find(d, id, 0);
-                fu_id(id, 'g', op, j, "m");
-                fu_vm[op][j] = te_node_find(d, id, 0);
-                fu_id(id, 'g', op, j, "c");
-                fu_vc[op][j] = te_node_find(d, id, 0);
                 fu_id(id, 'g', op, j, "sel");
                 fu_vsel[op][j] = te_node_find(d, id, 0);
                 fu_id(id, 'g', op, j, "body");
                 recol_init(&fu_body[op][j], d, id, 1);
                 fu_id(id, 'g', op, j, "hub");
                 recol_init(&fu_hub[op][j], d, id, 1);
-                fu_id(id, 'g', op, j, "face");
-                recol_init(&fu_face[op][j], d, id, 0);
             }
-            fu_id(id, 's', op, -1, "leg");
-            fu_leg[op] = te_node_find(d, id, 0);
-            fu_id(id, 's', op, -1, "foot");
-            fu_foot[op] = te_node_find(d, id, 0);
-            fu_id(id, 's', op, -1, "cone");
-            fu_cone[op] = te_node_find(d, id, 0);
-            fu_id(id, 's', op, -1, "tine");
-            fu_tine[op] = te_node_find(d, id, 0);
-            if (fu_tine[op])
-                recol_init(&fu_tinec[op], d, id, 1);
-            fu_id(id, 's', op, -1, "wave");
-            recol_init(&fu_wave[op], d, id, 1);
         }
-        fu_floor = te_node_find(d, "floor", 0);
         fu_belt[0] = te_node_find(d, "belt1", 0);
         fu_belt[1] = te_node_find(d, "belt2", 0);
         recol_init(&fu_beltc[0], d, "belt1", 1);
@@ -234,16 +209,6 @@ static int fu_svg(void)
     return 1;
 }
 
-/* 0xRRGGBB a .. b by t (Q15) */
-static uint32_t fu_mix(uint32_t a, uint32_t b, int32_t t)
-{
-    uint32_t o = 0;
-    for (int sh = 0; sh < 24; sh += 8) {
-        int32_t x = (int32_t)((a >> sh) & 255), y = (int32_t)((b >> sh) & 255);
-        o |= (uint32_t)(x + (((y - x) * t) >> 15)) << sh;
-    }
-    return o;
-}
 #endif
 
 static const uint32_t fu_rgb[19] = {        /* the palette entries used here, as 0xRRGGBB (colors.svg) */
@@ -395,26 +360,17 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
         }
     }
 
-    /* fit: one scale (smaller only if needed), centred in the box; the floor under the carriers, feet below it */
-    fp32 floor_y, fx0, fx1;
+    /* fit: one scale (smaller only if needed), centred in the box */
     int32_t kk;
     {
         fp32 x0 = FP(9999), x1 = -FP(9999), y0 = FP(9999), y1 = -FP(9999);
-        fx0 = FP(9999), fx1 = -FP(9999), floor_y = -FP(9999);
         for (int op = 0; op < FM4_OPS; op++) {
             x0 = cx[op] - ro[op] < x0 ? cx[op] - ro[op] : x0;
             x1 = cx[op] + ro[op] > x1 ? cx[op] + ro[op] : x1;
             y0 = cy[op] - ro[op] < y0 ? cy[op] - ro[op] : y0;
             y1 = cy[op] + ro[op] > y1 ? cy[op] + ro[op] : y1;
-            if (car >> op & 1) {
-                floor_y = cy[op] + ro[op] + FP(3) > floor_y ? cy[op] + ro[op] + FP(3) : floor_y;
-                fx0 = cx[op] - FP(12) < fx0 ? cx[op] - FP(12) : fx0;
-                fx1 = cx[op] + FP(12) > fx1 ? cx[op] + FP(12) : fx1;
-            }
         }
-        y1 = floor_y + FP(FU_FOOT);
-        x0 = fx0 < x0 ? fx0 : x0;
-        x1 = fx1 > x1 ? fx1 : x1;
+        y0 -= FP(2);                        /* room for the note-start hop */
         if (p.fb > 0) {                     /* the pawl and its spring at 1.2x: up to 2.45 / 2 tip radii above / right of D */
             fp32 py = cy[3] - ((ro[3] * 2509) >> 10), px = cx[3] + ((ro[3] * 2048) >> 10);
             y0 = py < y0 ? py : y0;
@@ -425,17 +381,14 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
         kk = (int32_t)(kx < ky ? kx : ky);
         kk = kk > FU_KFIX ? FU_KFIX : kk;
         fp32 mx = (x0 + x1) >> 1, my = (y0 + y1) >> 1;
-        fp32 bounce = (fu_bounce * (cos_t(u->frame * 0x2AAAAAAAu) >> 5)) >> 13;    /* up to ~4 units, ringing */
+        fp32 hop = (fu_bounce * (cos_t(u->frame * 0x2AAAAAAAu) >> 5)) >> 14;       /* up to 2 units, ringing */
         fp32 ox = FP((FU_X0 + FU_X1) / 2), oy = FP((FU_Y0 + FU_Y1) / 2);
         for (int op = 0; op < FM4_OPS; op++) {
             cx[op] = ox + (((cx[op] - mx) >> 4) * kk >> 6);
-            cy[op] = oy + (((cy[op] - my) >> 4) * kk >> 6) + (bounce > 0 ? bounce : 0);
+            cy[op] = oy + (((cy[op] - my) >> 4) * kk >> 6) - (hop > 0 ? hop : 0);
             rp[op] = (rp[op] >> 4) * kk >> 6;
             ro[op] = (ro[op] >> 4) * kk >> 6;
         }
-        floor_y = oy + (((floor_y - my) >> 4) * kk >> 6);
-        fx0 = ox + (((fx0 - mx) >> 4) * kk >> 6);
-        fx1 = ox + (((fx1 - mx) >> 4) * kk >> 6);
     }
 
     /* turn: carriers by their own speed (ratio, capped at 4x, x envelope); every modulator locked to its driver: the
@@ -454,16 +407,14 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
 
     /* colours: carriers by level, modulators by bite, the selected page white */
     int col[FM4_OPS];
-    int32_t pulse[FM4_OPS];                 /* carriers: what they send to their sound maker, Q15 */
     for (int op = 0; op < FM4_OPS; op++) {
         int lv = p.level[op];
-        pulse[op] = (car >> op & 1) && playing ? (fm4_level[lv] * env[op]) >> 15 : 0;
         if (page == op + 1)
             col[op] = WHITE;
         else if (car >> op & 1)
             col[op] = !lv ? DARKBLUE : lv < 6 ? GREY : lv < 11 ? PURPLEGREY : lv < 14 ? 17 : WHITE;
         else
-            col[op] = !lv || bite[op] < 2048 ? DARKBLUE : bite[op] < 12000 ? LIGHTBLUE : BLUE;
+            col[op] = !lv || bite[op] < 4096 ? DARKBLUE : BLUE;        /* never light blue: white is for carriers */
     }
     int mc = p.index < 2048 ? DARKBLUE : p.index < 12000 ? LIGHTBLUE : BLUE;
     fp32 chat = playing && (u->frame & 1) ? (p.fb * 3) >> 5 : 0;   /* pawl chatter, 0 .. 3 units */
@@ -486,48 +437,16 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
                     recol_set(&fu_beltc[nb], fu_rgb[p.level[op] ? mc : DARKBLUE], 256);
                     show(fu_belt[nb++], 1);
                 }
-        /* the floor and the carriers' stands and sound makers */
-        set_matrix(fu_floor, (int32_t)(((fx1 - fx0) * 655) >> 16), 0, 0, 1024, fx0, floor_y);
         for (int op = 0; op < FM4_OPS; op++) {
-            int c = car >> op & 1;
-            show(fu_leg[op], c);
-            show(fu_foot[op], c);
-            if (!c)
-                continue;
-            int32_t sy = (int32_t)(((floor_y - cy[op]) * 1638) >> 16);         /* / FU_LEG, Q10 */
-            set_matrix(fu_leg[op], kk, 0, 0, sy, cx[op], cy[op]);
-            set_matrix(fu_foot[op], kk, 0, 0, kk, cx[op], floor_y);
-            int32_t wob = (sin_t(u->frame * 0x4CCCCCCCu) + 32768) >> 1;       /* 0 .. 1 at 0.3 of the frame rate */
-            int32_t cs = 1024 + ((pulse[op] * ((wob * 307) >> 15)) >> 15);     /* the cone pumps: up to 1.3x */
-            set_matrix(fu_cone[op], cs, 0, 0, cs, 0, FP(8));
-            if (fu_tine[op]) {              /* plucked when a pin (a tooth) passes */
-                uint32_t tp = fu_ang[op] * fu_teeth[sz[op]];
-                int32_t bend = (pulse[op] * (sin_t(tp) >> 5)) >> 10;            /* Q15 x 32 */
-                struct aff m;
-                aff_rot(&m, (uint32_t)(bend * 3600), 0, FP(3));
-                set_aff(fu_tine[op], &m);
-                recol_set(&fu_tinec[op], fu_mix(0xAEB1DC, 0xFFB3B3, pulse[op]), 256);
-            }
-            recol_set(&fu_wave[op], fu_mix(0x1D2040, 0x698EFF, pulse[op]), 256);
-        }
-        for (int op = 0; op < FM4_OPS; op++) {
-            int c = car >> op & 1;
             int32_t sc = kk;
             int32_t a = (int32_t)fu_ang[op], cs = ((cos_t((uint32_t)a) >> 5) * sc) >> 10, sn = ((sin_t((uint32_t)a) >> 5) * sc) >> 10;
             set_matrix(fu_g[op], cs, sn, -sn, cs, cx[op], cy[op]);
             for (int j = 0; j < FU_SIZES; j++)
                 show(fu_v[op][j], j == sz[op]);
             int j = sz[op];
-            show(fu_vm[op][j], !c);
-            show(fu_vc[op][j], c);
             show(fu_vsel[op][j], page == op + 1);
             recol_set(&fu_body[op][j], fu_rgb[col[op]], 256);
             recol_set(&fu_hub[op][j], fu_rgb[col[op]], 256);
-            if (c && fu_face[op][j].p) {    /* the face lights with the sound */
-                uint32_t o = (uint32_t)fu_face[op][j].orig[0] << 16 | (uint32_t)fu_face[op][j].orig[1] << 8 |
-                             fu_face[op][j].orig[2];
-                recol_set(&fu_face[op][j], fu_mix(o, 0x698EFF, pulse[op] >> 1), 256);
-            }
         }
         show(fu_pawl, p.fb > 0);
         if (p.fb > 0) {                     /* D's axle x its tip radius / 20, then the size about the tooth contact, then chatter */
@@ -550,12 +469,6 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
             for (int t = 0; t < op; t++)
                 if (fm4_mods[p.alg][t] >> op & 1 && t != prim[op])
                     line_fp(r, cx[op], cy[op], cx[t], cy[t], FP(1) + ((eff[op] * 3) >> 5), p.level[op] ? mc : DARKBLUE);
-        line_fast(r, fx0, floor_y, fx1, floor_y, GREY);
-        for (int op = 0; op < FM4_OPS; op++)
-            if (car >> op & 1) {
-                line_fast(r, cx[op], cy[op], cx[op] - ((FP(7) * kk) >> 10), floor_y, GREY);
-                line_fast(r, cx[op], cy[op], cx[op] + ((FP(7) * kk) >> 10), floor_y, GREY);
-            }
         if (p.fb > 0) {                                 /* the pawl */
             int pc = p.fb < 4096 ? OFFRED : ORANGE;
             fp32 len = FP(4) + ((p.fb * 9) >> 5);
@@ -573,18 +486,7 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
     /* labels: letter and ratio, where they hit no gear and no other label (beside, outside first; then the other
      * side, above, below); operator page marks */
     static const char *const letter[FM4_OPS] = { "A", "B", "C", "D" };
-    fp32 lb[FM4_OPS][4], ocx[2 * FM4_OPS], ocy[2 * FM4_OPS], oro[2 * FM4_OPS];
-    int nob = 0;
-    for (int op = 0; op < FM4_OPS; op++) {  /* obstacles: the gears, and the carriers' legs and feet */
-        ocx[nob] = cx[op];
-        ocy[nob] = cy[op];
-        oro[nob++] = ro[op];
-        if (car >> op & 1) {
-            ocx[nob] = cx[op];
-            ocy[nob] = floor_y + ((FP(6) * kk) >> 10);
-            oro[nob++] = (FP(11) * kk) >> 10;
-        }
-    }
+    fp32 lb[FM4_OPS][4];
     for (int op = 0; op < FM4_OPS; op++) {
         int sel = page == op + 1;
         char buf[12];
@@ -605,7 +507,7 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
         int pick = 0;
         for (int c = 0; c < 6; c++) {
             fp32 x0 = cand[c][0], y0 = cand[c][1], x1 = x0 + tw, y1 = y0 + FP(9);
-            int bad = fu_hits(x0, y0, x1, y1, ocx, ocy, oro, nob);
+            int bad = fu_hits(x0, y0, x1, y1, cx, cy, ro, FM4_OPS);
             for (int j = 0; j < op && !bad; j++)
                 bad = x0 < lb[j][2] && x1 > lb[j][0] && y0 < lb[j][3] && y1 > lb[j][1];
             if (!bad) {
