@@ -790,3 +790,10 @@
 - Known from the preview: in some algorithms gears overlap rather than mesh (1, 6), labels collide, and sizes differ between algorithms.
 - Partial result (2026-10-14, device): boots. fm4 "sounding really good". Encoder delta: **D1024 M1024**, i.e. 1024 per detent on fm4. User wants carriers ("base gear / osc") easier to tell apart, and the screen more TE-inspired, fun and polished. harm, amp: pending.
 - Result: _pending user flash_.
+
+## 2026-10-14 — Test image 62: SYNTH4.OP1 (SYNTH3 + fm4 gear screen v4)
+- Same engines, ids and preset trims as SYNTH3 (61), built from commit bf3ccfb in a clean export; content/display/fm4.svg is now 22,602 B (78 elements). te-boot identical to stock.
+- fm4 screen (notes/harm-fm4.md): SYNTH3's look kept (carriers grey .. white with level, white = the gear you hear; modulators blue), plus equal-pitch gears that truly mesh (3 sizes: 9, 14, 21 teeth by ratio; driven gears phase-locked to their driver), placement and labels that avoid collisions, one scale across algorithms clear of HOLD/CHORD, a small hop when a note starts, TE-style gear art (rounded chunky teeth, inner ring, rounded spokes, ringed hub). Encoder: one step per detent at 1024 per detent (checked).
+- `firmware/images/SYNTH4.OP1` sha256 7888a351d8d068b0e0aac500b5f595815e9b51075ca9c0064c3180ba7e5d4fa8.
+- Test: as 61; on fm4 check that meshing gears interlock and turn together, white carriers vs blue modulators read at a glance, labels and badges don't collide, sizes feel consistent between algorithms, the screen stays smooth (render cost), and steps are one per detent (page, coarse, fine, level, envelope).
+- Result: _pending user flash_.
