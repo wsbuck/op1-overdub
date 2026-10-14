@@ -49,6 +49,6 @@ Spot-checked items are marked **Verified**; the rest is Confirmed/Hypothesis as 
   that selects it; small labels as 1-px text (`text_fast`).
 - Screens: wavetable waterfall (dark-blue back frames, grey neighbours, blue current frame + handle); grain overview
   (128 bars: blue in the spray window, grey in the current sound or sampler window, dark blue elsewhere), playhead with
-  cap, spray bracket, ruler, grains as white 2-px runs (light blue for octave shimmer); va exact oscillator shape
-  (breakpoints), detune ghost, low-pass response from `ui_tables.h` with cutoff guide and resonance mark.
+  cap, spray bracket, ruler, grains as white 2-px runs (light blue for octave shimmer); va oscillator shape
+  (sampled, one segment per unit), detune ghost, the sub's square over four faint oscillator periods, animated noise.
 - About 50–80 AA lines per screen (was 126–168 plus diagnostics); dense detail uses the fast framebuffer lines.

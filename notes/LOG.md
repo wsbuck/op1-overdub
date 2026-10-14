@@ -638,3 +638,12 @@
 - WTS1 + the wavetable screen shows the bank's name (ANALOG … DIGITAL, SAMPLE, or NO SAMPLE when SAMPLE has nothing built) in green, top left, for 45 screen frames (~1.5 s) whenever green changes the bank, and on first show; hidden otherwise. User: hard to tell the banks apart without names.
 - `firmware/images/WTS2.OP1` sha256 cefcbd915bae3eff09d249d06ecec91e542c7161ffab9cd2bbe17f62f32566ff.
 - Result: works on device; names make the banks easy to tell apart.
+
+## 2026-10-13 — Test image 54: VA2.OP1 (va without the filter; sine, sub, noise)
+- User: take out the filter (the filter FX does that), add sine, sub and noise.
+- va.c: blue wave sine → saw (first third, in phase with the saw's fundamental so the morph doesn't dip) → square → 10% pulse; green detune unchanged; white noise (LCG in state bytes 4..7, never reset; level squared); orange sub, a PolyBLEP square locked an octave below osc 1 (osc 1's phase halved, top bit toggled on each wrap; cleared on note-on). Output scaled by 1 / (1 + (sub + noise) / 2), then the soft knee (a sine stays pure). Filter, va_tables.h and the UI's filter tables removed.
+- va_check: all passed (sine harmonics < -119 dB, sub at 220 Hz for A440 with square H3 -9.9 dB, noise broadband, levels 3000..26000 except the pulse's 1.8 peak in the knee, max 40,677 cycles per call = 318 per sample).
+- Screen: oscillator shape sampled (sine curves), detune ghost; right panel: the sub's square in orange over four faint oscillator periods, animated white noise below; heights follow the levels.
+- Presets: saw lead [10923, 6000, 0, 12000], detune pad [10923, 22000, 2500, 0]. Sounds saved with the old va keep their knob values, which now mean noise and sub.
+- `firmware/images/VA2.OP1` sha256 10083c432e1d5f1cf266aade33479570abde48a675544c3f38590c9633b597b7 (includes WTS2).
+- Result: _pending user flash_.

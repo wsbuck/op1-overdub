@@ -82,7 +82,3 @@ def alias_ratio(x, f0, tol=15):
     for n in range(1, int(FS / 2 / f0) + 1):
         harm |= np.abs(fr - n * f0) <= tol
     return 10 * np.log10(max((m[~harm] ** 2).sum(), 1e-12) / max((m[harm] ** 2).sum(), 1e-12))
-
-
-def knob_for_cutoff(fc):
-    return round(np.log(fc / 20) / np.log(14000 / 20) * 32767)

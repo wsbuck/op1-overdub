@@ -96,13 +96,6 @@ static inline int32_t svf_lp(const struct svf *f, int32_t v0, int32_t *ic1, int3
     return v2;
 }
 
-/* Cutoff knob (0..0x7FFF) -> g (Q28) from a VA_CUTOFF_POINTS table, linear interpolation. */
-static inline int32_t cutoff_g(const int32_t *table, int32_t knob)
-{
-    int32_t idx = knob >> 9, frac = knob & 511;
-    return table[idx] + (((table[idx + 1] - table[idx]) >> 9) * frac);
-}
-
 /* x in Q15 (any range) -> Q15 soft clip: x - 4x^3/27 on |x| <= 1.5, +-1 beyond. */
 /* Linear up to KNEE_T (0.75 FS), then a quadratic knee reaching full scale with zero slope at
  * x = KNEE_T + 2 (32767 - KNEE_T): transparent at normal levels (a pure sine stays pure), soft only near the top. */

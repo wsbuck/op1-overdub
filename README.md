@@ -29,7 +29,7 @@ Every knob drives part of the picture, in its own colour.
 
 | engine | blue | green | white | orange |
 |---|---|---|---|---|
-| **va**: two-oscillator virtual analog, resonant low-pass | wave (saw → square → pulse) | osc 2 detune | cutoff | resonance |
+| **va**: two-oscillator virtual analog with sub and noise (no filter: use the filter FX) | wave (sine → saw → square → pulse) | osc 2 detune | noise | sub (square, octave down) |
 | **wavetable**: 8 banks of morphing wavetables, plus SAMPLE: a bank built from any sampler slot (green fully clockwise) | position | bank | warp | unison |
 | **grain**: granular; plays a built-in bank, or the sample in any sampler slot | position | grain size | density | spray |
 

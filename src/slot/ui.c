@@ -22,7 +22,6 @@
 #include "grain_layout.h"
 #include "grain_state.h"
 #include "grain_source.h"
-#include "ui_tables.h"
 #include "ensemble.h"
 #include "pingpong.h"
 
@@ -450,33 +449,35 @@ static void draw_wt(void *r, const int16_t *k)
     line_fp(r, ex + FP(2), ey, ex + FP(9), ey, FP(2), BLUE);  /* position handle (st.svg) */
 }
 
-/* ---- va: exact oscillator shape, detune ghost, filter response ---- */
+/* ---- va: oscillator shape with its detune ghost; sub and noise ---- */
 
-/* Piecewise-linear va shape s(t) = saw(t) - mix saw(t + pw) over two periods, x0..x0+w, centre cy, amplitude
- * amp per unit (s is in [-2, 2]); `phase` shifts it (Q15 of a period). Breakpoints only: a few segments. */
-static void va_shape(void *r, int32_t mix, uint32_t pw, int32_t phase, fp32 x0, fp32 w, fp32 cy, fp32 amp,
-                     fp32 width, int colour)
+#define VA_THIRD 10923                                        /* as va.c */
+
+/* va.c's oscillator without the PolyBLEP, Q12 (1.0 = 4096): sine → saw → square → pulse */
+static int32_t va_osc(uint32_t ph, int32_t wave)
 {
-    /* one period: ramp 0..1-pw, jump +2 mix at 1-pw, ramp to 1, jump -2 at 1 (saw reset). Values Q15 units. */
-    int32_t p = (int32_t)(pw >> 17);                           /* pw in Q15 of a period */
-    int32_t knee = 32768 - p;
-    /* s at t (Q15), left limit, for t in [0, 1): 2t - 1 - mix (2 (t + p) - 1 - (t >= knee ? 2 : 0)) */
-    #define VA_S(t, after_knee) ((2 * (t) - 32768) - (((mix) >> 1) * (2 * ((t) + p) - 32768 - ((after_knee) ? 65536 : 0)) >> 14))
-    int32_t pts_t[12], pts_v[12], n = 0;
-    for (int per = 0; per < 2; per++) {
-        int32_t base = per * 32768;
-        pts_t[n] = base; pts_v[n++] = VA_S(0, 0);
-        pts_t[n] = base + knee; pts_v[n++] = VA_S(knee, 0);
-        pts_t[n] = base + knee; pts_v[n++] = VA_S(knee, 1);
-        pts_t[n] = base + 32768; pts_v[n++] = VA_S(32768, 1);
+    int32_t sw = (int32_t)(ph >> 19) - 4096;
+    if (wave < VA_THIRD) {
+        int32_t sn = sin_t(ph ^ 0x80000000u) >> 3, a = wave * 3;
+        return sn + ((a * (sw - sn)) >> 15);
     }
-    #undef VA_S
-    fp32 px = 0, py = 0;
-    for (int i = 0; i < n; i++) {
-        int32_t t = pts_t[i] + phase;                          /* shift, clip to the panel */
-        if (t > 65536)
-            t = 65536;
-        fp32 qx = x0 + (((w >> 4) * t) >> 12), qy = cy - (((amp >> 4) * pts_v[i]) >> 11);   /* t: 2 periods = 65536 */
+    if (wave < 2 * VA_THIRD) {
+        int32_t a = (wave - VA_THIRD) * 3;
+        return sw - ((a * ((int32_t)((ph + 0x80000000u) >> 19) - 4096)) >> 15);
+    }
+    uint32_t pw = 0x80000000u - (uint32_t)(wave - 2 * VA_THIRD) * 157309u;
+    return sw - ((int32_t)((ph + pw) >> 19) - 4096);
+}
+
+/* Two periods from note-on phase (0x80000000) + `phase`, x0..x0+w, one segment per unit */
+static void va_shape(void *r, int32_t wave, uint32_t phase, fp32 x0, fp32 w, fp32 cy, fp32 amp, fp32 width,
+                     int colour)
+{
+    const int n = 136;
+    fp32 step = (w * 241) >> 15, px = 0, py = 0;              /* w / 136 without a runtime division */
+    for (int i = 0; i <= n; i++) {
+        uint32_t ph = 0x80000000u + phase + (uint32_t)i * (0xFFFFFFFFu / (n / 2));
+        fp32 qx = x0 + step * i, qy = cy - (((amp >> 4) * va_osc(ph, wave)) >> 8);
         if (i) {
             if (width)
                 line_fp(r, px, py, qx, qy, width, colour);
@@ -488,60 +489,49 @@ static void va_shape(void *r, int32_t mix, uint32_t pw, int32_t phase, fp32 x0, 
     }
 }
 
+static uint32_t va_frame RAM = 0;     /* screen frames, for the noise */
+
 static void draw_va(void *r, const int16_t *k)
 {
     int32_t wave = k[0] < 0 ? 0 : k[0], det = k[1] < 0 ? 0 : k[1];
-    int32_t cut = k[2] < 0 ? 0 : k[2], res = k[3] < 0 ? 0 : k[3];
-    int32_t mix = wave < 16384 ? wave << 1 : 32767;           /* as va.c */
-    uint32_t pw = wave < 16384 ? 0x80000000u : 0x80000000u - (uint32_t)(wave - 16384) * 104858u;
+    int32_t noise = k[2] < 0 ? 0 : k[2], sub = k[3] < 0 ? 0 : k[3];
 
-    /* blue: wave shape, green: detune ghost, white: cutoff curve, orange: resonance peak */
+    /* blue: wave shape, green: detune ghost, white: noise, orange: sub */
 
     /* left panel: oscillator (pd.svg axes), osc 2 as a green ghost offset by the detune */
-    const fp32 ox = FP(10), ow = FP(136), ocy = FP(90), oamp = FP(11);
+    const fp32 ox = FP(10), ow = FP(136), ocy = FP(90), oamp = FP(18);
     line_fast(r, ox, ocy, ox + ow, ocy, DARKBLUE);
     line_fast(r, ox, FP(62), ox, FP(118), DARKBLUE);
     if (det >= 330)
-        va_shape(r, mix, pw, 2621 + ((det * 13107) >> 15), ox, ow, ocy, oamp, 0, GREEN);
-    va_shape(r, mix, pw, 0, ox, ow, ocy, oamp, FP(2), BLUE);
+        va_shape(r, wave, (uint32_t)(2621 + ((det * 13107) >> 15)) << 17, ox, ow, ocy, oamp, 0, GREEN);
+    va_shape(r, wave, 0, ox, ow, ocy, oamp, FP(2), BLUE);
 
-    /* right panel: low-pass response, log frequency (the cutoff knob is exponential, so linear in x) */
-    const fp32 fx0 = FP(166), fw = FP(146), y0db = FP(96);
-    line_fast(r, fx0, y0db, fx0 + fw, y0db, DARKBLUE);
-    int row = 0;
-    while (row + 1 < VA_LP_ROWS && res >= va_q_row_min[row + 1])
-        row++;
-    fp32 fc = fx0 + (((fw >> 5) * cut) >> 10);
-    fp32 px = 0, py = 0;
-    for (int i = 0; i <= 24; i++) {
-        fp32 x = fx0 + (fw / 24) * i;
-        /* (x - fc) / 146 units * 9.45 octaves, in quarter octaves: (x - fc) * 0.2589 (x in Q10: * 265 >> 20) */
-        int32_t q = ((x - fc) * 265) >> 20;
-        int32_t db16;
-        if (q < -8)
-            db16 = 0;
-        else if (q > 8)
-            db16 = -48 * q;                                           /* -12 dB per octave, dB * 16 */
-        else
-            db16 = va_lp_db16[row][q + 8];
-        fp32 y = y0db - ((db16 * (FP(1) * 16 / 10)) >> 4);           /* 1.6 units per dB (db16 = dB * 16) */
-        if (y < FP(44))
-            y = FP(44);
-        if (y > FP(132))
-            y = FP(132);
-        if (i)
-            line_fp(r, px, py, x, y, FP(3) >> 1, WHITE);              /* white knob: cutoff */
-        px = x;
-        py = y;
+    /* right panel: the sub's square (orange) over four of the oscillator's periods (faint), so it reads as an octave
+     * down; noise below. Height = level (as va.c: sub linear, noise squared). */
+    const fp32 rx = FP(166), rw = FP(146), scy = FP(70), ncy = FP(112);
+    line_fast(r, rx, FP(48), rx, FP(132), DARKBLUE);
+    va_shape(r, wave, 0, rx, rw / 2, scy, FP(8), 0, DARKBLUE);
+    va_shape(r, wave, 0, rx + rw / 2, rw / 2, scy, FP(8), 0, DARKBLUE);
+    fp32 sa = ((FP(14) >> 5) * sub) >> 10, sy = scy + sa;         /* starts low, as va.c's sub at note-on */
+    for (int i = 1; i <= 4; i++) {
+        fp32 xa = rx + rw * (i - 1) / 4, xb = rx + rw * i / 4, ny = i & 1 ? scy - sa : scy + sa;
+        line_fp(r, xa, sy, xb, sy, FP(2), ORANGE);
+        if (i < 4)
+            line_fp(r, xb, sy, xb, ny, FP(2), ORANGE);
+        sy = ny;
     }
-    for (fp32 y = FP(48); y < FP(132); y += FP(4))                     /* dashed cutoff guide */
-        vline_fast(r, fc, y, y + FP(2), GREY);
-    int32_t peak16 = 0;
-    for (int i = 0; i < VA_LP_POINTS; i++)
-        if (va_lp_db16[row][i] > peak16)
-            peak16 = va_lp_db16[row][i];
-    fp32 peak_y = y0db - ((peak16 * (FP(1) * 16 / 10)) >> 4) - FP(3);
-    line_fp(r, fc - FP(4), peak_y, fc + FP(4), peak_y, FP(2), ORANGE); /* orange knob: resonance */
+
+    va_frame++;
+    fp32 na = ((FP(14) >> 5) * ((noise * noise) >> 15)) >> 10;
+    fp32 nstep = (rw * 683) >> 16, px = 0, py = 0;                /* rw / 96 */
+    for (int i = 0; i <= 96; i++) {
+        int32_t h = (int32_t)(((va_frame >> 1) * 97 + i + 1) * 2654435761u) >> 16;   /* -32768..32767 */
+        fp32 qx = rx + nstep * i, qy = ncy - (((na >> 5) * h) >> 10);
+        if (i)
+            line_fast(r, px, py, qx, qy, WHITE);
+        px = qx;
+        py = qy;
+    }
 }
 
 /* ---- grain: source overview (dim) with the active region bright, playhead, spray, live grains ---- */
