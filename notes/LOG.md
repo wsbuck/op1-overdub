@@ -723,3 +723,9 @@
 - Report: A: LD/SV/SUM at each step, the saved names and the folders they are listed in, whether edits are audible after reload and reboot, whether `20760319_2255` is listed; B: HOOK/EDITS/K0..K7/PAIR/NOW at steps 2-6, SHIFT independence, the LFO result per knob 4..7; any crash or assert text (photo).
 - **Cleanup before leaving this image** (stock and other images stop at boot on unknown names): replace `drum probe` in every drum slot with a stock kit; delete every saved drum sound of type dprobe (including `20760319_2255` and today's saves); load another engine into every synth slot holding `sprobe`, and delete synth sounds saved with `sprobe`. If a saved probe sound can't be found in the browser, report it before flashing anything else (recovery otherwise: COM at power-on, factory reset).
 - Result: _pending user flash_.
+- **AMPPROBE4 result (2026-10-14, device): boots with all the user's sounds.** Guitar into the line jack:
+  - TE IN (`0xFF800CB4`): the waveform moves whether or not a note is held (the buffer is live without a voice), but the input is heard only while a note sounds. TE doesn't monitor the line input itself here, so there's no doubling. Sound clean; feels instant; recorded to tape through the engine.
+  - Peak about -15 dBFS when strummed hard at minimum gain.
+  - RAW (L+R, shift 0): moves, about the same level as TE IN.
+  - Toggling the mic/input key changes nothing.
+  - Conclusion: an amp engine can read TE IN directly. The open design point is gating: engine output passes the note envelope, so the amp needs a latched note (HOLD) or a way round the envelope.
