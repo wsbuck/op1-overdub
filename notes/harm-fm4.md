@@ -94,15 +94,30 @@ Run: `python3 src/engine/test/harm_check.py`, `python3 src/engine/test/fm4_check
   between coalesce into the next build, the last published table keeps playing (3 frames, crossfade). Host check
   (screens_preview.py `ratelimit`): a knob turned every frame for 61 frames builds 15 tables, the last edit is published
   3 frames after the turning stops.
-- **fm4 screen redesigned as gears** (user design, 2026-10-14; ui_fm4.h): each operator a gear (size and speed from the
-  ratio, log size 10..22 units, speed capped at 4x), the algorithm the gear train (carriers on the bottom row driving the
-  output shaft to the output cycle; modulators meshed with what they modulate, a blue belt to further targets); tooth
-  bite = level x INDEX (barely touching .. deep, the driven gear jittering by bite x sin of the modulator's angle);
-  carriers' level = brightness; envelopes from the voices that rendered since the last frame (fm4.c `blocks` counter in
-  struct fm4_voice, now in fm4.h), so the gears spin up on a note, wind down with each envelope and stand still with no
-  note; feedback a spring-loaded orange pawl on D, chattering while a note sounds; TIME xN (white) and ALG n (green)
-  for ~1.5 s after a change; operator pages: the gear in white with a second rim and knob-coloured marks, values top
-  right. Host preview: 32..51 AA + 230..350 fast segments (boxes design: 48..111 AA).
+- **fm4 screen: gears through the SVG route** (user design, 2026-10-14; second version after the user's feedback on
+  image 59's line drawing: no output panel or shaft, bigger gears, TE-like SVG art). `design/synth/fm4.svg` (our art,
+  `gen_fm4.py`; 30 elements, check_svg.py passes) holds one gear group per operator (12-tooth body filled black so
+  overlaps stay clean, rim, three spokes, hub, axle, a selection ring), two belts and the feedback pawl (arm, pivot,
+  spring, anchor). build.py adds it as `content/display/fm4.svg` whenever fm4 is in the image. ui_fm4.h:
+  - The engine screen runs in the same screen-update context as the FX screens (`_ui_update` replaces iter's page
+    update as `_fx_ui_update` replaces filter's), so the FX screens' route applies unchanged: lazy `svg_open` with an
+    existence check, nodes found once with must = 0, per frame matrices / visibility / recolours, one `svg_render`, our
+    text on top. Without the file it draws the same gears as 1-px polylines (also what screens_preview.py shows).
+  - Layout: carriers packed left to right by size (a column as wide as its largest gear; more room where a gear stands
+    between two carriers), modulators placed from the gear they drive along the algorithm's layout direction at a
+    centre distance of both radii minus the bite; the algorithm 1 stack zigzags. The whole train (and the pawl) is
+    scaled (at most 2.5x) and centred into x 36..284, y 41..137: under the readouts (now top left) and the HOLD/CHORD
+    badges, labels beside it.
+  - Per gear: matrix = translate(centre) x rotate(spin + jitter) x scale(radius / 20); body and hub strokes recoloured
+    (carriers grey .. white by level, modulators dark blue .. blue by level x INDEX, the selected page white, its ring
+    shown). Belts: a 100-unit line mapped onto the centre-to-centre segment with a unit normal. Pawl: D's translate and
+    scale, then 0.7 .. 1.2x about the tooth contact with feedback, then up to 6 degrees of chatter about the pivot on
+    alternate frames while a note sounds; offred below 1/8 feedback, else orange.
+  - Unchanged: envelope-driven spin from the rendering voices, stillness in silence, bite and jitter, `ALG n` /
+    `TIME xN` / operator-page values / v0 `DETUNE` (top left now), the D/M readout bottom right.
+  - Host preview (ui.c + rsvg; preview.py now takes documents from design/fx and design/synth): about 30 SVG elements
+    plus ~150 overlay segments. Unverified on device: the render cost, and whether TE's renderer scales stroke widths
+    with the node matrix (rsvg does; gears span 0.5 .. 2.5x).
 - Release builds (va, wavetable, grain): same patch sites and DB rows; the image bytes change because ui.c includes the
   two screens (as with sprobe in image 57).
 

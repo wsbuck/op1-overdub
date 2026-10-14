@@ -19,8 +19,10 @@ import xml.etree.ElementTree as ET
 
 from PIL import Image, ImageDraw
 
-SVG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "design", "fx")
-SVGS = ("choir.svg", "pingpong.svg", "pedals.svg")
+DESIGN = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "design")
+SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "fm4.svg": "synth"}   # name -> design/ subfolder
+SVGS = tuple(SVG_PATHS)
+SVG_DIR = None                       # main(): a temp folder holding every document (preview_host looks there by name)
 NS = "{http://www.w3.org/2000/svg}"
 RSVG = "/opt/homebrew/bin/rsvg-convert"
 
@@ -76,6 +78,12 @@ def main():
     settings = [tuple(nums[i:i + 5]) for i in range(0, len(nums), 5)] or DEFAULT
     os.makedirs(out, exist_ok=True)
     tmp = tempfile.mkdtemp()
+    global SVG_DIR
+    SVG_DIR = os.path.join(tmp, "display")
+    os.makedirs(SVG_DIR)
+    for name, sub in SVG_PATHS.items():
+        with open(os.path.join(DESIGN, sub, name), "rb") as src, open(os.path.join(SVG_DIR, name), "wb") as dst:
+            dst.write(src.read())
     data = os.path.join(tmp, "wt.bin")
     subprocess.run([sys.executable, os.path.join(ENGINE, "gen_wt_data.py"), data], check=True)
     gdata = os.path.join(tmp, "grain.bin")

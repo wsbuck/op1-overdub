@@ -1,6 +1,7 @@
 # SVG route: our own SVG documents through TE's retained renderer (firmware 246)
 
-Status: **Research, not yet built.** Static analysis 2026-10-10 (objdump + Ghidra; scratch in the session scratchpad `svg/`).
+Status: **in use** for the FX screens (choir, pingpong, pedals) and the fm4 engine screen
+(design/synth/fm4.svg, same route from the engine page update, not yet on device). Original research: Static analysis 2026-10-10 (objdump + Ghidra; scratch in the session scratchpad `svg/`).
 Marks: **Verified** = read at the call site or in the disassembly; **Confirmed** = consistent decompile + TE usage; **Hypothesis**.
 
 ## Verdict

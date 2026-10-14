@@ -924,15 +924,6 @@ void drum_ui_draw(int slot, int id)
     }
 }
 
-/* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the
- * encoder hook writes it, the screens read it). Weak: builds without the hook still link (a local state then). ---- */
-#include "ui_harm.h"
-#include "ui_fm4.h"
-extern struct harm_ui harm_ui __attribute__((weak));
-extern struct fm4_ui fm4_ui __attribute__((weak));
-static struct harm_ui harm_ui_local RAM = { .last = -1 };
-static struct fm4_ui fm4_ui_local RAM = { .last = -1, .alg_shown = -1 };
-
 /* ---- knob probe (src/engine/sprobe.c, src/slot/knobhook.c, notes/knob-hook.md): the 8 stored knobs, the hook ---- */
 
 static uint32_t sp_frames RAM = 0;
@@ -1874,6 +1865,17 @@ void fx_ui_draw(int id, int mode, int slot)
             draw_distortion(r, k);
     }
 }
+
+/* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the
+ * encoder hook writes it, the screens read it). Weak: builds without the hook still link (a local state then).
+ * Here, after the SVG helpers: fm4 draws through the SVG route when content/display/fm4.svg exists. ---- */
+#define UI_HAS_SVG                          /* ui_fm4.h draws its gears from design/synth/fm4.svg (SVG helpers above) */
+#include "ui_harm.h"
+#include "ui_fm4.h"
+extern struct harm_ui harm_ui __attribute__((weak));
+extern struct fm4_ui fm4_ui __attribute__((weak));
+static struct harm_ui harm_ui_local RAM = { .last = -1 };
+static struct fm4_ui fm4_ui_local RAM = { .last = -1, .alg_shown = -1 };
 
 void ui_draw(int engine, int slot)
 {

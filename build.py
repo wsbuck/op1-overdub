@@ -26,6 +26,7 @@ import op1pack  # noqa: E402
 STOCK_URL = "https://teenage.engineering/_software/op-1/op1_246.op1"
 STOCK_SHA256 = "c5315218f825f143b415ca554516541898abee843d3a236df0b54c04e1fb13a9"
 FX_SVGS = {"ensemble": "choir.svg", "pingpong": "pingpong.svg", "distortion": "pedals.svg"}   # by source
+ENGINE_SVGS = {"fm4": "fm4.svg"}   # by source: engine screens drawn through the SVG route (design/synth/)
 
 
 def pick(path, names, what):
@@ -105,6 +106,10 @@ def main():
         if f["source"] in FX_SVGS:
             svg = FX_SVGS[f["source"]]
             cmd += ["--add", f"content/display/{svg}={os.path.join(ROOT, 'design', 'fx', svg)}"]
+    for e in engines:
+        if e["source"] in ENGINE_SVGS:
+            svg = ENGINE_SVGS[e["source"]]
+            cmd += ["--add", f"content/display/{svg}={os.path.join(ROOT, 'design', 'synth', svg)}"]
     run(*cmd)
 
     # The shareable bundle: apply.py and the two modules it uses, plus the patch (no TE firmware).
