@@ -647,3 +647,19 @@
 - Presets: saw lead [10923, 6000, 0, 12000], detune pad [10923, 22000, 2500, 0]. Sounds saved with the old va keep their knob values, which now mean noise and sub.
 - `firmware/images/VA2.OP1` sha256 10083c432e1d5f1cf266aade33479570abde48a675544c3f38590c9633b597b7 (includes WTS2).
 - Result: _pending user flash_.
+
+## 2026-10-13 — Test image 55: AMPPROBE.OP1 (can an engine hear the input?)
+- First step towards a guitar-amp engine. Research: notes/input.md. TE's mono int16 input `0xFF800CB4` (64 samples, 44.1 kHz) is written at the start of every audio callback, before the voice loop, from the completed SPORT0 RX half (int32 L/R at `0xFF800370`/`0xFF800570`); it is filled even with the input off (only the meter and the mixing are gated).
+- `inprobe` test engine (src/engine/inprobe.c, inprobe.h; engines.json `"test": true`, left out of default builds): blue gain 0..+24 dB; green SILENCE / TONE / TE IN / RAW / RAW OTHER / ALT (`0x01AB2E2C`); white L+R / L / R; orange shift 0..8 bits for the int32 sources. 2x linear upsampling, soft knee; every sounding voice plays the input. Preset "input" (TE IN): LFO and FX off, full sustain (add_engine_db.py `--patch`, engines.json `"patch"`).
+- Screen: source name and address, the block after the gain, peak meter (dBFS, red held peak), frame counter `F n`, LIVE / STILL (block changed since the last frame) with `n/32`, `W0` = first raw word in hex, `R n` = render calls since the last frame.
+- inprobe_check.py: all passed (bit exact for every source, channel and shift; guard; max 8,367 cycles per call; ABI). va_check unchanged.
+- `firmware/images/AMPPROBE.OP1` = `build.py --engines grain,inprobe --name AMPPROBE` (grain id 15, inprobe id 16, all FX, HOLD/CHORD). sha256 fa9d2fa3d99aa1c871446a63addb77f4a3a4f5b848bff493bccd83d4ff105c9e.
+- Test:
+  1. Plug a guitar into the line input (through a pedal or DI; a passive guitar straight in will be quiet), or use the internal mic. Headphones are safest (speaker + mic can feed back).
+  2. Select the synth engine `inprobe` (preset "input"; green on TE IN). Hold a key and latch it with SHIFT+T2 (HOLD).
+  3. Turn green through every source: SILENCE, TONE, TE IN, RAW, RAW OTHER, ALT. On RAW try white L / R / L+R and orange 0 vs fully up. Raise blue if quiet.
+  4. Release HOLD (no note sounding) and watch the screen again.
+  5. Repeat in tape mode (record a few seconds on a track) and with the sampler (record input into a sampler slot), then come back to inprobe.
+  6. Press the mic key (input on/off) and plug/unplug the line cable and headphones; note any change.
+- Report, per source: (a) does the waveform move and does LIVE stay green (`n/32` near 32)? (b) peak meter reading and `W0` (a few values); (c) do you hear it, and is it doubled (TE's own monitoring plus ours), delayed or distorted? (d) TONE: audible? (e) with no key held: does the meter/waveform still move, and does `R` drop to 0? (f) any difference between mic and line, input on/off, headphones in/out, tape mode, after sampling; (g) any crash or glitch.
+- Result: _pending user flash_.

@@ -48,6 +48,32 @@ static void fake_sampler(void)
     te_knobs[1][7] = 8192;                  /* the sampler's gain knob: unity */
 }
 int32_t pitch_buf[128];   /* stands in for the firmware's per-voice pitch buffer at 0xFF801950 */
+/* Audio-input buffers that inprobe.h reads (device: TE's addresses, notes/input.md). Refilled before every render
+ * call with integer triangles that inprobe_check.py recomputes: TE IN period 44, amplitude 8000; RAW (the half
+ * te_rx_sel names) L period 88 / 12000 and R period 30 / 6000, MSB-aligned; the other half 0x00123400; ALT L period
+ * 60 / 10000, R = -L. n counts 44.1 kHz frames from the first call. */
+volatile int16_t te_audio_in[64];
+volatile uint32_t te_rx_sel;
+volatile int32_t te_rx[256];
+volatile int32_t te_alt_in[128];
+static int32_t tri(int n, int p, int a)
+{
+    int t = n % p;
+    return 2 * t < p ? -a + 4 * a * t / p : 3 * a - 4 * a * t / p;
+}
+static void fill_input(int c)
+{
+    te_rx_sel = c & 1;
+    for (int i = 0; i < 64; i++) {
+        int n = c * 64 + i;
+        te_audio_in[i] = (int16_t)tri(n, 44, 8000);
+        te_rx[128 * (c & 1) + 2 * i] = tri(n, 88, 12000) << 16;
+        te_rx[128 * (c & 1) + 2 * i + 1] = tri(n, 30, 6000) << 16;
+        te_rx[128 * (~c & 1) + 2 * i] = te_rx[128 * (~c & 1) + 2 * i + 1] = 0x00123400;
+        te_alt_in[2 * i] = tri(n, 60, 10000) << 16;
+        te_alt_in[2 * i + 1] = -te_alt_in[2 * i];
+    }
+}
 extern void render(void *self, int16_t *out, const int16_t *params);
 
 static inline uint32_t cycles(void)
@@ -86,6 +112,7 @@ int main(int argc, char **argv)
     for (int c = 0; c < calls; c++) {
         for (int i = 0; i < 128; i++)
             pitch_buf[i] = (int32_t)(inc0 + (inc1 - inc0) * (c * 128 + i) / (calls * 128.0));
+        fill_input(c);
         uint32_t t0 = cycles();
         render(voice, out, params);
         uint32_t dt = cycles() - t0;

@@ -21,7 +21,12 @@ volatile int32_t te_engine_ids[8];      /* no sampler slot: grain shows the buil
 int32_t *te_ssamp[8];
 volatile int16_t te_knobs[8][8];
 volatile int32_t te_synth_slot;
-const uint8_t ui_kind[16] = { 1, 2, 3, 4 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain */
+const uint8_t ui_kind[16] = { 1, 2, 3, 4, 5 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain, 19 inprobe */
+/* Audio-input buffers (inprobe.h): a decaying guitar-like wave in TE IN and RAW (MSB-aligned), filled in main(). */
+volatile int16_t te_audio_in[64];
+volatile uint32_t te_rx_sel = 1;
+volatile int32_t te_rx[256];
+volatile int32_t te_alt_in[128];
 uint32_t hold_on = 1;   /* show the indicators in previews */
 uint32_t chord_on = 1, chord_learning = 0;
 int32_t chord_n = 3, chord_iv[4] = {0, 4, 16, 0};   /* root, major 3rd, major 10th */
@@ -197,6 +202,13 @@ int main(int argc, char **argv)
     for (int i = 0; i < 4; i++)
         host_knobs[i] = (int16_t)atoi(argv[3 + i]);
     int e = atoi(argv[2]);
+    for (int i = 0; i < 64; i++) {      /* a parabolic sine (one period, peak ~16000) plus a ragged overtone */
+        int t = i * 6 - 192;
+        int v = t * (192 - (t < 0 ? -t : t)) * 16 / 9 + ((i * 37) % 64 - 32) * 60;
+        te_audio_in[i] = (int16_t)v;
+        te_rx[128 + 2 * i] = v << 16;
+        te_rx[128 + 2 * i + 1] = (v / 2) << 16;
+    }
     if (getenv("CLEAN"))
         hold_on = chord_on = 0;   /* screenshots: no HOLD/CHORD badges */
     int frames = getenv("FRAMES") ? atoi(getenv("FRAMES")) : 1;

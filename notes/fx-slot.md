@@ -70,7 +70,7 @@ Confidence: **Confirmed** = read in code, **Verified** = re-checked in disassemb
    → **Engines run at 2 × fs = 88.2 kHz.** This matches the LOGTEST capture's unexplained "2× time compression" of 128-sample symbols (LOG.md). The "440 Hz" SINE result was probably octave-blind. engine-interface.md's "44.1 kHz" needs correcting.
 4. Synth LFO (`0x01AAAC44`), then **synth FX**: `s_fx[0]->process(this+adj, 0xFF800BB4, 0xFF801724)`, where `0xFF801724` = copy of `0xFF801444 + slot*16` (8 int16). Call `0xFFA01FDC`. **Verified** (R1 = `[SP+0x38]` = `0xFF800BB4`, R2 = `[FP+0xC]` = `0xFF801724`).
    Drum mode: drum voices → `s_fx[1]->process(…, 0xFF800BB4, copy of 0xFF8015C4 + dslot*16)`.
-5. Mic/line input `0xFF800CB4` is mixed into `0xFF800BB4` (mode dependent).
+5. Mic/line input `0xFF800CB4` is mixed into `0xFF800BB4` (mode dependent). Details, and when it is written (before the voice loop): notes/input.md.
 6. `FUN_ffa00e50` (mixer):
    - pans `0xFF800BB4` (and the tape tracks) into the stereo buses **L `0xFF800D34`, R `0xFF800DB4`** (64 int16 each);
    - then, if `0x01AAAC40`, runs the **master FX**: `s_fx[2]->process(this+adj, 0xFF800D34, 0xFF800DB4, [SP+0xC] = 0xFF8016C4)` (call `0xFFA017E6`, **Verified**);

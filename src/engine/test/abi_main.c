@@ -10,6 +10,11 @@ int32_t *te_ssamp[8];
 volatile int16_t te_knobs[8][8];
 volatile int32_t te_synth_slot;
 int32_t pitch_buf[128];   /* stands in for the firmware's per-voice pitch buffer at 0xFF801950 */
+/* Audio-input buffers that inprobe.h reads (device: TE's addresses, notes/input.md); zero here. */
+volatile int16_t te_audio_in[64];
+volatile uint32_t te_rx_sel;
+volatile int32_t te_rx[256];
+volatile int32_t te_alt_in[128];
 extern int abi_check(void *self, int16_t *out, const int16_t *params);
 
 int main(void)

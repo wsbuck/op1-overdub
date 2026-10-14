@@ -31,7 +31,7 @@ FX_SVGS = {"ensemble": "choir.svg", "pingpong": "pingpong.svg", "distortion": "p
 def pick(path, names, what):
     items = json.load(open(path))
     if names is None:
-        return items
+        return [i for i in items if not i.get("test")]   # test engines (e.g. inprobe) only when named
     want = [n for n in names.split(",") if n]
     unknown = set(want) - {i["name"] for i in items}
     if unknown:
@@ -46,7 +46,8 @@ def run(*cmd):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--engines", help="comma-separated engine names from src/slot/engines.json (default: all)")
+    ap.add_argument("--engines", help="comma-separated engine names from src/slot/engines.json (default: all but "
+                    "test engines)")
     ap.add_argument("--fx", help="comma-separated FX names from src/slot/fx.json (default: all; '' for none)")
     ap.add_argument("--no-hold", action="store_true", help="leave out HOLD (SHIFT+T2) and CHORD")
     ap.add_argument("--no-chord", action="store_true", help="leave out CHORD")

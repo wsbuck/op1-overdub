@@ -9,7 +9,8 @@
  *
  * Design: notes/screen.md "UI redesign" (TE-style: dark structure, live elements in the knob colours,
  * iter's dials, sampler's HOLD badge). wavetable: waterfall of the bank's frames; grain: source overview,
- * playhead, spray, live grains (sampler or built-in bank); va: oscillator shape and filter response.
+ * playhead, spray, live grains (sampler or built-in bank); va: oscillator shape and filter response;
+ * inprobe (a test engine): the input buffer it reads, live, with numbers to report.
  */
 #include <stdint.h>
 #include "font.h"
@@ -24,6 +25,7 @@
 #include "grain_source.h"
 #include "ensemble.h"
 #include "pingpong.h"
+#include "inprobe.h"
 
 /* Writable state lives in .data (the slot block is loaded into RAM); .bss is refused by the linker. */
 #ifdef __bfin__
@@ -54,7 +56,7 @@ extern uint32_t hold_on;                  /* hold.c */
 extern uint32_t chord_on, chord_learning; /* hold.c: CHORD mode and its learned shape */
 extern int32_t chord_n, chord_iv[];
 extern const uint8_t ui_kind[];           /* screen kind per engine id 15.. (build_slot.py, from engines.json) */
-enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4 };   /* = UI_KINDS in build_slot.py */
+enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4, KIND_INPROBE = 5 };   /* = UI_KINDS in build_slot.py */
 extern const int16_t grain_data[] __attribute__((weak));        /* granular engine: overview[GRAIN_OVERVIEW], then the bank */
 /* Our FX (fx.json; build_slot.py generates fx_kind/fx_count). Weak: an image without one of them still links. */
 extern const uint8_t fx_kind[];           /* screen kind per FX id 8.. */
@@ -660,10 +662,7 @@ static void draw_grain(void *r, const int16_t *k)
     }
 }
 
-static uint32_t last_renders RAM = 1;     /* render count at the last frame (live knobs) */
-
-#ifdef UI_DEBUG
-/* ---- diagnostics (PROF1): engine DSP load and UI cost from CYCLES, and the live-knob record ---- */
+/* ---- number text (inprobe, diagnostics) ---- */
 
 static char *put_str(char *p, const char *s)
 {
@@ -691,6 +690,143 @@ static char *put_dec(char *p, uint32_t u)
     *p = 0;
     return p;
 }
+
+static char *put_hex(char *p, uint32_t u, int digits)
+{
+    for (int i = digits - 1; i >= 0; i--) {
+        uint32_t d = (u >> (4 * i)) & 15;
+        *p++ = (char)(d < 10 ? '0' + d : 'A' + d - 10);
+    }
+    *p = 0;
+    return p;
+}
+
+/* ---- inprobe: the input buffer the engine reads (src/engine/inprobe.h; notes/input.md), live ---- */
+
+static const char *const inp_names[INP_SOURCES] = { "SILENCE", "TONE", "TE IN", "RAW", "RAW OTHER", "ALT" };
+static uint32_t inp_frames RAM = 0;       /* screen frames */
+static uint32_t inp_sum RAM = 0;          /* checksum of the last frame's block */
+static uint32_t inp_changed RAM = 0;      /* one bit per frame, newest in bit 0: block changed since the frame before */
+static int32_t inp_hold RAM = -96 * 256;  /* held peak, dBFS Q8 */
+static uint32_t inp_renders RAM = 0;      /* render count (tramp.S) at the last frame */
+
+/* 20 log10(p / 32768) in Q8 (dBFS) for p >= 1: log2 from the leading bit plus a linear mantissa (< 0.5 dB off) */
+static int32_t dbfs_q8(int32_t p)
+{
+    if (p < 1)
+        return -96 * 256;
+    int n = 0;
+    while (n < 15 && (p >> (n + 1)))
+        n++;
+    int32_t f = (p << (15 - n)) & 0x7FFF;
+    return ((((n - 15) << 15) + f) * 1541) >> 15;                 /* 6.0206 dB per octave, Q8 */
+}
+
+static char *put_db(char *p, int32_t q8)
+{
+    if (q8 < 0) {
+        *p++ = '-';
+        q8 = -q8;
+    }
+    p = put_dec(p, (uint32_t)(q8 + 128) >> 8);
+    return put_str(p, "DB");
+}
+
+static void draw_inprobe(void *r, const int16_t *k)
+{
+    char buf[48], *p;
+    int db = inp_pos(k[0], INP_DB_MAX + 1), src = inp_pos(k[1], INP_SOURCES);
+    int ch = inp_pos(k[2], INP_CHANNELS), sh = inp_pos(k[3], INP_SHIFTS);
+    int32_t g = inp_gain_q10[db];
+    int16_t x[INP_N];
+    uint32_t sel = te_rx_sel & 1, raw = inp_fetch(src, ch, sh, x);
+    int stereo = inp_words(src) != 0;
+
+    /* green: the source's name and where it is read (int32 L/R or int16 mono; short of the HOLD/CHORD badges) */
+    title(r, inp_names[src], GREEN);
+    p = buf;
+    if (src == INP_TE)
+        p = put_str(p, "FF800CB4 I16 X64");
+    else if (src == INP_RAW || src == INP_RAW_OTHER)
+        p = put_str(put_str(p, (sel ^ (src == INP_RAW_OTHER)) ? "FF800570" : "FF800370"), " LR");
+    else if (src == INP_ALT)
+        p = put_str(p, "01AB2E2C LR");
+    else if (src == INP_TONE)
+        p = put_str(p, "ENGINE SINE");
+    if (src == INP_RAW || src == INP_RAW_OTHER)
+        put_dec(put_str(p, " SEL "), sel);
+    text_fast(r, buf, FP(8), FP(24), FP(1), GREY);
+
+    /* live: frame counter, and whether the block changed since the last frame (LIVE / STILL; below the CHORD
+     * badge's keyboard), and in how many of the last 32 frames */
+    uint32_t sum = raw;
+    int32_t peak = 0;
+    for (int i = 0; i < INP_N; i++) {
+        int32_t a = x[i] < 0 ? -x[i] : x[i];
+        peak = a > peak ? a : peak;
+        sum = sum * 31 + (uint16_t)x[i];
+    }
+    inp_frames++;
+    inp_changed = (inp_changed << 1) | (sum != inp_sum);
+    inp_sum = sum;
+    int n = 0;
+    for (uint32_t b = inp_changed; b; b >>= 1)
+        n += b & 1;
+    put_dec(put_str(buf, "F "), inp_frames);
+    text_fast(r, buf, FP(236), FP(7), FP(3) >> 1, WHITE);
+    int changed = inp_changed & 1;
+    text(r, changed ? "LIVE" : "STILL", FP(236), FP(36), FP(3) >> 1, changed ? GREEN : RED);
+    put_str(put_dec(buf, n), "/32");
+    text_fast(r, buf, FP(286), FP(38), FP(1), changed ? GREEN : RED);
+
+    /* the block after the gain (what the engine plays, before the knee), 64 samples across, full scale +-30 */
+    const fp32 x0 = FP(8), cy = FP(80), amp = FP(30), step = FP(304) >> 6;
+    line_fast(r, x0, cy, x0 + FP(304), cy, DARKBLUE);
+    line_fast(r, x0, cy - amp, x0 + FP(304), cy - amp, DARKBLUE);
+    line_fast(r, x0, cy + amp, x0 + FP(304), cy + amp, DARKBLUE);
+    fp32 px = 0, py = 0;
+    for (int i = 0; i < INP_N; i++) {
+        int32_t v = inp_sat16((x[i] * g) >> 10);
+        fp32 qx = x0 + step * i, qy = cy - (((amp >> 5) * v) >> 10);
+        if (i)
+            line_fp(r, px, py, qx, qy, FP(3) >> 1, GREEN);
+        px = qx;
+        py = qy;
+    }
+
+    /* peak meter of the source (before the gain): -84 .. 0 dBFS over x 8..248, held peak in red */
+    int32_t d = dbfs_q8(peak);
+    inp_hold = d > inp_hold - 64 ? d : inp_hold - 64;             /* falls 0.25 dB per frame */
+    const fp32 mx = FP(8), mw = FP(240), my = FP(120);
+    line_fast(r, mx, my, mx + mw, my, DARKBLUE);
+    fp32 len = ((d + 84 * 256) * 731) >> 6;                       /* 240 units per 84 dB: 240 * 1024 / 21504 */
+    if (len > 0)
+        line_fp(r, mx, my, mx + (len < mw ? len : mw), my, FP(4), WHITE);
+    fp32 hl = ((inp_hold + 84 * 256) * 731) >> 6;
+    if (hl > 0 && hl <= mw)
+        line_fp(r, mx + hl, my - FP(3), mx + hl, my + FP(3), FP(1), RED);
+    put_db(put_str(buf, "PK "), d);
+    text_fast(r, buf, FP(256), FP(117), FP(1), WHITE);
+
+    /* numbers: gain (blue), channel (white), shift (orange), the first raw word, render calls since the last frame */
+    p = put_str(buf, "+");
+    put_str(put_dec(p, db), "DB");
+    text_fast(r, buf, FP(8), FP(130), FP(1), BLUE);
+    text_fast(r, stereo ? (ch == 0 ? "L+R" : ch == 1 ? "L" : "R") : "-", FP(48), FP(130), FP(1), WHITE);
+    put_dec(put_str(buf, "SH "), stereo ? (uint32_t)sh : 0);
+    text_fast(r, buf, FP(76), FP(130), FP(1), ORANGE);
+    put_hex(put_str(buf, "W0 "), raw, stereo ? 8 : 4);
+    text_fast(r, buf, FP(116), FP(130), FP(1), GREY);
+    uint32_t renders = PROF[5];
+    put_dec(put_str(buf, "R "), renders - inp_renders);
+    inp_renders = renders;
+    text_fast(r, buf, FP(236), FP(130), FP(1), GREY);
+}
+
+static uint32_t last_renders RAM = 1;     /* render count at the last frame (live knobs) */
+
+#ifdef UI_DEBUG
+/* ---- diagnostics (PROF1): engine DSP load and UI cost from CYCLES, and the live-knob record ---- */
 
 static uint32_t pct(uint32_t part, uint32_t whole)
 {
@@ -1589,6 +1725,8 @@ void ui_draw(int engine, int slot)
         draw_grain(r, k);
     else if (kind == KIND_VA)
         draw_va(r, k);
+    else if (kind == KIND_INPROBE)
+        draw_inprobe(r, k);
     if (hold_on)
         hold_badge(r);
     if (chord_on || chord_learning)

@@ -2,10 +2,11 @@
 """Copy an op1_factory.db and add a synth type with presets (for an engine added with build_slot.py).
 
   add_engine_db.py IN.db OUT.db --type va --default "[0, 6000, 20000, 9000, 0, 0, 0, 0]"
-                   --preset NAME=K0,K1,K2,K3 [--preset ...] [--template-folder iter]
+                   --preset NAME=K0,K1,K2,K3 [--preset ...] [--template-folder iter] [--patch JSON]
 
 Each preset copies the envelope/FX/LFO settings of one preset in --template-folder (in order, cycling)
-and sets type, name and the 4 engine knobs. On 246 the engine browser lists only types with presets.
+and sets type, name and the 4 engine knobs; --patch sets more fields in every preset (e.g. '{"lfo_active": false}').
+On 246 the engine browser lists only types with presets.
 """
 import argparse
 import json
@@ -22,6 +23,7 @@ def main():
     ap.add_argument("--default", required=True)
     ap.add_argument("--preset", action="append", default=[], metavar="NAME=K0,K1,K2,K3")
     ap.add_argument("--template-folder", default="iter")
+    ap.add_argument("--patch", default="{}", help="JSON object of patch fields set in every preset")
     a = ap.parse_args()
     if len(json.loads(a.default)) != 8:
         sys.exit("--default must be a JSON list of 8 knob values")
@@ -40,7 +42,8 @@ def main():
         k = [int(v) for v in knobs.split(",")]
         if len(k) != 4 or not all(0 <= v <= 0x7FFF for v in k):
             sys.exit(f"{spec}: need 4 knob values 0..32767")
-        patch = dict(templates[i % len(templates)], type=a.type, name=name, knobs=k + [0, 0, 0, 0])
+        patch = dict(templates[i % len(templates)], **json.loads(a.patch))
+        patch.update(type=a.type, name=name, knobs=k + [0, 0, 0, 0])
         con.execute("INSERT INTO synth_presets (patch, folder) VALUES (?, ?)",
                     (json.dumps(patch, separators=(",", ":")), a.type))
     con.commit()

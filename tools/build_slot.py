@@ -8,6 +8,7 @@ ENGINES.json (e.g. src/slot/engines.json) lists the engines in id order:
   [{"name": "va", "source": "va", "addr": "0x01E10000", "max": "0x10000",
     "default": [8 knobs], "presets": {"saw lead": [k0, k1, k2, k3], ...},
     "aliases": ["old name", ...]}, ...]
+Optional "patch": fields set in every preset of that engine (e.g. {"lfo_active": false}).
 Aliases are extra name-table entries for the same id, so patches saved under an old name still load (TE asserts
 on an unknown engine name, instr_types.cpp:49); only "name" gets a DB row and presets.
 Each engine is src/engine/<source>.c built by src/engine/build.sh at its addr (a FREE region). Optional "ram",
@@ -41,7 +42,7 @@ import ldr  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRST_ID = 15
-UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4}   # must match enum ui_kind in src/slot/ui.c
+UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5}   # must match enum ui_kind in src/slot/ui.c
 # patch.cpp:616 `synthSynthes_preset_count <= kMaxSynthSynthes_presets` (0xb0 at 0x01a0582a): fixed array
 # of 0x38-byte entries at 0x01DDDB68. Counted without sampler presets (stock 160 + 11 iter + 4 va = 175
 # booted; 183 asserted).
@@ -67,6 +68,8 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          "_voice_ram": 0x00810000,       # engines' per-voice RAM in FREE region 0 (src/engine/build.sh)
          "_te_engine_ids": 0xFF8016E4, "_te_ssamp": 0x01DF6F78, "_te_knobs": 0xFF8013C4,
          "_te_synth_slot": 0x01AAAC0C,   # grain_source.h
+         # audio-input buffers (src/engine/inprobe.h, notes/input.md; as src/engine/build.sh)
+         "_te_audio_in": 0xFF800CB4, "_te_rx_sel": 0xFF800364, "_te_rx": 0xFF800370, "_te_alt_in": 0x01AB2E2C,
          "_te_fx_filter_mono_ctor": 0x019E77B4, "_te_fx_filter_stereo_ctor": 0x019E784C,
          # TE's retained SVG renderer (notes/svg-route.md)
          "_te_yaffs_open": 0x01A997F4, "_te_yaffs_close": 0x01A99908, "_te_svg_load": 0x019FB458,
@@ -372,6 +375,7 @@ def main():
             cmd = [sys.executable, os.path.join(ROOT, "tools", "add_engine_db.py"), src, dst,
                    "--type", e["name"], "--default", json.dumps(e["default"])]
             cmd += [x for name, k in e["presets"].items() for x in ("--preset", f"{name}={','.join(map(str, k))}")]
+            cmd += ["--patch", json.dumps(e["patch"])] if "patch" in e else []
             subprocess.run(cmd, check=True)
             src = dst
         con = sqlite3.connect(a.db_out)
