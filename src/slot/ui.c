@@ -1050,10 +1050,10 @@ static int32_t amp_hash(uint32_t a, uint32_t b)
     return (int32_t)h >> 16;
 }
 
-/* circle of n segments, 1-px lines (n = 8, 16 or 32) */
+/* circle of n segments, 1-px lines (n a power of two: 8, 16 or 32) */
 static void circle_fast(void *r, fp32 cx, fp32 cy, fp32 rad, int n, int colour)
 {
-    uint32_t step = 0xFFFFFFFFu / (uint32_t)n + 1;
+    uint32_t step = n >= 32 ? 1u << 27 : n >= 16 ? 1u << 28 : 1u << 29;
     fp32 px = cx + ((rad >> 5) * cos_t(0) >> 10), py = cy;
     for (int i = 1; i <= n; i++) {
         uint32_t a = step * (uint32_t)i;
