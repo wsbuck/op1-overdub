@@ -678,4 +678,6 @@
   5. With a MIDI keyboard (notes 53..76): play soft and hard.
   6. Save the sound, load another kit, load the saved one; power off and on with it in a drum slot.
 - Report: which keys sound and the pitch order; noise on alternate keys; whether each knob changes the sound and the K values; the K ranges; velocity (MIDI); save/load/reboot; any crash or assert text (photo).
-- Result: _pending user flash_.
+- Result (2026-10-14, device): boots; synth, drum sampler and dbox unchanged. `drum probe` is listed alphabetically in the dbox folder (row 4). All 24 keys play, pitch rising per key, noise on alternate keys. Knobs edit only the pressed key and are audible. Screen photo: ID 18, IN 3, ROW 1 (row 9 copied); dbox ranges K0 -24320..24832 (S 6208), K1-K6 0..32767 (S 10485, K4 4915), K7 S 8192; worst render 29,820 cycles per call (233 per sample, budget 76,800). Rendered values lag the written ones until the key is hit again (note-on reads the params). Velocity over MIDI not tested.
+- **Saving fails**: saving the sound doesn't create a snapshot. Per-key edits survive switching drum slots (they stay in `0x01AAADB4`). Hypothesis: TE's saver writes no `dbox_data` for type `dprobe` (it only writes it for "dbox"), so the saved sound fails dbox validation and is dropped. Next: make the per-key loader/saver treat `dprobe` as `dbox`.
+- Reboot with the probe in a drum slot: not yet reported.
