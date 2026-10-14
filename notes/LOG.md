@@ -722,7 +722,10 @@
   7. LFO: T4, choose the element LFO, target each of knobs 4..7 in turn (note how you picked the target), play a note: does `L` for that knob move (white), and do you hear the octave pulse for knob 4? Does the stored K value move too?
 - Report: A: LD/SV/SUM at each step, the saved names and the folders they are listed in, whether edits are audible after reload and reboot, whether `20760319_2255` is listed; B: HOOK/EDITS/K0..K7/PAIR/NOW at steps 2-6, SHIFT independence, the LFO result per knob 4..7; any crash or assert text (photo).
 - **Cleanup before leaving this image** (stock and other images stop at boot on unknown names): replace `drum probe` in every drum slot with a stock kit; delete every saved drum sound of type dprobe (including `20760319_2255` and today's saves); load another engine into every synth slot holding `sprobe`, and delete synth sounds saved with `sprobe`. If a saved probe sound can't be found in the browser, report it before flashing anything else (recovery otherwise: COM at power-on, factory reset).
-- Result: _pending user flash_.
+- Result (2026-10-14, device): **all passed.**
+  - A (drum): `20760319_2255` is in the snapshots. `drum probe` loads with LD 4, SV 0, SUM A771. Edits count SV. Save goes to the snapshots; reload restores SUM and the edits sound; survives a power cycle. Stock dbox and sampler kits unchanged.
+  - B (synth): the hook runs (HOOK/EDITS count, NOW SAME, PAIR OK). SHIFT knobs are independent (K4-K7 move alone). Packed raw values survive save → reload (snapshot) and a power cycle.
+  - TE's element LFO can only target knobs 1-4 (that is how TE's LFO works), never 5-8. So LFO-able parameters must live in knobs 0..3; packed data in 4..7 is safe from the LFO.
 - **AMPPROBE4 result (2026-10-14, device): boots with all the user's sounds.** Guitar into the line jack:
   - TE IN (`0xFF800CB4`): the waveform moves whether or not a note is held (the buffer is live without a voice), but the input is heard only while a note sounds. TE doesn't monitor the line input itself here, so there's no doubling. Sound clean; feels instant; recorded to tape through the engine.
   - Peak about -15 dBFS when strummed hard at minimum gain.
