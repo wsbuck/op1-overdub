@@ -783,3 +783,9 @@
 - Same engines, ids and preset trims as SYNTH1 (59), built from commit 1ec16dd (amp screen: small oblique combo, src/slot/ui_amp.h) in a clean export. te-boot identical to stock.
 - `firmware/images/SYNTH2.OP1` sha256 4c6311548bfc6eda0272bb4b4d6eaf578f5ff2b4f2428dba4f19a21eb88d5440. Supersedes AMP1 (58) and SYNTH1 (59) for testing: amp steps as 58, harm/fm4 steps as 59.
 - Result: _pending user flash_.
+
+## 2026-10-14 — Test image 61: SYNTH3.OP1 (SYNTH2 + the SVG gear screen for fm4)
+- Same engines, ids and preset trims as SYNTH2 (60), built from commit 82f439e in a clean export; adds content/display/fm4.svg (7731 B). te-boot identical to stock.
+- `firmware/images/SYNTH3.OP1` sha256 f047fda195e6e2059f0ce2a032f9dd3b9434408ae995afcdd5fb1567298d72d8. Test steps as 58 (amp) and 59 (harm, fm4); also how the gear screen looks and runs on the device.
+- Known from the preview: in some algorithms gears overlap rather than mesh (1, 6), labels collide, and sizes differ between algorithms.
+- Result: _pending user flash_.
