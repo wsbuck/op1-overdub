@@ -7,8 +7,9 @@
 #include <string.h>
 #include "pingpong.h"
 #include "drumprobe.h"
+#include "sprobe.h"
 
-int16_t host_knobs[4];
+int16_t host_knobs[8];   /* K0..K3 from the command line; K4..K7 set per preview */
 uint8_t host_palette[20 * 4];
 int16_t wt_data[8 * 12 * 4128];
 int16_t grain_data[256 + 6 * 70560];
@@ -22,7 +23,7 @@ volatile int32_t te_engine_ids[8];      /* no sampler slot: grain shows the buil
 int32_t *te_ssamp[8];
 volatile int16_t te_knobs[8][8];
 volatile int32_t te_synth_slot;
-const uint8_t ui_kind[16] = { 1, 2, 3, 4, 5 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain, 19 inprobe */
+const uint8_t ui_kind[16] = { 1, 2, 3, 4, 5, 6 };   /* preview ids: 15 va, 16 wavetable, 17 modal, 18 grain, 19 inprobe, 20 sprobe */
 /* Audio-input buffers (inprobe.h): a decaying guitar-like wave in TE IN and RAW (MSB-aligned), filled in main(). */
 volatile int16_t te_audio_in[64];
 volatile uint32_t te_rx_sel = 1;
@@ -34,7 +35,11 @@ volatile int32_t te_drum_edit = 5;
 int16_t ranges[20 * 32];
 struct dp_diag drumprobe_diag = { 37, 35, 90000, 12700, 5, 0x7F00, 3, 0x10000, 1, 1,
                                   { 32767, 0, 0, 20000, 9000, 0, 0, 0, 0, 0, 3000, 0 },
-                                  { 0, 16384, 12288, 20000, 8192, 0, 0, DP_MAGIC } };
+                                  { 0, 16384, 12288, 20000, 8192, 0, 0, 0 } };
+uint32_t dp_type_hits[2] = { 2, 5 };
+/* Knob probe (engine 20 in previews): the hook's record and the engine's live params, set in main() */
+struct kh_diag knobhook_diag;
+struct sp_ram sprobe_ram;
 uint32_t hold_on = 1;   /* show the indicators in previews */
 uint32_t chord_on = 1, chord_learning = 0;
 int32_t chord_n = 3, chord_iv[4] = {0, 4, 16, 0};   /* root, major 3rd, major 10th */
@@ -222,13 +227,26 @@ int main(int argc, char **argv)
         hold_on = chord_on = 0;   /* screenshots: no HOLD/CHORD badges */
     int frames = getenv("FRAMES") ? atoi(getenv("FRAMES")) : 1;
     host_drawing = frames <= 1;
-    static const int16_t dp_keys[8] = { -1200, 16384, 12288, 20000, 8192, 0, 0, DP_MAGIC };
+    static const int16_t dp_keys[8] = { -1200, 16384, 12288, 20000, 8192, 0, 0, 0 };
     for (int i = 0; i < DP_KEYS * 8; i++)
         te_drum_params[i] = dp_keys[i & 7];
     for (int i = 0; i < 8; i++) {          /* a guess at dbox's row 9 (the device shows the real one) */
         ranges[9 * 32 + 4 * i] = (int16_t)(i ? 0 : -32767);
         ranges[9 * 32 + 4 * i + 1] = 32767;
         ranges[9 * 32 + 4 * i + 2] = 8192;
+    }
+    if (e == 20) {                         /* knob probe: 37 edits, the last on knob 5; the LFO moving knob 4 */
+        host_knobs[4] = 12000;
+        host_knobs[5] = 3000;
+        host_knobs[6] = sp_k6(37, 5);
+        host_knobs[7] = sp_k7(host_knobs[6]);
+        knobhook_diag = (struct kh_diag){ 41, 5, -3, host_knobs[6], host_knobs[7], 0 };
+        if (getenv("CLAMPED"))             /* what a clamp on load would look like */
+            host_knobs[7] = 32767;
+        for (int i = 0; i < 8; i++)
+            sprobe_ram.live[i] = host_knobs[i];
+        sprobe_ram.live[4] = 17500;
+        sprobe_ram.renders = 90;
     }
     if (e == 300)
         drum_ui_draw(0, 18);

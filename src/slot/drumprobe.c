@@ -11,9 +11,10 @@
  *   [0] blue    tune, -12..+11 semitones (signed)        [4] SHIFT+blue    noise decay, 30 ms .. 2 s
  *   [1] green   decay, 30 ms .. 2 s (to -60 dB)          [5] SHIFT+green   (shown only)
  *   [2] white   pitch drop, 1x .. 8x at the start          [6] SHIFT+white   (shown only)
- *   [3] orange  noise level (odd keys)                    [7] SHIFT+orange  slot marker DP_MAGIC (shown only)
- * TE does not load or save per-key params for a new type, so drumprobe_slot_init (from the factory) writes these
- * defaults into the slot's 24 keys whenever the marker is missing.
+ *   [3] orange  noise level (odd keys)                    [7] SHIFT+orange  (shown only)
+ * TE's per-key loader and saver treat our type like "dbox" (slot.S _drum_type_eq_load/_save), so the 24 x 8 values
+ * load from and save to the patch's dbox_data. The factory preset carries the defaults (engines.json "dbox_default");
+ * nothing here rewrites a slot's values (DRUMPROBE's marker did, which would fight loaded values).
  *
  * 128 samples per call at 88.2 kHz (the 2:1 decimator follows), Q15. No division, no libgcc, no .bss.
  */
@@ -40,6 +41,7 @@ struct dvoice {                            /* TE's dbox object, 0x48 B; ours exc
 };
 
 struct dp_diag drumprobe_diag RAM = { 0, 0, 0, 0, -1, 0, -1, 0, 0, 0, { 0 }, { 0 } };
+uint32_t dp_type_hits[2] RAM = { 0, 0 };   /* slot.S: TE's per-key loader / saver took the dbox path for our type */
 
 /* E1 (41.2 Hz) * 2^(key / 12) at 88.2 kHz, 2^32 = one cycle */
 static const uint32_t base_inc[DP_KEYS] = {
@@ -54,8 +56,6 @@ static const uint16_t decay_q15[32] = {
     23460, 24474, 25396, 26230, 26980, 27652, 28254, 28789, 29265, 29687, 30061, 30391, 30683, 30939, 31165, 31364,
     31538, 31692, 31826, 31944, 32047, 32138, 32217, 32286, 32347, 32400, 32446, 32487, 32522, 32553, 32580, 32604 };
 #define PENV_Q15 29746                     /* pitch drop: time constant 15 ms */
-
-static const int16_t defaults[8] = { 0, 16384, 12288, 20000, 8192, 0, 0, DP_MAGIC };
 
 static inline uint32_t cycles(void)
 {
@@ -159,15 +159,12 @@ void drumprobe_note_off(struct dvoice *v, const int16_t *key_params)
     drumprobe_diag.noteoffs++;              /* one-shot: drums ignore note-off */
 }
 
-/* From the factory (slot.S _drum_factory) before the voices are built, in TE's audio or UI thread. */
+/* From the factory (slot.S _drum_factory) before the voices are built, in TE's audio or UI thread. The slot's per-key
+ * values are left as TE loaded them (from the patch's dbox_data). */
 void drumprobe_slot_init(int32_t slot)
 {
-    int16_t *k = te_drum_params + (slot & 7) * DP_KEYS * 8;
-    if (k[(DP_KEYS - 1) * 8 + 7] != DP_MAGIC) {
-        for (int i = 0; i < DP_KEYS * 8; i++)
-            k[i] = defaults[i & 7];
-        drumprobe_diag.inits++;
-    }
+    (void)slot;
+    drumprobe_diag.inits++;
     /* our range row (ReadInterface normalises with it) = dbox's row 9, filled by TE at boot, if it is sane */
     const int16_t *r9 = ranges + 9 * 32;
     int16_t *rn = ranges + drum_id * 32;

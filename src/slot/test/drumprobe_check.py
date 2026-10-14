@@ -8,7 +8,7 @@ render, active, note-off, each through its C_ENTRY wrapper with fx_abi.S's regis
 bfin-elf-run. Checks: every key sounds, pitch rises with the key (E1 + key semitones, 88.2 kHz), noise only on odd
 keys, velocity scales the level, the knobs (tune, decay, pitch drop, noise level) do what drumprobe.c says, the voice
 ends (active() 0, then silence), the output guard, cycles per render call under the engines' CPU budget, the slot
-init (defaults when the marker is missing, edits kept, range row 9 copied only when sane), and the ABI.
+init (the slot's loaded values never rewritten, range row 9 copied only when sane), and the ABI.
 """
 import os
 import subprocess
@@ -25,7 +25,7 @@ from simrun import CPU_BUDGET  # noqa: E402
 
 FS = 88200
 BLOCKS = 120                               # 174 ms
-D = [0, 16384, 12288, 20000, 8192, 0, 0]   # drumprobe.c defaults (without the marker)
+D = [0, 16384, 12288, 20000, 8192, 0, 0]   # the drum probe preset's per-key values (engines.json dbox_default)
 CASES = {f"key{k}": (k, 127, BLOCKS, D) for k in range(24)}
 CASES.update({
     "vel64": (0, 64, BLOCKS, D),
@@ -140,8 +140,8 @@ def main():
           and not np.abs(x[128 * (end + 1):]).any(), f"voice ends: active() = age while sounding, 0 after block {end}, then silence")
 
     r = open(os.path.join(w, "init.txt")).read().split()
-    check(open(os.path.join(w, "init.rc")).read().strip() == "0" and r == ["defaults", "1", "row", "1", "kept", "1", "norow", "1"],
-          f"slot init: defaults when the marker is missing, edits kept, row 9 copied only when sane ({' '.join(r)})")
+    check(open(os.path.join(w, "init.rc")).read().strip() == "0" and r == ["kept", "1", "row", "1", "norow", "1"],
+          f"slot init: loaded per-key values never rewritten, row 9 copied only when sane ({' '.join(r)})")
 
     print(f"\n{len(fails)} failed" if fails else "\nall passed")
     sys.exit(1 if fails else 0)

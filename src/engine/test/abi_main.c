@@ -15,13 +15,14 @@ volatile int16_t te_audio_in[64];
 volatile uint32_t te_rx_sel;
 volatile int32_t te_rx[256];
 volatile int32_t te_alt_in[128];
+uint32_t sprobe_ram[16];   /* knob probe's screen record (sprobe.h; device: engines.json "ram") */
 extern int abi_check(void *self, int16_t *out, const int16_t *params);
 
 int main(void)
 {
     static uint32_t voice[9] = { 0x019103CC, 0x80000000u };
     static int16_t out[128];
-    static const int16_t params[4] = { 1516, 16704, 0, 15168 };
+    static const int16_t params[8] = { 1516, 16704, 0, 15168, 0, 0, -1, -32768 };
     for (int i = 0; i < 128; i++) pitch_buf[i] = 25480314;
     int mask = abi_check(voice, out, params);
     printf("abi mask %08x vptr %08lx\n", mask, (unsigned long)voice[0]);

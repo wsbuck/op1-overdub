@@ -199,8 +199,11 @@ _fx_ui_update:
  *                           reads as 9, so our drum patches validate as dbox ones (other ids assert in drum context).
  *   _drum_ui_update         dbox screen page update (slot 0x0190F8F0, stock 0x01972470): our id draws
  *                           drum_ui_draw(slot, id) (ui.c) instead; R0/R1 untouched for TE's. Drum slot [0xFF8016D8],
- *                           its id [0xFF801704 + slot * 4] (as the drum ScreenId's caller 0x01977394). */
-    .macro DRUM_HOOKS id
+ *                           its id [0xFF801704 + slot * 4] (as the drum ScreenId's caller 0x01977394).
+ *   _drum_type_eq_load/save replace CALL FUN_019bdea4 (JSON value ==) where TE's per-key loader FUN_01a0036c (0x01A00630)
+ *                           and saver FUN_019ffc50 (0x019FFFBA) compare the patch's "type" with Value("dbox"), so our
+ *                           type (\name) loads and saves dbox_data too (DRUM_TYPE_EQ, entry.inc). */
+    .macro DRUM_HOOKS id, name
     .text
     .align 4
     .global _drum_factory
@@ -231,6 +234,8 @@ _drum_factory:
     (R7:4, P5:5) = [SP++];
     UNLINK;
     JUMP (P0);
+
+    DRUM_TYPE_EQ \name
 
     .global _drum_validate_lookup
 _drum_validate_lookup:

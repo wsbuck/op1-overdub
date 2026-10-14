@@ -11,6 +11,7 @@
  * iter's dials, sampler's HOLD badge). wavetable: waterfall of the bank's frames; grain: source overview,
  * playhead, spray, live grains (sampler or built-in bank); va: oscillator shape and filter response;
  * inprobe (a test engine): the input buffer it reads, live, with numbers to report.
+ * sprobe (a test engine): the 8 stored knob values, what the encoder hook (knobhook.c) wrote, and the render params.
  * drum_ui_draw: the drum probe (a test drum engine) on the dbox screen it borrows: what TE handed the engine.
  */
 #include <stdint.h>
@@ -28,6 +29,7 @@
 #include "pingpong.h"
 #include "inprobe.h"
 #include "drumprobe.h"
+#include "sprobe.h"
 
 /* Writable state lives in .data (the slot block is loaded into RAM); .bss is refused by the linker. */
 #ifdef __bfin__
@@ -58,7 +60,7 @@ extern uint32_t hold_on;                  /* hold.c */
 extern uint32_t chord_on, chord_learning; /* hold.c: CHORD mode and its learned shape */
 extern int32_t chord_n, chord_iv[];
 extern const uint8_t ui_kind[];           /* screen kind per engine id 15.. (build_slot.py, from engines.json) */
-enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4, KIND_INPROBE = 5 };   /* = UI_KINDS in build_slot.py */
+enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4, KIND_INPROBE = 5, KIND_SPROBE = 6 };   /* = UI_KINDS in build_slot.py */
 extern const int16_t grain_data[] __attribute__((weak));        /* granular engine: overview[GRAIN_OVERVIEW], then the bank */
 /* Our FX (fx.json; build_slot.py generates fx_kind/fx_count). Weak: an image without one of them still links. */
 extern const uint8_t fx_kind[];           /* screen kind per FX id 8.. */
@@ -69,6 +71,9 @@ extern const char *distortion_mode_name(const int16_t *p) __attribute__((weak));
 extern struct ens ensemble_state[2] __attribute__((weak));
 extern struct pp pingpong_state[2] __attribute__((weak));
 extern struct dp_diag drumprobe_diag __attribute__((weak));     /* drumprobe.c, only in builds with the drum probe */
+extern uint32_t dp_type_hits[2] __attribute__((weak));           /* drumprobe.c: TE's loader / saver took our type */
+extern struct sp_ram sprobe_ram __attribute__((weak));          /* sprobe engine's RAM (engines.json "ram") */
+extern struct kh_diag knobhook_diag __attribute__((weak));      /* knobhook.c, only in builds with a knob hook */
 /* TE's retained SVG renderer (notes/svg-route.md; call conventions checked at TE's call sites). */
 extern int te_yaffs_open(const char *path, int flags, int mode);     /* FUN_01a997f4: fd, -1 if missing */
 extern int te_yaffs_close(int fd);                                    /* FUN_01a99908 */
@@ -875,10 +880,20 @@ void drum_ui_draw(int slot, int id)
     put_dec(put_str(p, " ROW "), (uint32_t)d->row_copied);
     text_fast(r, buf, FP(8), FP(34), FP(1), GREY);
     p = put_dec(put_str(buf, "R "), d->renders - dp_renders);
-    p = put_dec(put_str(p, " CYC "), d->cyc_max);
-    put_hex(put_str(p, " RATIO "), (uint32_t)d->ratio, 8);
+    put_dec(put_str(p, " CYC "), d->cyc_max);
     text_fast(r, buf, FP(8), FP(44), FP(1), GREY);
     dp_renders = d->renders;
+    /* save/load: TE's per-key loader (LD) and saver (SV) took the dbox path for our type, and a checksum of the
+     * slot's 24 x 8 values (compare before saving and after reloading) */
+    uint32_t sum = 0;
+    const int16_t *sk = te_drum_params + slot * DP_KEYS * 8;
+    for (int i = 0; i < DP_KEYS * 8; i++)
+        sum = sum * 31 + (uint16_t)sk[i];
+    const uint32_t *hits = dp_type_hits;
+    p = put_dec(put_str(buf, "LD "), hits ? hits[0] : 0);
+    p = put_dec(put_str(p, " SV "), hits ? hits[1] : 0);
+    put_hex(put_str(p, " SUM "), (sum ^ sum >> 16) & 0xFFFF, 4);
+    text_fast(r, buf, FP(124), FP(44), FP(1), WHITE);
 
     /* per knob: the edit key's value (what the encoder wrote), the newest voice's rendered value (after the LFO),
      * and dbox's range row 9 that TE's encoder clamps with (min max scale) */
@@ -899,6 +914,67 @@ void drum_ui_draw(int slot, int id)
         line_fast(r, x, FP(50), x + FP(3), FP(50), DARKBLUE);
         if (h > FP(1) >> 1)
             line_fp(r, x + (FP(3) >> 1), FP(50), x + (FP(3) >> 1), FP(50) - h, FP(3), GREEN);
+    }
+}
+
+/* ---- knob probe (src/engine/sprobe.c, src/slot/knobhook.c, notes/knob-hook.md): the 8 stored knobs, the hook ---- */
+
+static uint32_t sp_frames RAM = 0;
+static uint32_t sp_renders RAM = 0;
+
+static void draw_sprobe(void *r, int slot)
+{
+    static const uint8_t knob_colour[8] = { BLUE, GREEN, WHITE, ORANGE, LIGHTBLUE, LIGHTGREEN, GREY, ORANGE };
+    const int16_t *k = KNOBS(slot);
+    const struct kh_diag *h = &knobhook_diag;
+    const struct sp_ram *e = &sprobe_ram;
+    char buf[64], *p;
+    sp_frames++;
+    title(r, "KNOB PROBE", WHITE);
+    put_dec(put_str(buf, "F "), sp_frames);
+    text_fast(r, buf, FP(236), FP(7), FP(3) >> 1, WHITE);
+
+    /* the hook since boot: calls, last knob and delta, slot; render calls since the last frame (below the badges) */
+    uint32_t calls = h ? h->calls : 0;
+    p = put_dec(put_str(buf, "HOOK "), calls);
+    p = put_sdec(put_str(p, " KNOB "), h ? h->knob : -1);
+    p = put_sdec(put_str(p, " D "), h ? h->delta : 0);
+    put_sdec(put_str(p, " SLOT "), h ? h->slot : -1);
+    text_fast(r, buf, FP(8), FP(46), FP(1), WHITE);
+    uint32_t renders = e ? e->renders : 0;
+    put_dec(put_str(buf, "R "), renders - sp_renders);
+    sp_renders = renders;
+    text_fast(r, buf, FP(250), FP(46), FP(1), GREY);
+    /* what the hook last wrote into knobs 6, 7; NOW: they still hold it (SAME), or not (DIFF: clamped or rewritten),
+     * or nothing written since boot (-) */
+    int same = h && calls && k[SP_K6] == h->w6 && k[SP_K7] == h->w7;
+    p = put_hex(put_str(buf, "WROTE "), (uint16_t)(h ? h->w6 : 0), 4);
+    put_hex(put_str(p, " "), (uint16_t)(h ? h->w7 : 0), 4);
+    text_fast(r, buf, FP(8), FP(57), FP(1), GREY);
+    text_fast(r, !calls ? "NOW -" : same ? "NOW SAME" : "NOW DIFF", FP(166), FP(57), FP(1),
+              !calls ? GREY : same ? GREEN : RED);
+    /* from the stored values alone (survives a reboot): the sound's edit count in K6, and K7 = f(K6) */
+    int empty = k[SP_K6] == 0 && k[SP_K7] == 0, pair = k[SP_K6] < 0 && k[SP_K7] == sp_k7(k[SP_K6]);
+    p = put_dec(put_str(buf, "EDITS "), sp_edits(k[SP_K6]));
+    put_dec(put_str(p, " LAST K"), (uint32_t)k[SP_K6] & 7);
+    text_fast(r, buf, FP(8), FP(68), FP(1), GREY);
+    text_fast(r, pair ? "PAIR OK" : empty ? "PAIR -" : "PAIR BAD", FP(166), FP(68), FP(1),
+              pair ? GREEN : empty ? GREY : RED);
+
+    /* per knob (K0..K3 left, SHIFT's K4..K7 right): stored value in hex and signed decimal, then L = the last render
+     * call's param (after TE's LFO; white when it differs from the stored value) */
+    for (int i = 0; i < 8; i++) {
+        fp32 x = FP(i < 4 ? 8 : 166), y = FP(84 + 13 * (i & 3));
+        p = put_dec(put_str(buf, "K"), (uint32_t)i);
+        p = put_hex(put_str(p, " "), (uint16_t)k[i], 4);
+        put_sdec(put_str(p, " "), k[i]);
+        text_fast(r, buf, x, y, FP(1), knob_colour[i]);
+        p = put_str(buf, "L ");
+        if (e)
+            put_sdec(p, e->live[i]);
+        else
+            put_str(p, "-");
+        text_fast(r, buf, x + FP(98), y, FP(1), e && e->live[i] != k[i] ? WHITE : GREY);
     }
 }
 
@@ -1806,6 +1882,8 @@ void ui_draw(int engine, int slot)
         draw_va(r, k);
     else if (kind == KIND_INPROBE)
         draw_inprobe(r, k);
+    else if (kind == KIND_SPROBE)
+        draw_sprobe(r, slot);
     if (hold_on)
         hold_badge(r);
     if (chord_on || chord_learning)

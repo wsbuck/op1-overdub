@@ -53,6 +53,8 @@ def main():
     ap.add_argument("--no-chord", action="store_true", help="leave out CHORD")
     ap.add_argument("--svg-cost", action="store_true", help="show the screen render cost on the FX screens (development)")
     ap.add_argument("--debug-ui", action="store_true", help="show profiler lines on the engine screens (development)")
+    ap.add_argument("--db-trim", action="append", default=[], metavar="FOLDER=N",
+                    help="keep only the first N presets of a folder (e.g. to stay within MAX_SYNTH_PRESETS in a test image)")
     ap.add_argument("--name", default="OVERDUB", help="image name (default OVERDUB -> firmware/images/OVERDUB.OP1)")
     ap.add_argument("--version", default="dev", help="release version, used in the zip name (default dev)")
     ap.add_argument("--stock", default=os.path.join(ROOT, "firmware", "stock", "op1_246.op1"))
@@ -89,6 +91,7 @@ def main():
         "--presets", os.path.join(ROOT, "src", "slot", "iter_presets.json"))   # templates for our presets
     cmd = [sys.executable, os.path.join(ROOT, "tools", "build_slot.py"), stock_ldr, ej, out_ldr,
            "--db-in", iter_db, "--db-out", db, "--db-enable-filter", "--db-trim", "iter=0", "--build", os.path.join(build, "slot")]
+    cmd += [x for t in a.db_trim for x in ("--db-trim", t)]
     cmd += [] if a.no_hold else ["--hold"] + ([] if a.no_chord else ["--chord"])
     cmd += ["--fx", fj] if fxs else []
     cmd += ["--svg-cost"] * a.svg_cost + ["--debug-ui"] * a.debug_ui

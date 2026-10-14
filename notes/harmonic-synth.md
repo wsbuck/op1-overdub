@@ -86,6 +86,15 @@ Marks: **Confirmed** = read in the binary, our code or a cited source; **Hypothe
 - Presets: factory sounds are 8 packed values. `add_engine_db.py` needs an 8-value form, and a small encoder in
   gen_*.py turns `levels=[…24]` into knob values.
 
+## Knob hook (built for SAVEPROBE, 2026-10-14)
+- The hook and the type-3 rows are built and described in notes/knob-hook.md, with the probe engine `sprobe` and
+  the device questions (hook runs, SHIFT independence, packed values across save/load/reboot, clamping, LFO on 4..7).
+- **Confirmed constraint:** TE's patch validator rejects any `knobs[k]` outside the engine's row min..max (error 15)
+  and a rejected factory preset or slot stops the OP-1 at boot. So every knob that holds packed bits needs a
+  -32768..32767 row, and factory presets must be generated inside the rows (build_slot.py checks this).
+- **Confirmed:** TE stores the knobs sign-extended and loads them back with no clamp (`FUN_01a00d14`, `FUN_01a010f8`).
+  Whether anything else rewrites them is what SAVEPROBE tests.
+
 ## Where per-harmonic data can be stored
 | place | saves with the sound | survives reboot | status |
 |---|---|---|---|

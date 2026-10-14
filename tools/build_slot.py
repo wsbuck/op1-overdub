@@ -32,7 +32,12 @@ first id after the synth engines, runs on TE's dbox voice objects, and is src/sl
 (<source>_render, _note_on, _active, _note_off, _slot_init). TE's drum factory, drum ScreenId, drum encoder, patch
 validator and the dbox screen's update are patched to accept it. Its DB entry replaces the dbox preset "replace"
 (same folder and row count: factory + user drum presets must stay <= 58, patch.cpp:656) with that preset's patch,
-type and name changed ("preset"); the dbox_data it keeps is what the validator checks.
+type and name changed ("preset") and its dbox_data set to 24 x "dbox_default" (each value checked against the stock
+dbox presets' range: TE validates factory presets at boot). TE's per-key loader and saver are patched to treat its type
+like "dbox", so its per-key values load and save with the sound.
+Optional "ranges": 8 x [min, max, scale, type] for an engine's knob range row (default: RANGE_ROW, 0..0x7FFF type 0);
+defaults and presets must lie inside it (TE's patch validator rejects other knob values, error 15). "knob_hook": true
+(one engine at most) routes that engine's engine-page encoder turns through src/slot/knobhook.c (notes/knob-hook.md).
 """
 import argparse
 import json
@@ -49,7 +54,7 @@ import ldr  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRST_ID = 15
-UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5}   # must match enum ui_kind in src/slot/ui.c
+UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6}   # must match enum ui_kind in src/slot/ui.c
 # patch.cpp:616 `synthSynthes_preset_count <= kMaxSynthSynthes_presets` (0xb0 at 0x01a0582a): fixed array
 # of 0x38-byte entries at 0x01DDDB68. Counted without sampler presets (stock 160 + 11 iter + 4 va = 175
 # booted; 183 asserted).
@@ -77,6 +82,11 @@ DRUM_FACTORY_ASSERT = 0x01A1BA38           # `R0.L = 0x5A40` (the assert message
 DRUM_SCREEN_R1, DRUM_SCREEN_CC = 0x01A3BFE8, 0x01A3BFEA   # `R1 = 9`, `CC = R0 == R1` in FUN_01a3bfda
 DRUM_KNOB_R0, DRUM_KNOB_CC = 0x01A1E59A, 0x01A1E59C       # `R0 = 9`, `CC = R6 == R0` in FUN_01a1e57c
 VALIDATE_LOOKUP_CALL, TE_ENGINE_LOOKUP = 0x01A03884, 0x019B9810   # in the patch validator FUN_01a037a8
+# per-key loader FUN_01a0036c / saver FUN_019ffc50: CALL FUN_019bdea4 (JSON value ==) of "type" with Value("dbox")
+TYPE_EQ_LOAD_CALL, TYPE_EQ_SAVE_CALL, TE_JSON_EQ = 0x01A00630, 0x019FFFBA, 0x019BDEA4
+TE_JSON_STR, TE_JSON_FREE = 0x019BDC4C, 0x019BDD18      # Value(const char *), Value destructor (TE passes R1 = 2)
+# synth engine-page encoder (notes/knob-hook.md): CALL FUN_01a1dfec (Ranges.cpp:810) before FUN_01a00d14 stores knobs
+KNOB_APPLY_CALL, TE_KNOB_APPLY = 0x01A5063E, 0x01A1DFEC
 MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum presets + drum_user rows
 STOCK_DRUM_PRESETS = 24
 FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3}   # by source; must match ui.c's FX_* enum
@@ -97,7 +107,9 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          "_te_node_find": 0x019EB8AC, "_te_node_matrix": 0x019EAD58, "_te_svg_render": 0x01A3B4C8,
          "_te_svg_stroke": 0x01A3B854, "_te_svg_fill": 0x01A3B96C,
          "_te_drum_assert": DRUM_FACTORY_ASSERT + 4, "_te_dbox_voice": 0x0197189C, "_te_dbox_index": 0x01970DA8,
-         "_te_engine_lookup": TE_ENGINE_LOOKUP, "_dbox_page_update": DBOX_PAGE_UPDATE}
+         "_te_engine_lookup": TE_ENGINE_LOOKUP, "_dbox_page_update": DBOX_PAGE_UPDATE,
+         "_te_json_eq": TE_JSON_EQ, "_te_json_str": TE_JSON_STR, "_te_json_free": TE_JSON_FREE,
+         "_te_knob_apply": TE_KNOB_APPLY}
 # `Rx = 15` bounds: the name-table loops (entries, including aliases) and the factory/ScreenId id checks
 NAME_BOUNDS = [0x019B97D0, 0x019B9826]
 ID_BOUNDS = [0x01A1B7DC, 0x01A3BF44]
@@ -182,6 +194,18 @@ def main():
         sys.exit("need 1..47 engines")
     if len(drums) > 1:
         sys.exit("one drum engine at most (slot.S DRUM_HOOKS)")
+    hooked = [FIRST_ID + i for i, e in enumerate(engines) if e.get("knob_hook")]
+    if len(hooked) > 1 or any(e.get("drum") for e in engines if e.get("knob_hook")):
+        sys.exit("one synth engine with \"knob_hook\" at most (slot.S KNOB_HOOK)")
+    for e in engines:                   # TE's validator rejects knob values outside the row (patch.cpp, error 15)
+        if e.get("drum"):
+            continue
+        rows = e.get("ranges", [[0, 0x7FFF, 0x7FFF, 0]] * 8)
+        if len(rows) != 8 or any(len(r) != 4 or not -32768 <= r[0] < r[1] <= 32767 for r in rows):
+            sys.exit(f"engine {e['name']}: \"ranges\" must be 8 x [min, max, scale, type] with min < max")
+        for what, k in [("default", e["default"])] + [(n, v + [0] * (8 - len(v))) for n, v in e["presets"].items()]:
+            if any(not r[0] <= v <= r[1] for v, r in zip(k, rows)):
+                sys.exit(f"engine {e['name']}: {what} {k} outside its range row")
     os.makedirs(a.build, exist_ok=True)
     blocks = ldr.parse(open(a.stock, "rb").read())
 
@@ -242,12 +266,14 @@ def main():
         g += [f"_vtable{FIRST_ID + i}:", longs(vt[:5]) + f"    .long {e['addr']}    /* render */\n" + longs(vt[6:])]
     for e in drums:                     # TE's dbox vtable with render, note-on, active and note-off ours
         src = e["source"]
-        g += [f"    DRUM_HOOKS {drum_id}"]
+        g += [f"    DRUM_HOOKS {drum_id}, _name{drum_id}"]
         g += [f"    C_ENTRY _drum_{fn}_entry, _{src}_{fn}" for fn in ("render", "note_on", "active", "note_off", "slot_init")]
         g += ["    .align 4", "_drum_vtable:", longs(dvt[:5]) + "    .long _drum_render_entry\n" + longs(dvt[6:7])
               + "    .long _drum_note_on_entry\n" + longs(dvt[8:9]) + "    .long _drum_active_entry\n"
               + longs(dvt[10:11]) + "    .long _drum_note_off_entry",
               "    .global _drum_id", "_drum_id:", f"    .long {drum_id}"]
+    if hooked:
+        g += [f"    KNOB_HOOK {hooked[0]}", "    .align 4"]
     g += ["    .global _names", "_names:"]
     g += [f"    .long 0x{NAME_BLOB + o:08x}, {i}    /* {nm} */" for i, (o, nm) in enumerate(zip(NAME_OFFS, names))]
     g += [f"    .long _name{FIRST_ID + i}, {FIRST_ID + i}" for i in range(n)]
@@ -260,7 +286,9 @@ def main():
     # Screen kind per engine id 15.. (ui.c draws by kind, so ids can change): see UI_KINDS; 0 = none (drum)
     g += ["    .global _ui_kind", "_ui_kind:", "    .byte " + ", ".join(
         str(0 if e.get("drum") else UI_KINDS[e.get("ui", e["source"])]) for e in engines), "    .align 4"]
-    g += ["    .global _ranges", "_ranges:", "    .space 15 * 0x40"] + ["    RANGE_ROW"] * n
+    g += ["    .global _ranges", "_ranges:", "    .space 15 * 0x40"]
+    for e in engines:
+        g += ["    .short " + ", ".join(f"{v}" for r in e["ranges"] for v in r)] if "ranges" in e else ["    RANGE_ROW"]
     for j, t in enumerate(FLAG_TABLES):
         flags = bytearray(rd(t, 16) + bytes(count - 16))
         if drums:
@@ -330,11 +358,14 @@ def main():
          f"-I /engine {'-DUI_DEBUG ' if a.debug_ui else ''}{'-DSVG_COST ' if a.svg_cost else ''}-c -o /out/ui.o /src/ui.c; "
          "bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
          "-c -o /out/hold.o /src/hold.c; "
+         + ("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
+            "-I /engine -c -o /out/knobhook.o /src/knobhook.c; " if hooked else "")
          + "".join("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
                    f"-I /engine -c -o /out/drum_{e['source']}.o /src/{e['source']}.c; " for e in drums)
          + "".join("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
                    f"-c -o /out/fx_{f['source']}.o /src/{f['source']}.c; " for f in fxs) +
          f"bfin-elf-ld -nostdlib -T /out/slot.ld {syms} -o /out/slot.elf /out/slot.o /out/ui.o /out/hold.o "
+         + ("/out/knobhook.o " if hooked else "")
          + "".join(f"/out/fx_{f['source']}.o " for f in fxs) + "".join(f"/out/drum_{e['source']}.o " for e in drums) + "; "
          "bfin-elf-objcopy -O binary /out/slot.elf /out/slot.bin; "
          "bfin-elf-objdump -d /out/slot.elf > /out/slot.dis; bfin-elf-nm /out/slot.elf"],
@@ -410,8 +441,12 @@ def main():
         calls.append((HOLD_KEYUP_CALL, TE_NOTE_OFF, "_hold_keyup_entry"))
         if a.chord:
             calls.append((CHORD_KEYDOWN_CALL, TE_NOTE_ON, "_chord_keydown_entry"))
+    if hooked:
+        calls.append((KNOB_APPLY_CALL, TE_KNOB_APPLY, "_knob_hook"))
     if drums:
         calls.append((VALIDATE_LOOKUP_CALL, TE_ENGINE_LOOKUP, "_drum_validate_lookup"))
+        calls.append((TYPE_EQ_LOAD_CALL, TE_JSON_EQ, "_drum_type_eq_load"))
+        calls.append((TYPE_EQ_SAVE_CALL, TE_JSON_EQ, "_drum_type_eq_save"))
         cmd += ["--pointer", f"0x{DBOX_PAGE_UPDATE_SLOT:08x}=0x{DBOX_PAGE_UPDATE:08x}:0x{sym['_drum_ui_update']:08x}"]
         # the factory's assert path: `R0.L = 0x5A40` -> JUMP.L _drum_factory (which redoes it for other ids)
         new = branch_halves(DRUM_FACTORY_ASSERT, sym["_drum_factory"], 0xE200)
@@ -454,6 +489,14 @@ def main():
             if len(row) != 1:
                 sys.exit(f"drum engine {e['name']}: no single dbox preset named {e['replace']!r} to replace")
             patch = dict(json.loads(row[0][1]), type=e["name"], name=e["preset"])
+            if "dbox_default" in e:     # TE validates factory presets at boot: stay inside the stock dbox values
+                dd = e["dbox_default"]
+                stock_rows = [r for (p,) in con.execute("SELECT patch FROM drum_presets WHERE folder='dbox'")
+                              for r in json.loads(p).get("dbox_data", [])]
+                lo, hi = [min(r[k] for r in stock_rows) for k in range(8)], [max(r[k] for r in stock_rows) for k in range(8)]
+                if len(dd) != 8 or any(not lo[k] <= dd[k] <= hi[k] for k in range(8)):
+                    sys.exit(f"drum engine {e['name']}: dbox_default {dd} outside the stock dbox presets' {lo}..{hi}")
+                patch["dbox_data"] = [list(dd) for _ in range(24)]
             con.execute("UPDATE drum_presets SET patch=? WHERE id=?", (json.dumps(patch, separators=(",", ":")), row[0][0]))
             print(f"drum engine {drum_id} {e['name']}: drum preset {row[0][0]} {e['replace']!r} -> {e['preset']!r}")
         drum_presets = con.execute("SELECT count(*) FROM drum_presets").fetchone()[0]

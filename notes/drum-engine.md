@@ -2,7 +2,7 @@
 
 Static research 2026-10-13 (decompiles and disassembly of `OP1_vdk_246_dec.elf`, scratch in the session scratchpad
 `drum/`). **Confirmed** = read in the code, **Verified** = re-checked at the instruction, **Hypothesis** = inferred.
-Probe image: DRUMPROBE.OP1 (LOG.md test image 56).
+Probe images: DRUMPROBE.OP1 (LOG.md test image 56), SAVEPROBE.OP1 (57: save and load).
 
 ## Answer first
 - Drum engines are producers like synth engines, with the same name -> id table, but their own factory, voice loop,
@@ -14,7 +14,7 @@ Probe image: DRUMPROBE.OP1 (LOG.md test image 56).
   way our synth engines reuse iter's.
 - Per-key parameters exist: 24 keys x 8 int16 per drum slot; the drum knobs edit the last-pressed key's 8 values
   (SHIFT for 5-8). TE only loads/saves them for types `drum` and `dbox`, so a new type's knob edits are **not saved**
-  (Confirmed; the probe re-initialises them, see below).
+  (Confirmed). SAVEPROBE patches the loader's and saver's "dbox" compare to accept our type ("Save and load" below).
 - Drum patches are validated on load (patch.cpp:1018). A drum patch whose id is not 8 or 9 fails with error 13, and in
   drum context that is an **assert** (patch.cpp:221 "Invalid drum patch"). So the validator must treat the new id as
   dbox, and the patch must carry a valid `dbox_data`. Confirmed.
@@ -64,7 +64,9 @@ Probe image: DRUMPROBE.OP1 (LOG.md test image 56).
 ## Per-key parameters and knobs — Confirmed
 - `0x01AAADB4`: [8 drum slots][24 keys][8 int16] (0x180 per slot). Loaded by `FUN_01a0036c` and written back by
   `FUN_019ffc50` only when the patch `type` string is `"drum"` (pitch/start/end/... arrays) or `"dbox"` (`dbox_data`);
-  other types are skipped (the values stay what the slot held before).
+  other types are skipped (the values stay what the slot held before). Verified: each compares `type` first with
+  Value("drum"), then with Value("dbox") through `CALL FUN_019bdea4` (JSON value ==): loader `0x01A00630`, saver
+  `0x019FFFBA`. The saver only writes into the patch's existing JSON, then calls the patch's +0x34 hook.
 - Drum encoder `FUN_01977430`, page 0 (T1): `FUN_01a1e57c(knob 0..7, &delta, id, &params[slot][edit key])`.
   `id == 9` (`0x01A1E59A`) -> each knob k clamps params[k] with range-table **row 9** (the table build_slot.py moves;
   TE adds 0x240 to its base); other ids -> the sampler logic (knobs 1/2 and 5/6 are start/end, coupled) with row id.
@@ -103,8 +105,8 @@ New id N = first id after our synth engines, so nothing collides: synth 15.., dr
 Only ids that used to assert change behaviour in each patched function (ids >= 10 in ScreenId and the encoder; N in
 the factory and validator), so TE's drum sampler and dbox are untouched.
 Rejected: swapping dbox's render (changes TE's dbox); marking our sounds as dbox with a magic value (fragile, and
-the knobs would still edit dbox's meaning); hooking the per-key loader/saver's string compares (more code in TE's
-JSON paths, which run at boot: a bug there could stop the OP-1 from booting).
+the knobs would still edit dbox's meaning). Hooking the per-key loader/saver's compares was rejected for DRUMPROBE
+(boot risk) and done in SAVEPROBE with the smallest change found (next section).
 
 ## Boot safety
 - Drum slots load at boot, so every patched path runs at boot when a slot holds the probe. The validator wrapper only
@@ -114,6 +116,51 @@ JSON paths, which run at boot: a bug there could stop the OP-1 from booting).
   factory reset.
 - Drum preset count unchanged (24); user headroom stays 34.
 
+## Save and load (2026-10-14, SAVEPROBE)
+Static research (decompiles in the session scratchpad `save/`), then DRUMPROBE's device result.
+- **Snapshot save: Confirmed.** Holding a sound key runs `FUN_019ad090` (global controller): a 400-frame countdown; at
+  320 it checks free space and, in drum mode, `FUN_019feee4` (factory + user drum sounds < 58). Then, in drum mode:
+  `FUN_01995bac` reads the slot's row `SELECT patch FROM drum_slots WHERE id=%i`, parses it, sets `name`
+  (`%i%02i%02i_%02i%02i`, e.g. `20760319_2255`), writes `user/audio/preset_drum/snapshot/<name>.raw` (a copy of
+  the slot's sample for type `drum`, `FUN_01995868`; an empty file otherwise), then:
+  1. `FUN_01995b80` -> `FUN_019955ec("drum_user", ..., is_drum = 1)`: validates with `FUN_01a037a8` and only on success
+     `INSERT INTO drum_user (patch,folder)`. **A failed validation drops the sound silently** (no message).
+  2. `FUN_01995c88`: rewrites the slot's `drum_slots` row.
+  3. `FUN_01a04c48(slot patch, slot, json)` -> `FUN_01a04bb0`: validates again and **asserts** on failure
+     (patch.cpp:221).
+  4. `FUN_01a04fe8`: rebuilds the drum preset list from `drum_presets` and `drum_user`, validating every row with the
+     assert (and the <= 58 count assert): this also runs at boot.
+  No step compares the type with "drum"/"dbox" except the raw-file copy.
+- **The DRUMPROBE hypothesis was wrong. Confirmed** by the device (coordinator, 2026-10-14): the save wrote
+  `20760319_2255` (type `dprobe`), and every image without `dprobe` stops at boot on it ("Invalid drum patch
+  20760319_2255: error 1": unknown name). A dropped save was impossible anyway: step 3 would have asserted. The saved
+  sound carries the `dbox_data` the slot's patch held, i.e. whathump's (the probe preset's), **not the edits**: the
+  saver skipped our type. Loading it skipped `dbox_data` too, and DRUMPROBE's marker check then rewrote the defaults.
+- **Why it wasn't listed: not found.** The drum browser (`FUN_019776dc` -> `FUN_01a028ec`) adds every factory and
+  user drum sound by folder and name (`FUN_01a185f4(list, folder, name)`), with no type filter; user sounds are
+  inserted with the folder `FUN_01995bac` sets. Hypothesis: it is listed in a user/snapshot folder rather than with
+  `drum probe` in dbox. SAVEPROBE's test asks where it shows up.
+- **A `dprobe` sound without `dbox_data` does not assert. Confirmed** (jsoncpp 0.5.0 in TE): the validator reads
+  `dbox_data[k][i]` with non-const `[]`, which turns a missing member into nested arrays of nulls, and `asInt(null)` =
+  0 (`FUN_019be0c0` case 0), which is inside row 9 (K0 -24320..24832, K1-K7 from 0). The loader's const `[]`
+  (`FUN_019beb70`/`FUN_019bea94`) returns the shared null (`0x01DD4FE4`) for a missing member or index. So such a sound
+  loads as zeros. A wrong shape (a string where an int is expected) asserts, in TE's validator as for stock.
+- **Fix (SAVEPROBE): the two compares.** Both `CALL FUN_019bdea4` sites go to `_drum_type_eq_load` / `_save`
+  (entry.inc `DRUM_TYPE_EQ`): TE's own compare first, returned unchanged when true ("dbox"); only when it is 0, a
+  second compare with Value("dprobe"), built and destroyed exactly as TE builds its temporaries (`FUN_019bdc4c` into
+  16 bytes of stack, `FUN_019bdd18(v, 2)`). "drum" never reaches these sites (its own compare comes first), so `drum`
+  and `dbox` patches take the same path with the same result; the only extra work is for other types. Our type now
+  loads and saves `dbox_data` like dbox. Counted in `dp_type_hits` (screen: LD / SV).
+- **Marker removed.** The loader runs before the factory (`FUN_01a006c0`: id, dyna_env, `FUN_01a0036c`, then
+  `FUN_01a85e40` -> factory -> `drumprobe_slot_init`), so DRUMPROBE's "defaults unless key 23's K7 holds the marker"
+  would have overwritten every loaded sound without the marker (whathump's data, or a user edit of K7 on key 23). The
+  factory preset now carries the defaults in its `dbox_data` (engines.json `dbox_default`, checked against the stock
+  dbox presets' per-column range by build_slot.py) and nothing rewrites a slot.
+- Boot: the compares run at boot for every drum slot (TE loads each slot). For `dbox` slots the only change is a few
+  instructions around TE's own compare; `drum` slots don't reach them. Risk: an error in our wrapper would stop the OP-1 at boot with a dbox or
+  probe kit in a slot; the wrapper is checked in the simulator against stand-ins for TE's JSON functions, with the
+  register-preservation harness (`src/slot/test/knobhook_check.py`).
+
 ## DRUMPROBE as built (2026-10-13)
 - `src/slot/drumprobe.c` (+ `drumprobe.h`), in the slot block; engines.json `{"drum": true, "test": true}` entry
   `dprobe`; `build.py --engines va,wavetable,grain,dprobe --name DRUMPROBE` -> va 15, wavetable 16, grain 17,
@@ -122,8 +169,8 @@ JSON paths, which run at boot: a bug there could stop the OP-1 from booting).
   render/note-on/active/note-off -> C_ENTRY wrappers. Checked in the patched LDR (scratch `drum/verify.py`).
 - Engine (drumprobe.c header): sine with a pitch drop per key (E1 + key semitones), noise burst on odd keys,
   velocity from `0xFF8012EC[v]`; knobs per key: blue tune, green decay, white pitch drop, orange noise level,
-  SHIFT+blue noise decay; K7 holds the slot marker. `drumprobe_slot_init` (from the factory) writes these defaults
-  into a slot whose key 24 lacks the marker, and copies range row 9 to row 18 once TE has filled it.
+  SHIFT+blue noise decay. In DRUMPROBE, K7 held a slot marker and `drumprobe_slot_init` rewrote defaults without it
+  (removed in SAVEPROBE); it copies range row 9 to our row once TE has filled it.
 - Screen (ui.c `drum_ui_draw`): last note-on (key, velocity, voice, note-on/off counts), edit key, slot, id, slot inits,
   row copied, render calls per frame, worst render cycles, TE's pitch ratio; per knob the edit key's value, the newest
   voice's rendered value and row 9's min..max and scale; a level bar per voice.

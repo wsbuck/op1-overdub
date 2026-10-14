@@ -1,5 +1,5 @@
 /* Simulator driver for any engine: calls _render (trampoline) like TE's voice loop.
- *   engine_main p0 p1 p2 p3 inc calls [inc_end|0] [sampler[:gain knob]]
+ *   engine_main p0 p1 p2 p3 inc calls [inc_end|0] [sampler[:gain knob] | k4:p4,p5,p6,p7]
  * Note-on state as TE writes it (state bytes 0..3 and 8..11 = 0x80000000, 16..23 cleared). The pitch increment glides
  * linearly from inc to inc_end (default inc) over the run. Prints one sample per line, then on stderr
  * "cycles max <n> mean <n> guard <hex>": CYCLES per render call and the out[128] overrun guard. */
@@ -56,6 +56,7 @@ volatile int16_t te_audio_in[64];
 volatile uint32_t te_rx_sel;
 volatile int32_t te_rx[256];
 volatile int32_t te_alt_in[128];
+uint32_t sprobe_ram[16];   /* knob probe's screen record (sprobe.h: renders, live[8]); printed on stderr */
 static int32_t tri(int n, int p, int a)
 {
     int t = n % p;
@@ -88,7 +89,7 @@ int main(int argc, char **argv)
     /* vptr, then TE's note-on state: state bytes 0..3 and 8..11 = 0x80000000, 16..23 cleared */
     static uint32_t voice[9] = { 0x019103CC, 0x80000000u, 0, 0x80000000u, 0, 0, 0 };
     static int16_t out[130];
-    int16_t params[4];
+    int16_t params[8] = { 0 };
     if (argc < 7)
         return 2;
     for (int i = 0; i < 4; i++)
@@ -99,6 +100,8 @@ int main(int argc, char **argv)
         if (argv[8][7] == ':')
             te_knobs[1][7] = (int16_t)atoi(argv[8] + 8);
     }
+    if (argc > 8 && !strncmp(argv[8], "k4:", 3))              /* SHIFT knobs 4..7 */
+        sscanf(argv[8] + 3, "%hd,%hd,%hd,%hd", &params[4], &params[5], &params[6], &params[7]);
     int calls = atoi(argv[6]);
     uint32_t cmax = 0;
     double csum = 0;
@@ -121,7 +124,9 @@ int main(int argc, char **argv)
         for (int i = 0; i < 128; i++)
             printf("%d\n", out[i]);
     }
-    fprintf(stderr, "cycles max %lu mean %.0f guard %04x%04x\n", (unsigned long)cmax, csum / calls,
-            (uint16_t)out[128], (uint16_t)out[129]);
+    const int16_t *live = (const int16_t *)&sprobe_ram[1];
+    fprintf(stderr, "cycles max %lu mean %.0f guard %04x%04x sprobe %lu %d %d %d %d %d %d %d %d\n", (unsigned long)cmax,
+            csum / calls, (uint16_t)out[128], (uint16_t)out[129], (unsigned long)sprobe_ram[0], live[0], live[1], live[2],
+            live[3], live[4], live[5], live[6], live[7]);
     return 0;
 }

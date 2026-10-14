@@ -1,7 +1,7 @@
 /* Simulator driver for drumprobe_check.py: plays the drum probe like TE's drum voice loop (notes/drum-engine.md),
  * every call through its firmware entry wrapper with the ABI sentinel check (fx_abi.S).
  *   drumprobe_main KEY VEL BLOCKS [P0 .. P7]   one note: slot init, note-on on voice 3, BLOCKS renders
- *   drumprobe_main init                        slot init cases (defaults, kept edits, range row copy)
+ *   drumprobe_main init                        slot init cases (loaded values kept, range row copy)
  * stdout: one sample per line; stderr: "cycles max <n> guard <hex> active <a0> <a1> ... <aBLOCKS-1> noteons <n>"
  * (active() after each block). Exit 1 on an ABI mismatch. */
 #include <stdio.h>
@@ -46,7 +46,7 @@ static int init_cases(void)
 {
     int16_t *k = te_drum_params + 2 * DP_KEYS * 8;
     for (int i = 0; i < DP_KEYS * 8; i++)
-        k[i] = (int16_t)(i * 77 - 5000);                     /* another engine's values */
+        k[i] = (int16_t)(i * 77 - 5000);                     /* the values TE's loader put there (dbox_data) */
     for (int i = 0; i < 8; i++) {                            /* row 9 as TE fills it: sane */
         ranges[9 * 32 + 4 * i] = (int16_t)(i ? 0 : -32767);
         ranges[9 * 32 + 4 * i + 1] = 32767;
@@ -55,17 +55,17 @@ static int init_cases(void)
     for (int i = 0; i < 32; i++)
         ranges[18 * 32 + i] = (int16_t)(i % 4 == 1 || i % 4 == 2 ? 0x7FFF : 0);
     call(dp_slot_init_entry, (void *)2, 0, 0);
-    int ok_defaults = k[0] == 0 && k[1] == 16384 && k[8 * 23 + 7] == DP_MAGIC && k[8 * 7 + 3] == 20000;
     int ok_row = drumprobe_diag.row_copied == 1 && ranges[18 * 32] == -32767 && ranges[18 * 32 + 2] == 0x2000;
-    k[8 * 5 + 1] = 1234;                                     /* the user turns green on key 5 */
     call(dp_slot_init_entry, (void *)(2 + 8), 0, 0);         /* slot & 7 */
-    int ok_kept = k[8 * 5 + 1] == 1234 && drumprobe_diag.inits == 1;
+    int ok_kept = drumprobe_diag.inits == 2;
+    for (int i = 0; i < DP_KEYS * 8; i++)                    /* loaded values never rewritten */
+        ok_kept &= k[i] == (int16_t)(i * 77 - 5000);
     ranges[9 * 32 + 4 * 3] = ranges[9 * 32 + 4 * 3 + 1];     /* row 9 not filled yet: our row stays */
     drumprobe_diag.row_copied = 0;
     ranges[18 * 32] = 0;
     call(dp_slot_init_entry, (void *)0, 0, 0);
     int ok_norow = drumprobe_diag.row_copied == 0 && ranges[18 * 32] == 0;
-    printf("defaults %d row %d kept %d norow %d\n", ok_defaults, ok_row, ok_kept, ok_norow);
+    printf("kept %d row %d norow %d\n", ok_kept, ok_row, ok_norow);
     if (mask)
         fprintf(stderr, "abi mismatch mask %08x\n", mask);
     return mask ? 1 : 0;
