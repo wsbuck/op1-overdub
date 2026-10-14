@@ -3,17 +3,20 @@
  * Loads sentinels into every register a TE caller may rely on (R4-R7, P3-P5, FP, SP, LC0/LT0/LB0,
  * LC1/LT1/LB1, L0-L3), calls `entry` with R0 = this, R1 = a1, R2 = a2 and a3 at [SP + 12] (the stereo FX
  * call's 4th argument, as at 0xFFA017E6), and returns a bitmask of the registers that changed. The loop
- * registers point at _never, so armed counters can't fire. */
+ * registers point at _never, so armed counters can't fire. Assembled with --defsym NO_FX=1, only fx_abi_call
+ * (drumprobe_check.py uses it for the drum probe's entries). */
     .include "entry.inc"
 
     .text
     .align 4
+    .ifndef NO_FX
     FX_MONO_ENTRY _ensemble_mono_entry, _ensemble_mono
     FX_STEREO_ENTRY _ensemble_stereo_entry, _ensemble_stereo
     FX_MONO_ENTRY _pingpong_mono_entry, _pingpong_mono
     FX_STEREO_ENTRY _pingpong_stereo_entry, _pingpong_stereo
     FX_MONO_ENTRY _distortion_mono_entry, _distortion_mono
     FX_STEREO_ENTRY _distortion_stereo_entry, _distortion_stereo
+    .endif
 
     .macro CHECK reg, hi, lo, bit
     R1 = \reg;

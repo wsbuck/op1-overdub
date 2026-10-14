@@ -27,11 +27,18 @@ With --fx FX.json (e.g. src/slot/fx.json), adds our FX as FX ids 8, 9, ... and t
   optional "ram": "0x01E80000", "ram_size": "0x60000" defines _<source>_ram there (a FREE SDRAM buffer: undefined
   contents at boot); the range is reserved, so no code block may overlap it.
 Each is src/slot/<source>.c exporting <source>_mono and <source>_stereo (notes/fx-slot.md).
+An engine with "drum": true is a drum engine (one only; a test engine for now, notes/drum-engine.md): it gets the
+first id after the synth engines, runs on TE's dbox voice objects, and is src/slot/<source>.c in the slot block
+(<source>_render, _note_on, _active, _note_off, _slot_init). TE's drum factory, drum ScreenId, drum encoder, patch
+validator and the dbox screen's update are patched to accept it. Its DB entry replaces the dbox preset "replace"
+(same folder and row count: factory + user drum presets must stay <= 58, patch.cpp:656) with that preset's patch,
+type and name changed ("preset"); the dbox_data it keeps is what the validator checks.
 """
 import argparse
 import json
 import os
 import re
+import shutil
 import struct
 import sqlite3
 import subprocess
@@ -61,6 +68,17 @@ SYNTH_SHIFTKEY_SLOT, TE_SYNTH_SHIFTKEY = 0x019119B0, 0x01A50904
 ITER_PAGE_UPDATE_SLOT, ITER_PAGE_UPDATE = 0x01910418, 0x019B9EA4
 # FX screen: the filter FX screen page (object 0x01DD8B44) vtable 0x01910CD4, slot +0x1C = update (notes/fx-slot.md)
 FILTER_PAGE_UPDATE_SLOT, FILTER_PAGE_UPDATE = 0x01910CF0, 0x019E8308
+# Drum engine (notes/drum-engine.md): dbox's voice ctor/index setter, vtable and screen update; the code sites patched
+DBOX = 9
+DBOX_VTABLE = 0x0190F8A4                   # +0x0C dtor, +0x14 render, +0x1C note-on, +0x24 active, +0x2C note-off
+DBOX_FNS = (0x01970EBC, 0x01970EE8, 0x01970DE6, 0x01970E5C, 0x01970E7E)
+DBOX_PAGE_UPDATE_SLOT, DBOX_PAGE_UPDATE = 0x0190F8F0, 0x01972470
+DRUM_FACTORY_ASSERT = 0x01A1BA38           # `R0.L = 0x5A40` (the assert message): -> JUMP.L _drum_factory
+DRUM_SCREEN_R1, DRUM_SCREEN_CC = 0x01A3BFE8, 0x01A3BFEA   # `R1 = 9`, `CC = R0 == R1` in FUN_01a3bfda
+DRUM_KNOB_R0, DRUM_KNOB_CC = 0x01A1E59A, 0x01A1E59C       # `R0 = 9`, `CC = R6 == R0` in FUN_01a1e57c
+VALIDATE_LOOKUP_CALL, TE_ENGINE_LOOKUP = 0x01A03884, 0x019B9810   # in the patch validator FUN_01a037a8
+MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum presets + drum_user rows
+STOCK_DRUM_PRESETS = 24
 FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3}   # by source; must match ui.c's FX_* enum
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
@@ -70,11 +88,16 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          "_te_synth_slot": 0x01AAAC0C,   # grain_source.h
          # audio-input buffers (src/engine/inprobe.h, notes/input.md; as src/engine/build.sh)
          "_te_audio_in": 0xFF800CB4, "_te_rx_sel": 0xFF800364, "_te_rx": 0xFF800370, "_te_alt_in": 0x01AB2E2C,
+         # drum side (notes/drum-engine.md, src/slot/drumprobe.h)
+         "_te_drum_key": 0xFF801334, "_te_drum_vel": 0xFF8012EC, "_te_drum_ratio": 0xFF801304,
+         "_te_drum_edit": 0xFF801044, "_te_drum_params": 0x01AAADB4,
          "_te_fx_filter_mono_ctor": 0x019E77B4, "_te_fx_filter_stereo_ctor": 0x019E784C,
          # TE's retained SVG renderer (notes/svg-route.md)
          "_te_yaffs_open": 0x01A997F4, "_te_yaffs_close": 0x01A99908, "_te_svg_load": 0x019FB458,
          "_te_node_find": 0x019EB8AC, "_te_node_matrix": 0x019EAD58, "_te_svg_render": 0x01A3B4C8,
-         "_te_svg_stroke": 0x01A3B854, "_te_svg_fill": 0x01A3B96C}
+         "_te_svg_stroke": 0x01A3B854, "_te_svg_fill": 0x01A3B96C,
+         "_te_drum_assert": DRUM_FACTORY_ASSERT + 4, "_te_dbox_voice": 0x0197189C, "_te_dbox_index": 0x01970DA8,
+         "_te_engine_lookup": TE_ENGINE_LOOKUP, "_dbox_page_update": DBOX_PAGE_UPDATE}
 # `Rx = 15` bounds: the name-table loops (entries, including aliases) and the factory/ScreenId id checks
 NAME_BOUNDS = [0x019B97D0, 0x019B9826]
 ID_BOUNDS = [0x01A1B7DC, 0x01A3BF44]
@@ -119,6 +142,15 @@ FX_TABLE_REFS = {                          # (table address as loaded, offset) -
 }
 
 
+def branch_halves(pc, target, op):
+    """CALL (op 0xE300) / JUMP.L (0xE200) pcrel25m2: hw0 = op | off[23:16], hw1 = off[15:0], off = (target - pc) / 2"""
+    off = (target - pc) >> 1
+    if not -(1 << 23) <= off < (1 << 23):
+        sys.exit(f"0x{pc:08x} cannot reach 0x{target:08x}")
+    off &= 0xFFFFFF
+    return op | (off >> 16), off & 0xFFFF
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stock")
@@ -141,10 +173,15 @@ def main():
     if a.chord and not a.hold:
         sys.exit("--chord needs --hold (chord notes are released through the key-up hook)")
     engines = json.load(open(a.engines))
+    drums = [e for e in engines if e.get("drum")]
+    engines = [e for e in engines if not e.get("drum")] + drums      # ids: synth engines first, then the drum engine
     n = len(engines)
     count = FIRST_ID + n
-    if not 1 <= n or count > 63:
-        sys.exit("need 1..48 engines")
+    drum_id = count - 1 if drums else None
+    if not 1 <= n or count > 62:
+        sys.exit("need 1..47 engines")
+    if len(drums) > 1:
+        sys.exit("one drum engine at most (slot.S DRUM_HOOKS)")
     os.makedirs(a.build, exist_ok=True)
     blocks = ldr.parse(open(a.stock, "rb").read())
 
@@ -168,9 +205,15 @@ def main():
             or name_count > 63:
         sys.exit(f"unexpected stock tables (names {names}, render 0x{vt[5]:08x}) or engine name clash")
 
+    dvt = struct.unpack("<12I", rd(DBOX_VTABLE, 48))
+    if drums and tuple(dvt[3::2]) != DBOX_FNS:
+        sys.exit(f"unexpected stock dbox vtable {[hex(w) for w in dvt]}")
+
     # Build each engine at its address; remember each one's data blob address for the screen (ui.c).
     data_syms = {}
     for e in engines:
+        if e.get("drum"):
+            continue                                              # built into the slot block below
         out = os.path.join(a.build, e["name"])
         os.makedirs(out, exist_ok=True)
         ram = f"--defsym=_{e['source']}_ram={e['ram']}" if "ram" in e else ""
@@ -191,22 +234,37 @@ def main():
 
     g = ["/* Generated by tools/build_slot.py from the stock image and engines.json. TE data: do not commit. */",
          "    .text", "    .align 4"]
-    for i in range(n):
+    nsyn = n - len(drums)
+    for i in range(nsyn):
         g += [f"_factory_case{FIRST_ID + i}:", f"    FACTORY_CASE _vtable{FIRST_ID + i}"]
     g += ["    .align 4"]
-    for i, e in enumerate(engines):
+    for i, e in enumerate(engines[:nsyn]):
         g += [f"_vtable{FIRST_ID + i}:", longs(vt[:5]) + f"    .long {e['addr']}    /* render */\n" + longs(vt[6:])]
+    for e in drums:                     # TE's dbox vtable with render, note-on, active and note-off ours
+        src = e["source"]
+        g += [f"    DRUM_HOOKS {drum_id}"]
+        g += [f"    C_ENTRY _drum_{fn}_entry, _{src}_{fn}" for fn in ("render", "note_on", "active", "note_off", "slot_init")]
+        g += ["    .align 4", "_drum_vtable:", longs(dvt[:5]) + "    .long _drum_render_entry\n" + longs(dvt[6:7])
+              + "    .long _drum_note_on_entry\n" + longs(dvt[8:9]) + "    .long _drum_active_entry\n"
+              + longs(dvt[10:11]) + "    .long _drum_note_off_entry",
+              "    .global _drum_id", "_drum_id:", f"    .long {drum_id}"]
     g += ["    .global _names", "_names:"]
     g += [f"    .long 0x{NAME_BLOB + o:08x}, {i}    /* {nm} */" for i, (o, nm) in enumerate(zip(NAME_OFFS, names))]
     g += [f"    .long _name{FIRST_ID + i}, {FIRST_ID + i}" for i in range(n)]
     g += [f"    .long _alias{j}, {eid}    /* alias */" for j, (_, eid) in enumerate(aliases)]
-    g += ["    .global _factory", "_factory:", longs(fjt)] + [f"    .long _factory_case{FIRST_ID + i}" for i in range(n)]
-    g += ["    .global _screens", "_screens:", longs(sjt)] + [f"    .long 0x{sjt[14]:08x}" for _ in range(n)]
-    # Screen kind per engine id 15.. (ui.c draws by kind, so ids can change): see UI_KINDS
-    g += ["    .global _ui_kind", "_ui_kind:", "    .byte " + ", ".join(str(UI_KINDS[e.get("ui", e["source"])]) for e in engines), "    .align 4"]
+    # A drum id on the synth side gets TE's synth-side cases for dbox (asserts), as TE does for 8 and 9.
+    g += ["    .global _factory", "_factory:", longs(fjt)] + [f"    .long _factory_case{FIRST_ID + i}" for i in range(nsyn)]
+    g += [f"    .long 0x{fjt[DBOX]:08x}    /* drum engine: dbox's case */" for _ in drums]
+    g += ["    .global _screens", "_screens:", longs(sjt)] + [f"    .long 0x{sjt[14]:08x}" for _ in range(nsyn)]
+    g += [f"    .long 0x{sjt[DBOX]:08x}    /* drum engine: dbox's case */" for _ in drums]
+    # Screen kind per engine id 15.. (ui.c draws by kind, so ids can change): see UI_KINDS; 0 = none (drum)
+    g += ["    .global _ui_kind", "_ui_kind:", "    .byte " + ", ".join(
+        str(0 if e.get("drum") else UI_KINDS[e.get("ui", e["source"])]) for e in engines), "    .align 4"]
     g += ["    .global _ranges", "_ranges:", "    .space 15 * 0x40"] + ["    RANGE_ROW"] * n
     for j, t in enumerate(FLAG_TABLES):
-        flags = rd(t, 16) + bytes(count - 16)
+        flags = bytearray(rd(t, 16) + bytes(count - 16))
+        if drums:
+            flags[drum_id] = flags[DBOX]                          # the LFO modules treat it as dbox
         g += [f"    .global _flags{j}", f"_flags{j}:", "    .byte " + ", ".join(str(b) for b in flags), "    .align 4"]
     for i, e in enumerate(engines):
         g += ["    .align 4", f"_name{FIRST_ID + i}:", f"    .asciz \"{e['name']}\""]   # aligned like TE's
@@ -273,9 +331,11 @@ def main():
          "bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
          "-c -o /out/hold.o /src/hold.c; "
          + "".join("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
+                   f"-I /engine -c -o /out/drum_{e['source']}.o /src/{e['source']}.c; " for e in drums)
+         + "".join("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
                    f"-c -o /out/fx_{f['source']}.o /src/{f['source']}.c; " for f in fxs) +
          f"bfin-elf-ld -nostdlib -T /out/slot.ld {syms} -o /out/slot.elf /out/slot.o /out/ui.o /out/hold.o "
-         + "".join(f"/out/fx_{f['source']}.o " for f in fxs) + "; "
+         + "".join(f"/out/fx_{f['source']}.o " for f in fxs) + "".join(f"/out/drum_{e['source']}.o " for e in drums) + "; "
          "bfin-elf-objcopy -O binary /out/slot.elf /out/slot.bin; "
          "bfin-elf-objdump -d /out/slot.elf > /out/slot.dis; bfin-elf-nm /out/slot.elf"],
         capture_output=True, text=True)
@@ -334,7 +394,7 @@ def main():
                 sys.exit(f"fx {f['name']}: \"ram\" needs \"ram_size\"")
             lo = int(f["ram"], 16)
             cmd += ["--reserve", f"0x{lo:08x}-0x{lo + int(f['ram_size'], 16):08x}={f['source']}_ram"]
-    for e in engines:
+    for e in engines[:nsyn]:
         if "ram" in e:
             lo = int(e["ram"], 16)
             cmd += ["--reserve", f"0x{lo:08x}-0x{lo + int(e['ram_size'], 16):08x}={e['source']}_ram",
@@ -344,25 +404,32 @@ def main():
     cmd += ["--pointer", f"0x{ITER_PAGE_UPDATE_SLOT:08x}=0x{ITER_PAGE_UPDATE:08x}:0x{sym['_ui_update']:08x}"]
     if fxs:
         cmd += ["--pointer", f"0x{FILTER_PAGE_UPDATE_SLOT:08x}=0x{FILTER_PAGE_UPDATE:08x}:0x{sym['_fx_ui_update']:08x}"]
+    calls = []                                                    # (pc, stock target, our symbol)
     if a.hold:
         cmd += ["--pointer", f"0x{SYNTH_SHIFTKEY_SLOT:08x}=0x{TE_SYNTH_SHIFTKEY:08x}:0x{sym['_hold_shiftkey_entry']:08x}"]
-        # CALL pcrel25m2: hw0 = 0xE300 | off[23:16], hw1 = off[15:0], off = (target - pc) / 2
-        def call_halves(pc, target):
-            off = (target - pc) >> 1
-            if not -(1 << 23) <= off < (1 << 23):
-                sys.exit(f"CALL at 0x{pc:08x} cannot reach 0x{target:08x}")
-            off &= 0xFFFFFF
-            return 0xE300 | (off >> 16), off & 0xFFFF
-        calls = [(HOLD_KEYUP_CALL, TE_NOTE_OFF, "_hold_keyup_entry")]
+        calls.append((HOLD_KEYUP_CALL, TE_NOTE_OFF, "_hold_keyup_entry"))
         if a.chord:
             calls.append((CHORD_KEYDOWN_CALL, TE_NOTE_ON, "_chord_keydown_entry"))
-        for pc, stock, ours in calls:
-            old = call_halves(pc, stock)
-            new = call_halves(pc, sym[ours])
-            if (half(pc), half(pc + 2)) != old:
-                sys.exit(f"0x{pc:08x} is not the expected CALL 0x{stock:08x}")
-            cmd += ["--half", f"0x{pc:08x}=0x{old[0]:04x}:0x{new[0]:04x}",
-                    "--half", f"0x{pc + 2:08x}=0x{old[1]:04x}:0x{new[1]:04x}"]
+    if drums:
+        calls.append((VALIDATE_LOOKUP_CALL, TE_ENGINE_LOOKUP, "_drum_validate_lookup"))
+        cmd += ["--pointer", f"0x{DBOX_PAGE_UPDATE_SLOT:08x}=0x{DBOX_PAGE_UPDATE:08x}:0x{sym['_drum_ui_update']:08x}"]
+        # the factory's assert path: `R0.L = 0x5A40` -> JUMP.L _drum_factory (which redoes it for other ids)
+        new = branch_halves(DRUM_FACTORY_ASSERT, sym["_drum_factory"], 0xE200)
+        halves += [(DRUM_FACTORY_ASSERT, 0xE100, new[0]), (DRUM_FACTORY_ASSERT + 2, 0x5A40, new[1])]
+        # drum ScreenId: `R1 = 9; CC = R0 == R1` -> `R1 = id + 1; CC = R0 < R1 (IU)`: 9..id -> dbox's screen
+        halves += [(DRUM_SCREEN_R1, 0x6049, 0x6001 | (drum_id + 1) << 3), (DRUM_SCREEN_CC, 0x0808, 0x0988)]
+        # drum encoder: `R0 = 9; CC = R6 == R0` -> `R0 = 8; CC = R0 < R6 (IU)`: ids > 8 take dbox's path (row 9)
+        halves += [(DRUM_KNOB_R0, 0x6048, 0x6040), (DRUM_KNOB_CC, 0x0806, 0x09B0)]
+        for addr, old, _ in halves[-6:]:
+            if half(addr) != old:
+                sys.exit(f"0x{addr:08x}: expected 0x{old:04x}, found 0x{half(addr):04x}")
+    for pc, stock, ours in calls:
+        old = branch_halves(pc, stock, 0xE300)
+        new = branch_halves(pc, sym[ours], 0xE300)
+        if (half(pc), half(pc + 2)) != old:
+            sys.exit(f"0x{pc:08x} is not the expected CALL 0x{stock:08x}")
+        cmd += ["--half", f"0x{pc:08x}=0x{old[0]:04x}:0x{new[0]:04x}",
+                "--half", f"0x{pc + 2:08x}=0x{old[1]:04x}:0x{new[1]:04x}"]
     cmd += [x for addr, old, new in halves for x in ("--half", f"0x{addr:08x}=0x{old:04x}:0x{new:04x}")]
     subprocess.run(cmd, check=True)
     print(f"{len(halves)} halfword patches; slot symbols:",
@@ -370,15 +437,29 @@ def main():
 
     if a.db_in and a.db_out:
         src = a.db_in
-        for i, e in enumerate(engines):
-            dst = a.db_out if i == n - 1 else os.path.join(a.build, f"db_{i}.db")
+        for i, e in enumerate(engines[:nsyn]):
+            dst = a.db_out if i == nsyn - 1 else os.path.join(a.build, f"db_{i}.db")
             cmd = [sys.executable, os.path.join(ROOT, "tools", "add_engine_db.py"), src, dst,
                    "--type", e["name"], "--default", json.dumps(e["default"])]
             cmd += [x for name, k in e["presets"].items() for x in ("--preset", f"{name}={','.join(map(str, k))}")]
             cmd += ["--patch", json.dumps(e["patch"])] if "patch" in e else []
             subprocess.run(cmd, check=True)
             src = dst
+        if not nsyn:
+            shutil.copyfile(src, a.db_out)
         con = sqlite3.connect(a.db_out)
+        for e in drums:                 # replace a dbox preset: keeps the drum preset count (boot assert at > 58)
+            row = [(rid, p) for rid, p in con.execute("SELECT id, patch FROM drum_presets WHERE folder='dbox'")
+                   if json.loads(p).get("name") == e["replace"]]
+            if len(row) != 1:
+                sys.exit(f"drum engine {e['name']}: no single dbox preset named {e['replace']!r} to replace")
+            patch = dict(json.loads(row[0][1]), type=e["name"], name=e["preset"])
+            con.execute("UPDATE drum_presets SET patch=? WHERE id=?", (json.dumps(patch, separators=(",", ":")), row[0][0]))
+            print(f"drum engine {drum_id} {e['name']}: drum preset {row[0][0]} {e['replace']!r} -> {e['preset']!r}")
+        drum_presets = con.execute("SELECT count(*) FROM drum_presets").fetchone()[0]
+        if drum_presets > STOCK_DRUM_PRESETS:
+            sys.exit(f"{drum_presets} drum presets: more than stock's {STOCK_DRUM_PRESETS} would leave users fewer than "
+                     f"{MAX_DRUM_PATCHES - STOCK_DRUM_PRESETS} saved drum sounds before patch.cpp:656 asserts at boot")
         for f in fxs:
             con.execute("INSERT INTO fx_types VALUES ((SELECT max(id) + 1 FROM fx_types), ?, ?)",
                         (f["name"], json.dumps(f["default"])))

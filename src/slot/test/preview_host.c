@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pingpong.h"
+#include "drumprobe.h"
 
 int16_t host_knobs[4];
 uint8_t host_palette[20 * 4];
@@ -27,6 +28,13 @@ volatile int16_t te_audio_in[64];
 volatile uint32_t te_rx_sel = 1;
 volatile int32_t te_rx[256];
 volatile int32_t te_alt_in[128];
+/* Drum probe (engine 300 in previews): TE's per-key params, edit key, range row 9 and the engine's record. */
+int16_t te_drum_params[8 * DP_KEYS * 8];
+volatile int32_t te_drum_edit = 5;
+int16_t ranges[20 * 32];
+struct dp_diag drumprobe_diag = { 37, 35, 90000, 12700, 5, 0x7F00, 3, 0x10000, 1, 1,
+                                  { 32767, 0, 0, 20000, 9000, 0, 0, 0, 0, 0, 3000, 0 },
+                                  { 0, 16384, 12288, 20000, 8192, 0, 0, DP_MAGIC } };
 uint32_t hold_on = 1;   /* show the indicators in previews */
 uint32_t chord_on = 1, chord_learning = 0;
 int32_t chord_n = 3, chord_iv[4] = {0, 4, 16, 0};   /* root, major 3rd, major 10th */
@@ -184,6 +192,7 @@ static void dump_nodes(void)
 
 void ui_draw(int engine, int slot);
 void fx_ui_draw(int id, int mode, int slot);
+void drum_ui_draw(int slot, int id);
 
 int main(int argc, char **argv)
 {
@@ -213,7 +222,17 @@ int main(int argc, char **argv)
         hold_on = chord_on = 0;   /* screenshots: no HOLD/CHORD badges */
     int frames = getenv("FRAMES") ? atoi(getenv("FRAMES")) : 1;
     host_drawing = frames <= 1;
-    if (e >= 100)
+    static const int16_t dp_keys[8] = { -1200, 16384, 12288, 20000, 8192, 0, 0, DP_MAGIC };
+    for (int i = 0; i < DP_KEYS * 8; i++)
+        te_drum_params[i] = dp_keys[i & 7];
+    for (int i = 0; i < 8; i++) {          /* a guess at dbox's row 9 (the device shows the real one) */
+        ranges[9 * 32 + 4 * i] = (int16_t)(i ? 0 : -32767);
+        ranges[9 * 32 + 4 * i + 1] = 32767;
+        ranges[9 * 32 + 4 * i + 2] = 8192;
+    }
+    if (e == 300)
+        drum_ui_draw(0, 18);
+    else if (e >= 100)
         for (int i = 0; i < frames; i++) {
             if (i == frames - 1)
                 host_drawing = 1;

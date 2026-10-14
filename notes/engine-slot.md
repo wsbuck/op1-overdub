@@ -45,7 +45,7 @@ ScreenId was followed (decompiled). Beyond the four patched structures:
 - **Per-engine byte flags** (1 for ids 6, 8, 9, 12; read-only, plaintext): LFO modules at `0x018E142C`, `0x018E151C`, `0x018E1710`, `0x018E182C`, `0x018E19FC`, and `FUN_01a27eb4`'s `0x018F5ECC`. Each is 16 bytes; entry 15 already exists and is 0 (next table starts at +0x10). Confirmed. Setting it to 1 would give id 15 the sampler-like LFO knob scaling (meaning: Hypothesis).
 - **Passed on** to the factory, ScreenId or the range functions (all patched): Core.cpp, patch.cpp:131 (`FUN_01a010f8` → `FUN_01a85db4` → `FUN_01967960` → factory), LfoRnd, synth_controller.
 - Unresolved:
-  - a *drum* patch naming `va` would put 15 into the drum id array `0xFF801704`; the drum factory `FUN_01a1b9c0` sends unknown ids to `0x1a1ba38` (not inspected). Only reachable with a hand-made drum patch.
+  - a *drum* patch naming `va` would put 15 into the drum id array `0xFF801704`; it fails validation first (patch.cpp:1018, error 13), which asserts in drum context. Drum engines: notes/drum-engine.md.
   - how the engine browser builds its list (no static id list found; probably from the DB).
   - ~52 other `R = 15; CC = R < …` sites: those sampled are std::string capacity checks or a 15-entry interrupt table; none is near an engine-array reference. Not all checked.
 

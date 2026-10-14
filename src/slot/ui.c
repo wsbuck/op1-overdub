@@ -11,6 +11,7 @@
  * iter's dials, sampler's HOLD badge). wavetable: waterfall of the bank's frames; grain: source overview,
  * playhead, spray, live grains (sampler or built-in bank); va: oscillator shape and filter response;
  * inprobe (a test engine): the input buffer it reads, live, with numbers to report.
+ * drum_ui_draw: the drum probe (a test drum engine) on the dbox screen it borrows: what TE handed the engine.
  */
 #include <stdint.h>
 #include "font.h"
@@ -26,6 +27,7 @@
 #include "ensemble.h"
 #include "pingpong.h"
 #include "inprobe.h"
+#include "drumprobe.h"
 
 /* Writable state lives in .data (the slot block is loaded into RAM); .bss is refused by the linker. */
 #ifdef __bfin__
@@ -66,6 +68,7 @@ extern int32_t distortion_curve(const int16_t *p, int32_t x) __attribute__((weak
 extern const char *distortion_mode_name(const int16_t *p) __attribute__((weak));
 extern struct ens ensemble_state[2] __attribute__((weak));
 extern struct pp pingpong_state[2] __attribute__((weak));
+extern struct dp_diag drumprobe_diag __attribute__((weak));     /* drumprobe.c, only in builds with the drum probe */
 /* TE's retained SVG renderer (notes/svg-route.md; call conventions checked at TE's call sites). */
 extern int te_yaffs_open(const char *path, int flags, int mode);     /* FUN_01a997f4: fd, -1 if missing */
 extern int te_yaffs_close(int fd);                                    /* FUN_01a99908 */
@@ -821,6 +824,82 @@ static void draw_inprobe(void *r, const int16_t *k)
     put_dec(put_str(buf, "R "), renders - inp_renders);
     inp_renders = renders;
     text_fast(r, buf, FP(236), FP(130), FP(1), GREY);
+}
+
+/* ---- drum probe (src/slot/drumprobe.c, notes/drum-engine.md): what TE hands a drum engine, to report ---- */
+
+static uint32_t dp_frames RAM = 0;        /* screen frames */
+static uint32_t dp_renders RAM = 0;       /* render calls at the last frame */
+
+static char *put_sdec(char *p, int32_t v)
+{
+    if (v < 0) {
+        *p++ = '-';
+        v = -v;
+    }
+    return put_dec(p, (uint32_t)v);
+}
+
+/* From _drum_ui_update (slot.S) once per frame while the dbox screen shows a drum slot holding the probe (id). */
+void drum_ui_draw(int slot, int id)
+{
+    static const uint8_t knob_colour[8] = { BLUE, GREEN, WHITE, ORANGE, LIGHTBLUE, LIGHTGREEN, GREY, ORANGE };
+    void *r = te_raster();
+    struct dp_diag *d = &drumprobe_diag;
+    char buf[64], *p;
+    if (!d)
+        return;
+    slot &= 7;
+    int edit = te_drum_edit;
+    edit = edit < 0 ? 0 : edit >= DP_KEYS ? DP_KEYS - 1 : edit;
+    const int16_t *ek = te_drum_params + (slot * DP_KEYS + edit) * 8;
+    dp_frames++;
+
+    title(r, "DRUM PROBE", WHITE);
+    put_dec(put_str(buf, "F "), dp_frames);
+    text_fast(r, buf, FP(236), FP(7), FP(3) >> 1, WHITE);
+
+    /* the last note-on as the engine saw it: key 0..23, velocity (TE's << 8 undone), voice, note-on/off counts */
+    p = put_dec(put_str(buf, "KEY "), (uint32_t)(d->key < 0 ? 0 : d->key));
+    p = put_dec(put_str(p, " VEL "), (uint32_t)d->vel >> 8);
+    p = put_dec(put_str(p, " V "), (uint32_t)(d->voice < 0 ? 0 : d->voice));
+    p = put_dec(put_str(p, " ON "), d->noteons);
+    put_dec(put_str(p, " OFF "), d->noteoffs);
+    text_fast(r, buf, FP(8), FP(24), FP(1), WHITE);
+    /* the key the knobs edit, slot, id, slot inits, range row copied; render calls since the last frame, worst
+     * render (cycles), TE's pitch ratio for the last note */
+    p = put_dec(put_str(buf, "EDIT "), (uint32_t)edit);
+    p = put_dec(put_str(p, " SLOT "), (uint32_t)slot);
+    p = put_dec(put_str(p, " ID "), (uint32_t)id);
+    p = put_dec(put_str(p, " IN "), (uint32_t)d->inits);
+    put_dec(put_str(p, " ROW "), (uint32_t)d->row_copied);
+    text_fast(r, buf, FP(8), FP(34), FP(1), GREY);
+    p = put_dec(put_str(buf, "R "), d->renders - dp_renders);
+    p = put_dec(put_str(p, " CYC "), d->cyc_max);
+    put_hex(put_str(p, " RATIO "), (uint32_t)d->ratio, 8);
+    text_fast(r, buf, FP(8), FP(44), FP(1), GREY);
+    dp_renders = d->renders;
+
+    /* per knob: the edit key's value (what the encoder wrote), the newest voice's rendered value (after the LFO),
+     * and dbox's range row 9 that TE's encoder clamps with (min max scale) */
+    for (int i = 0; i < 8; i++) {
+        const int16_t *rg = ranges + 9 * 32 + 4 * i;
+        p = put_dec(put_str(buf, "K"), (uint32_t)i);
+        p = put_sdec(put_str(p, " "), ek[i]);
+        p = put_sdec(put_str(p, " / "), d->live[i]);
+        p = put_sdec(put_str(p, "  "), rg[0]);
+        p = put_sdec(put_str(p, ".."), rg[1]);
+        put_sdec(put_str(p, " S "), rg[2]);
+        text_fast(r, buf, FP(8), FP(56 + 10 * i), FP(1), knob_colour[i]);
+    }
+
+    /* voices: one bar per voice, its level (top right) */
+    for (int v = 0; v < DP_VOICES; v++) {
+        fp32 x = FP(256 + 5 * v), h = (d->level[v] * 22) >> 5;      /* 22 units at full scale */
+        line_fast(r, x, FP(50), x + FP(3), FP(50), DARKBLUE);
+        if (h > FP(1) >> 1)
+            line_fp(r, x + (FP(3) >> 1), FP(50), x + (FP(3) >> 1), FP(50) - h, FP(3), GREEN);
+    }
 }
 
 static uint32_t last_renders RAM = 1;     /* render count at the last frame (live knobs) */

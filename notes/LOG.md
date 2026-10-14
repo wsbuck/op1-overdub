@@ -663,3 +663,19 @@
   6. Press the mic key (input on/off) and plug/unplug the line cable and headphones; note any change.
 - Report, per source: (a) does the waveform move and does LIVE stay green (`n/32` near 32)? (b) peak meter reading and `W0` (a few values); (c) do you hear it, and is it doubled (TE's own monitoring plus ours), delayed or distorted? (d) TONE: audible? (e) with no key held: does the meter/waveform still move, and does `R` drop to 0? (f) any difference between mic and line, input on/off, headphones in/out, tape mode, after sampling; (g) any crash or glitch.
 - Result: _pending user flash_.
+
+## 2026-10-13 — Test image 56: DRUMPROBE.OP1 (can we add a drum engine?)
+- Research and route: notes/drum-engine.md. New drum engine id 18 (`dprobe`, after va 15, wavetable 16, grain 17) on TE's dbox voice objects with our vtable; patched: name table, drum factory (assert path -> our stub), drum ScreenId (9..18 -> dbox screen), drum encoder (ids > 8 take dbox's 8-knob path), patch validator (18 validates as dbox), dbox screen update (our id -> our screen). TE's drum sampler and dbox code paths are unchanged.
+- `src/slot/drumprobe.c` (test engine): per key a sine with a pitch drop (E1 + key semitones), noise burst on odd keys, velocity scales the level; knobs edit the last-pressed key: blue tune, green decay, white pitch drop, orange noise level, SHIFT+blue noise decay. TE doesn't load/save per-key values for a new type, so the factory re-initialises them (marker in key 24's SHIFT+orange value). Screen: what TE handed the engine (see the test). Sim `drumprobe_check.py`: all pass, max 12,700 cycles per render call.
+- DB: the dbox preset `whathump` is replaced by `drum probe` (keeps 24 factory drum presets: factory + saved drum sounds must stay <= 58 or the OP-1 asserts at boot).
+- `firmware/images/DRUMPROBE.OP1` = `build.py --engines va,wavetable,grain,dprobe --name DRUMPROBE` (all FX, HOLD/CHORD). sha256 b02ee9beab5ecd08e6dd2c650af4fe29717b029ebc2c3de6caadb1e0c20e6299.
+- **Before flashing any other image or stock afterwards**: load a stock kit into every drum slot that holds `drum probe` and delete drum sounds you saved with it. Every other image asserts at boot on them (patch.cpp:221); recovery is COM at power-on, then factory reset.
+- Test:
+  1. Boot; play a synth engine, a drum sampler kit and a dbox kit (unchanged?).
+  2. Drum mode: open the drum sound browser and load `drum probe` (dbox folder, where `whathump` was). Note where it is listed.
+  3. Play all 24 keys left to right: low thumps rising a semitone per key; every other key adds a noise burst. Screen: `KEY` (0 = leftmost), `VEL`, `V` (voice 0..11), `ON`/`OFF` counts, bars (voice levels), `R` (render calls per frame).
+  4. Press a key, then turn blue / green / white / orange, then the same with SHIFT (K4..K7). Each changes only the last-pressed key (`EDIT`). Note each K row's first number (what the knob wrote), second (what the engine rendered), and `min..max S` (dbox's range row), and `ROW`.
+  5. With a MIDI keyboard (notes 53..76): play soft and hard.
+  6. Save the sound, load another kit, load the saved one; power off and on with it in a drum slot.
+- Report: which keys sound and the pitch order; noise on alternate keys; whether each knob changes the sound and the K values; the K ranges; velocity (MIDI); save/load/reboot; any crash or assert text (photo).
+- Result: _pending user flash_.
