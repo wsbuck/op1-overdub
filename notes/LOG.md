@@ -834,3 +834,22 @@
   4. harmonic `saw`: orange (UNISON) 0 → max: the level should stay about the same (it dropped ~3 dB).
   5. va `saw lead`: sweep blue through saw → square → pulse: about even loudness (square was clearly louder), thin pulse at the end without extra grit.
 - Result: _pending user flash_.
+
+## 2026-10-14 — Test image 65: DRUMFM2.OP1 (fmdrum after the UX review; SOUND1's DSP fixes)
+- fmdrum UX review fixes (notes/drum-engine.md "fmdrum"), commit 2e3a9e8: knobs are an amount on each plain knob and its time/partner on SHIFT: blue PITCH / RATIO, green SWEEP / SWDEC (sweep time), white FM / FMDEC (index decay), orange DECAY / NOISE. RATIO steps through the 15 harmonic ratios (TONE) rising, then the 17 inharmonic ones (METAL). Keys 10..13 are a hi-hat choke group (HAT-zone voices cut in ~5 ms). All four kits share key roles: 0-2 kicks, 3/5/7 toms, 4/6 snares, 8 rim, 9 clap, 10-13 hats, 14-15 cymbals, 16-23 percussion/FX (808's fifth kick is now a ride). Screen: white titles; turning a knob shows its name and value in the title for ~1.5 s (e.g. `DECAY 450MS`, `NOISE HAT`, `RATIO 1.41 METAL`); grey labels over the values and a dimmer SHIFT row; times as nnnMS / n.nSEC; noise drawn in white/grey; class colours only in the key strip. The stroke font's S is chamfered now (all screens), so it no longer reads as 5.
+- Includes the other agent's DSP fixes (amp, fm4, harm, va, grain; image 64 SOUND1, commit 77a5e32) — they were committed before this build.
+- Sim: fmdrum_check (now also the choke, ratio order, stock NOISE maximum, hat keys), drumhooks_check: all pass. Worst fmdrum render 21,000 cycles per call (164 per sample).
+- `firmware/images/DRUMFM2.OP1` = DRUMFM1's command (all engines, SYNTH4's trims) `--name DRUMFM2`, from HEAD 2e3a9e8 in a clean export. te-boot identical to stock. sha256 71c4b476262af94d548858c1f048ba394cfccc684e63ddae44ed03f3985eaece.
+- **Before flashing**: 30 or fewer saved drum sounds (28 factory drum presets). Kits saved from DRUMFM1 load with the old knob order (their values now mean other knobs): reload the factory kits rather than DRUMFM1 saves.
+- Test:
+  1. Boot; synth and drum slots load as on SOUND1/DRUMFM1.
+  2. Load `fm 808`; play keys 0-23 in order: kicks, toms/snares alternating on 3-7, rim, clap, four hats, cymbal, ride, then percussion. Same roles in `fm 909`, `fm metal`, `fm zaps`.
+  3. Hi-hat choke: let the open hat (key 13, F#) ring, hit a closed hat (10-12): the open hat stops at once, with no click. Hitting key 14 (cymbal) must not cut it.
+  4. Turn each knob on one key: the title shows the knob's name and value in its colour for ~1.5 s, then the class name returns. Switching keys alone shows no readout.
+  5. **PITCH step**: on a `fm metal` bell (keys 16-20), turn blue one detent: how many semitones does it move (1 or 2)? (dbox's encoder scale on K0; 512 units per semitone).
+  6. RATIO (SHIFT+blue): one detent per ratio step? Readout says TONE for the first 15, METAL after.
+  7. **Snares**: do the snares (keys 4, 6) sound flat or papery (noise and body share one DECAY envelope)?
+  8. Save an edited kit, reload, power-cycle: edits back.
+- Report: PITCH semitones per detent, RATIO steps per detent, choke behaviour, snare verdict, readout behaviour, any crash or assert text (photo).
+- **Cleanup before an image without fmdrum**: as DRUMFM1 (fmdrum and dprobe sounds in slots and saves).
+- Result: _pending user flash_.
