@@ -147,7 +147,9 @@ def load(workdir, name):
     f = open(os.path.join(workdir, name + ".err")).read().split()
     info = {f[i]: f[i + 1] for i in range(1, len(f) - 1, 2)}
     info["cycles"] = int(f[2])
-    return a[:, 0], a[:, 1], a[:, 2], info
+    # the voices sounding: any nonzero sample in the block (a single sample can be 0 at a zero crossing)
+    mask = np.repeat(np.bitwise_or.reduce(a[:, 1].reshape(-1, 128), axis=1), 128)
+    return a[:, 0], mask, a[:, 2], info
 
 
 def rms_db(x):

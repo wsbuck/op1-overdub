@@ -50,6 +50,7 @@ struct amp_ram {
     int32_t env;                           /* gate detector, Q15 */
     int32_t hold;                          /* gate hold, samples */
     int32_t tight, emph, inter;            /* one-pole states (Q24, Q24, Q20) */
+    int32_t gain_prev, comp_prev;          /* last block's drive gain and make-up (ramped across the block; amp.c) */
     struct amp_svf f[AMP_FILTERS];
     int16_t buf[AMP_HIST + AMP_IN];        /* upsampler history (the last processed block's end), then this block's
                                             * TE IN (compared to detect a new block) */
@@ -84,17 +85,17 @@ static inline int32_t amp_lim(int32_t x, int32_t lo, int32_t hi)
 /* Stage 1, tube: s(v) = v - 4 v^3 / 27 on |v| <= 1.5, +-1 beyond (Q20 in and out; distortion.c's tube_c). */
 static inline int32_t amp_tube(int32_t v)
 {
-    int32_t a = amp_lim(v, -AMP_KNEE, AMP_KNEE) >> 10;          /* Q10 */
-    int32_t a3 = ((a * a) >> 10) * a;                           /* Q20 */
-    return (a << 10) - (((a3 >> 5) * 4855) >> 10);             /* 4855 = 4/27 Q15 */
+    int32_t c = amp_lim(v, -AMP_KNEE, AMP_KNEE), a = c >> 6;    /* Q14, |a| <= 24576 */
+    int32_t a3 = ((a * a) >> 14) * a;                           /* Q28, < 2^30 */
+    return c - (((a3 >> 13) * 4855) >> 10);                     /* 4855 = 4/27 Q15; the linear term exact */
 }
 
 /* Stage 2: s2(a) = 1.5 (a - a^3 / 3) on a = clamp(v, -1, 1): +-1 at full (Q20 in and out; distortion.c's s2_c). */
 static inline int32_t amp_stage2(int32_t v)
 {
-    int32_t a = amp_lim(v, -AMP_U1, AMP_U1) >> 10;              /* Q10 */
-    int32_t a3 = ((a * a) >> 10) * a;                           /* Q20 */
-    int32_t s = (a << 10) - (((a3 >> 5) * 10923) >> 10);        /* 10923 = 1/3 Q15 */
+    int32_t c = amp_lim(v, -AMP_U1, AMP_U1), a = c >> 6;        /* Q14 */
+    int32_t a3 = ((a * a) >> 14) * a;                           /* Q28 */
+    int32_t s = c - (((a3 >> 13) * 10923) >> 10);               /* 10923 = 1/3 Q15; the linear term exact */
     return s + (s >> 1);
 }
 

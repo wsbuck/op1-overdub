@@ -35,12 +35,13 @@ HIGH_SHELF = (2200.0, 0.6, -10.0)       # fc, Q, dB at full dark
 
 # ---- orange: cab ----
 # anchors at orange 0, 1/3, 2/3, 1: (hp fc, hp Q, mid fc, mid Q, mid dB, pres fc, pres Q, pres dB, lp1 fc, lp1 Q,
-# lp2 fc, lp2 Q). 0 = direct (no cab), 1x12 open back, 2x12, 4x12 closed back.
+# lp2 fc, lp2 Q). 0 = direct (no cab), 1x12 open back, 2x12, 4x12 closed back. The low-passes are steep and resonant
+# (Q > 1 then 0.6) so the cabs fall off fast above 4-5 kHz like real 12" speakers (5-10 kHz fizz down).
 CAB = [
     (20, 0.707, 700, 0.8, 0.0, 2800, 1.2, 0.0, 19000, 0.6, 19000, 0.6),
-    (80, 1.0, 700, 0.8, -3.0, 2800, 1.2, 3.0, 6200, 0.8, 7000, 0.6),
-    (85, 1.3, 600, 0.8, -4.0, 2500, 1.4, 4.0, 5200, 0.9, 6000, 0.6),
-    (95, 1.8, 500, 0.9, -5.0, 2200, 1.5, 4.0, 4300, 1.0, 5000, 0.6),
+    (80, 1.0, 700, 0.8, -3.0, 2800, 1.2, 3.0, 5000, 1.1, 5500, 0.6),
+    (85, 1.3, 600, 0.8, -4.0, 2500, 1.4, 4.0, 4400, 1.15, 5000, 0.6),
+    (95, 1.8, 500, 0.9, -5.0, 2200, 1.5, 4.0, 3800, 1.2, 4500, 0.6),
 ]
 CAB_NAMES = ["DI", "1X12", "2X12", "4X12"]
 

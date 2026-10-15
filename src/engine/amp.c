@@ -158,7 +158,16 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
         knob_row(amp_gate_thr, 1, g->knob[2], &thr);
     knob_row(amp_blue, AMP_BLUE_W, g->knob[0], row);
     const int32_t gain = row[0], tight_a = row[1], emph = row[2] << 15, bias = row[3], k2 = row[4];
-    const int32_t comp = fmul(row[5] << 17, hs_a2);                 /* loudness x the high shelf's A^2, Q27 */
+    /* loudness x the high shelf's A^2, Q27 (<= 4.3 x 3.2); row[5] (Q12, up to 17675) << 16 so it can't wrap */
+    const int32_t comp = fmul(row[5] << 16, hs_a2) << 1;
+    /* drive gain (per input sample) and make-up (per output sample) ramp linearly from the last block's values, so a
+     * knob step isn't a level step at the block edge */
+    if (!g->dsp_blocks) {
+        g->gain_prev = gain;
+        g->comp_prev = comp;
+    }
+    const int32_t dgain = (gain - g->gain_prev) >> 6, dcomp = (comp - g->comp_prev) >> 7;
+    int32_t gk = g->gain_prev, ck = g->comp_prev;
     const int32_t tb = amp_tube(bias);
 
     int16_t *b = g->buf;                                            /* 24 samples of history, then the block */
@@ -211,12 +220,13 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
             s -= tl;
             el += fmul(AMP_EMPH_A, s - el);                         /* pre-emphasis */
             s += fmul(s - el, emph) << 1;
-            int32_t u = qmul(s << 4, gain);                         /* drive, Q20 */
+            int32_t u = qmul(s << 4, gk);                           /* drive, Q20 */
             u = amp_lim(u, -32 * AMP_U1, 32 * AMP_U1);
             int32_t y1 = amp_tube(u + bias) - tb;                   /* stage 1 */
             il += fmul(AMP_INTER_A, y1 - il);                       /* interstage */
             zb[2 * i + h] = amp_stage2(((il >> 4) * k2) >> 8) << 4; /* stage 2, Q24 */
         }
+        gk += dgain;
     }
     svf_block(&f[F_LOW], zb, SHELF);                                /* tone */
     svf_block(&f[F_HIGH], zb, SHELF);
@@ -226,7 +236,8 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
     svf_block(&f[F_LP1], zb, LOW);
     svf_block(&f[F_LP2], zb, LOW);
     for (int n = 0; n < AMP_OUT; n++) {
-        int32_t z = fmul(zb[n] << 4, comp);                         /* loudness */
+        int32_t z = fmul(zb[n] << 4, ck);                           /* loudness */
+        ck += dcomp;
         int32_t az = z < 0 ? -z : z;
         peak = az > peak ? az : peak;
         int32_t lgi = lg + ((ldelta * n) >> 7);
@@ -242,6 +253,8 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
     g->tight = tl;
     g->emph = el;
     g->inter = il;
+    g->gain_prev = gk;                                              /* = gain and comp within the ramps' truncation */
+    g->comp_prev = ck;
     g->lim_gain = lnew;
     g->out_peak = peak >> 9;
     g->in_peak = in_peak;
