@@ -214,7 +214,11 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     int lvl = pick_level((uint32_t)pitch[0], warp_knob ? wp.level_q8 : 0, &w);
     int lvl2 = lvl + 1 < LEVELS ? lvl + 1 : lvl;
 
-    struct osc_run r = { { { 0, 0, 0 } }, w, g2, det12, norm, warp_knob, &wp, s->phase1, s->phase2, s->dc_x, s->dc_y };
+    struct osc_run r;                                     /* fields set one by one: an initialiser zeroes lk with
+                                                           * memset, which the firmware doesn't link (frame_pair
+                                                           * fills lk before each run) */
+    r.w = w; r.g2 = g2; r.det12 = det12; r.norm = norm; r.warp_knob = warp_knob; r.wp = &wp;
+    r.p1 = s->phase1; r.p2 = s->phase2; r.dc_x = s->dc_x; r.dc_y = s->dc_y;
     if (!dP) {                                            /* steady: the block with one frame pair, as before */
         frame_pair(r.lk, base, P >> 22, lvl, lvl2);
         run(&r, out, pitch, ENGINE_BLOCK, P & 0x3FFFFF, 0, 0);
