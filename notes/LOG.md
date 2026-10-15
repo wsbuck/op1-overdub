@@ -972,4 +972,4 @@
   synth va 15 … fm4 22, dprobe drum 23, fmdrum 24; drum folders dbox 10, drum 14, fmdrum 4 (room for 30 saved drum
   sounds); te-boot identical to stock. sha256 a8d8e6c8f4bdfa6aed0be16ed90cb5dee381e27681276a95550a66f213ae2312.
 - Also check DRUMFM3's list (test 67): the fmdrum column, kits load and play, snapshots save to user.
-- Result (2026-10-15): booted; wavetable "sounds great now" (blue detent clicks gone). fmdrum column: pending.
+- Result (2026-10-15): booted; wavetable "sounds great now" (blue detent clicks gone). fmdrum column: shows next to dbox and drum, kits load and play, snapshots save ("everything works well").
