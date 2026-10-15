@@ -911,3 +911,30 @@
 - Result (2026-10-15): booted; "everything sounds really good". fmdrum: a closed hat cuts off an open one (choke
   works); snares sound good (shared noise decay is fine, no separate noise envelope needed). PITCH detent size not
   reported.
+
+## 2026-10-15 — Test image 67: DRUMFM3.OP1 (fmdrum kits in their own drum browser column)
+- Static research (notes/drum-engine.md "Browser columns"): TE's drum sound browser makes one column per distinct
+  `folder` of `drum_presets` + `drum_user`, sorts the columns ("thru" first, then byte order) and labels each with the
+  folder name (at most 13 characters). No fixed list, no table, no hook needed. Snapshots are always saved with folder
+  `user`. Commit f14445f: build_slot.py inserts a drum engine's kits with folder = the engine name (`fmdrum`, was
+  `dbox`); dprobe still replaces `whathump` in dbox. New check `src/slot/test/drum_browser_check.py` (the column logic
+  on the built DB): all pass, columns `dbox` (10), `drum` (14), `fmdrum` (4), `user`.
+- `firmware/images/DRUMFM3.OP1` = `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum
+  --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+  --db-trim harmonic=6 --db-trim fm4=6 --name DRUMFM3` from commit f14445f in a clean `git archive`: same ids and
+  presets as AMP2 (synth va 15 … fm4 22, dprobe drum 23, fmdrum 24; 176 of 176 synth presets, 28 drum presets, room
+  for 30 saved drum sounds). Only the DB's folder for the four kits differs from AMP2. te-boot identical to stock.
+  sha256 4292a6cc606b3b18e1d81bb186a4083dbb3ca80f0504db67dff76b7598fce7cd.
+- **Before flashing**: 30 or fewer saved drum sounds, as AMP2.
+- Test (drum mode):
+  1. Boot; slots load as on AMP2 (a slot holding an fm kit still plays it).
+  2. Open the drum sound browser: columns `dbox`, `drum`, `fmdrum`, `user` in that order; `fmdrum` lists `fm 808`,
+     `fm 909`, `fm metal`, `fm zaps`; dbox no longer lists them (still lists `drum probe`). Note the exact label text.
+  3. With an fm kit in the slot, open the browser: the cursor should start on the `fmdrum` column, on that kit.
+  4. Load each fm kit from the new column; play keys 0-23: they sound as on AMP2.
+  5. Edit a key, save a snapshot (hold the slot key): it appears in `user`; reload it, edits back; power-cycle, still
+     there.
+  6. Load fmdrum and dbox sounds saved on earlier images (in `user`) and a stock dbox and drum kit: all load and play.
+- Report: column order and labels, where the cursor starts, the snapshot's column, any crash or assert text (photo).
+- **Cleanup before an image without fmdrum**: as DRUMFM1.
+- Result: _pending user flash_.
