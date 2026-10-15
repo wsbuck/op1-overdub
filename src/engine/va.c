@@ -6,7 +6,9 @@
  *   [1] green  osc 2 detune: 0 → +1 semitone, squared for fine control near 0
  *   [2] white  noise level: 0 → as loud as the oscillators, squared for fine control near 0
  *   [3] orange sub: square one octave below osc 1, 0 → as loud as the oscillators
- * The sum is scaled by 1 / (1 + (sub + noise) / 2) so turning up sub or noise doesn't push the output into the knee.
+ * The oscillators' level follows the wave (wave_gain: saw, square and pulse about equally loud, the pulse below the
+ * knee); the sum is scaled by 1 / (1 + (sub + noise) / 2) so turning up sub or noise doesn't push the output into the
+ * knee.
  *
  * Oscillators are PolyBLEP saws; a pulse is saw(t) - saw(t + pw); the sine is the interpolated 256-point table, in
  * phase with the saw's fundamental so the sine → saw morph doesn't cancel. The sub's phase is osc 1's halved, with
@@ -23,6 +25,16 @@
 #include "sine_table.h"
 
 #define THIRD 10923
+
+/* Oscillator level per wave knob (k = 0, 1024, .. 32768; Q15), so saw, square and pulse sit at about the same
+ * loudness and below the soft knee: sine -> saw 1; saw -> square 1 / sqrt(1 + a + a^2) (the square's rms is the
+ * saw's x sqrt 3: -4.8 dB at the square); square -> pulse 1 / sqrt(12 d (1 - d)) (duty d: the saw's rms), capped so
+ * the pulse's peak 2 (1 - d) stays at 1.4 (0.78 at 10 %: -1.8 dB re the saw, peak 0.7 FS). */
+static const uint16_t wave_gain[33] = {
+    32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32253, 30682, 29116, 27595, 26141,
+    24771, 23488, 22295, 21189, 20165, 19218, 18942, 19068, 19309, 19677, 20196, 20900, 21846, 23124, 24896, 26593,
+    25486,
+};
 
 struct state {
     uint32_t phase1;    /*  0: reset to 0x80000000 on note-on */
@@ -88,6 +100,9 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
         pw = 0x80000000u - (uint32_t)(wave - 2 * THIRD) * 157309u;
     }
 
+    int32_t wi = wave >> 10, wf = wave & 1023;
+    int32_t lw = (wave_gain[wi] + (((wave_gain[wi + 1] - wave_gain[wi]) * wf) >> 10)) << 16;   /* Q31 */
+
     /* Detune: inc2 = inc * (1 + det12 / 4096), det12 ≤ 243 (one semitone = 0.0595). */
     int32_t det12 = (((det * det) >> 15) * 244) >> 15;
 
@@ -112,7 +127,7 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
         uint32_t inc = (uint32_t)pitch[i];
         uint32_t inc2 = inc + ((inc >> 10) * (uint32_t)det12 >> 2);
 
-        int32_t v = (osc(p1, d1, inv1, mode, a, pw) + osc(p2, d2, inv2, mode, a, pw)) >> 1;
+        int32_t v = qmul(lw, (osc(p1, d1, inv1, mode, a, pw) + osc(p2, d2, inv2, mode, a, pw)) >> 1);
         if (sub_l) {
             uint32_t ps = (p1 >> 1) | top;
             v += qmul(sub_l, saw(ps, ds, invs) - saw(ps + 0x80000000u, ds, invs));
