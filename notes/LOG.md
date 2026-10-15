@@ -1007,3 +1007,30 @@
 - Report: does each knob's range feel useful (where it gets interesting), loudness jumps, clicks, the default, any
   crash or assert text (photo).
 - Result: _pending user flash_.
+
+## 2026-10-15 — Test image 70: CRUSH2.OP1 (crush: the 3D pyramid screen)
+- crush's screen is the 3D pyramid (design/fx/crush3d.svg, published as content/display/crush3d.svg, 35 KB, 86 shapes;
+  commit 27c2731): ui.c `draw_pyramid` follows gen_crush3d.py's runtime_state (notes/fx-crush.md "Screen"). Inputs
+  are the DSP's: smoothed knobs, the real bit depth (`bits_q12`) and mu-law share, and the compressor's gain reduction
+  (the press and the squash pump). The line screen stays as the fallback. DSP unchanged from CRUSH1.
+- Host check `crush_screen_check.py`: the C path vs the reference runtime, 14 design states; the 8 comparable ones
+  match within anti-aliasing. Visible shapes 10 .. 59 per state (pedals 66; read 17.6 M cycles per frame on SVG8).
+- `firmware/images/CRUSH2.OP1` = CRUSH1's command with `--svg-cost --name CRUSH2` (all engines, same trims, all FX)
+  from commit 27c2731 in a clean `git archive`; te-boot identical to stock; slot block 134 KB.
+  sha256 ee15b269334b8e591a2edeec1f93ec2769a75856da43cd8b3a8413a70deae898.
+  `--svg-cost`: every SVG screen shows its render cost (kilocycles) bottom right.
+- Screen checklist (crush as synth FX on a held pad or loop, then as master FX):
+  1. All knobs at 0: a pristine pyramid (smooth faces, 16 courses, purple-grey / grey, sun and two far pyramids
+     drifting slowly). Note the cost number.
+  2. Blue RATE up: the faces turn into blocks, coarser in 4 steps (~4 / 12 / 20 / 28 k of the knob).
+  3. Green BITS up: courses thin out; around the middle they turn green (mu-law), shades posterise, stones go missing;
+     near the top the apex collapses and rubble appears; at the top a white/black pyramid with a green rim.
+  4. White SQUASH up: a white press sits on the apex and the pyramid squats (never below 60 % height). Play drums or
+     staccato notes: it should pump with the audio and puff dust on hits; still when the sound stops.
+  5. Orange GRIT up: trembling, cracks, notches, then falling orange blocks and XOR slices jumping sideways.
+  6. Everything at max: the cost number (compare pedals on the distortion screen); any lag in the UI, knob response
+     or audio crackle while the screen animates.
+  7. Switch FX/screens back and forth and between synth / drum / master: no assert, the pyramid comes back.
+- Report: the cost numbers (pristine, busy, everything max), smoothness, whether the pump reads with the music, any
+  colour or element that looks wrong (photo), any assert text.
+- Result: _pending user flash_.
