@@ -797,3 +797,23 @@
 - `firmware/images/SYNTH4.OP1` sha256 7888a351d8d068b0e0aac500b5f595815e9b51075ca9c0064c3180ba7e5d4fa8.
 - Test: as 61; on fm4 check that meshing gears interlock and turn together, white carriers vs blue modulators read at a glance, labels and badges don't collide, sizes feel consistent between algorithms, the screen stays smooth (render cost), and steps are one per detent (page, coarse, fine, level, envelope).
 - Result: _pending user flash_.
+
+## 2026-10-14 — Test image 63: DRUMFM1.OP1 (fmdrum: an FM drum kit; SYNTH4 otherwise)
+- New drum engine `fmdrum` (notes/drum-engine.md "fmdrum"): per key a 2-op FM drum with its own modulator decay, a pitch sweep and a noise layer; knobs PITCH, RATIO, FM, DECAY, SHIFT: SWEEP, SNAP, NOISE (OFF/AIR/SNARE/HAT/CLAP), MOD. Four factory kits in the dbox folder: `fm 808`, `fm 909` (punch FX), `fm metal` (delay FX), `fm zaps`. Screen: the selected key as a drum (FM rosette, sweep, noise), an envelope graph, its values, the 24 keys. Test engine.
+- Several drum engines per image (slot.S DRUM_HOOKS id range, per-engine vtables, type compare per name): dprobe drum id 23 (as SYNTH4), fmdrum 24. Synth ids as SYNTH4: va 15, wavetable 16, grain 17, inprobe 18, sprobe 19, amp 20, harmonic 21, fm4 22; same preset trims (176 of 176 synth presets).
+- Drum presets: 28 (stock 24 with whathump -> `drum probe`, + 4 kits): **room for 30 saved drum sounds** (was 34; factory + saved over 58 stops the OP-1 at boot, patch.cpp:656).
+- Sim: fmdrum_check, drumhooks_check, knobhook_check, drumprobe_check, fx_abi_check: all pass. fmdrum worst 22,000 cycles per render call (172 per sample) in the sim; DRUMPROBE's device/sim ratio was 2.3x.
+- `firmware/images/DRUMFM1.OP1` = `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum` with SYNTH4's `--db-trim` set, from commit 4c42dc6 in a clean export. te-boot identical to stock. sha256 4682b5c35baee69b5b283c827da8e94863a526e24967baa635649c34e6c0190c.
+- **Before flashing**: you need 30 or fewer saved drum sounds (snapshots), or it stops at boot.
+- Test:
+  1. Boot. Synth slots (va, wavetable, grain, amp, harmonic, fm4 sounds) and drum slots (dbox, sampler, `drum probe`, your dprobe saves) load and play as on SYNTH4.
+  2. Drum mode: open the browser; the dbox folder lists `fm 808`, `fm 909`, `fm metal`, `fm zaps`. Load `fm 808`. Play all 24 keys: kicks, toms, snares, clap, rim/clave, hats, cowbell, congas, maracas, cymbal, ping (key list in src/slot/gen_fmdrum.py). Note any key that is silent, too quiet/loud, clicks or sounds broken.
+  3. Screen: the title names the last key pressed (KICK, SNARE, ...); the drum hops and ripples, the keys strip lights the keys you play; turn each knob on one key: blue PITCH (drum size, Hz), green RATIO (petals), white FM (petal depth, brighter/clangier sound), orange DECAY (shell depth, orange curve); SHIFT: SWEEP (blue curve), SNAP, NOISE (OFF, AIR, SNARE, HAT, CLAP as you turn), MOD (white curve: the click/brightness decay). Each knob changes only that key. Note whether one detent is a usable step on each.
+  4. Hold a long note (metal kit, a bell) and turn each knob while it rings: no clicks or zipper.
+  5. Play fast rolls on one key and many keys at once (all 12 voices): no crackle, no stuck notes; the UI stays smooth.
+  6. Load `fm 909`, `fm metal`, `fm zaps`; play each.
+  7. Edit two keys, save (hold the slot key), load another kit, reload the save: edits back. Power-cycle with it in a slot: edits back.
+  8. dbox and sampler kits still sound and edit as before; `drum probe` still loads (its probe screen).
+- Report: per kit, keys that sound wrong (and how); knob steps per detent; clicks; CPU (crackle with many voices); screen readability; save/reload/reboot; any assert text (photo).
+- **Cleanup before an image without fmdrum**: replace fmdrum kits in every drum slot with a stock kit and delete drum sounds saved from them (stock and older images stop at boot on type `fmdrum`). Same for dprobe sounds as before.
+- Result: _pending user flash_.
