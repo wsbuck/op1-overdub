@@ -21,6 +21,13 @@
 #include "harm.h"
 
 #define TAG 0x4Au
+
+/* 1 / sqrt(1 + (i / 32)^2), Q16 (65535 for 1), i = 0..32: the unison level normalisation */
+static const uint16_t uni_norm[33] = {
+    65535, 65504, 65408, 65250, 65030, 64750, 64414, 64022, 63579, 63088, 62553, 61977, 61363, 60717, 60041, 59340,
+    58617, 57876, 57120, 56351, 55574, 54791, 54004, 53216, 52429, 51644, 50863, 50089, 49321, 48561, 47811, 47071,
+    46341,
+};
 #define DC_R 2145953825                         /* 1 - 2 pi 10 / 88200, Q31 */
 
 struct state {
@@ -122,7 +129,8 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     /* unison: osc 2 gain g2 (Q15) fades in over the first quarter, detune up to +30 cents (Q12), as wt.c */
     r.g2 = uni >= 8192 ? 32767 : uni << 2;
     r.det12 = (((uni * uni) >> 15) * 72) >> 15;
-    r.norm = 0x7FFFFFFF - (r.g2 << 15);                 /* ~1 / (1 + g2), Q31 */
+    int32_t ni = r.g2 >> 10, nf = r.g2 & 1023;          /* 1 / sqrt(1 + g2^2), Q31: the two oscillators drift */
+    r.norm = (int32_t)(uni_norm[ni] + (((uni_norm[ni + 1] - uni_norm[ni]) * nf) >> 10)) << 15;   /* apart: power sum */
     r.warp = warp_knob;
     r.wp = warp_setup(warp_knob);
     int lvl = wo_pick_level((uint32_t)pitch[0], warp_knob ? r.wp.level_q8 : 0, &r.w);
