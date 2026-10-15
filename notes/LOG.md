@@ -973,3 +973,37 @@
   sounds); te-boot identical to stock. sha256 a8d8e6c8f4bdfa6aed0be16ed90cb5dee381e27681276a95550a66f213ae2312.
 - Also check DRUMFM3's list (test 67): the fmdrum column, kits load and play, snapshots save to user.
 - Result (2026-10-15): booted; wavetable "sounds great now" (blue detent clicks gone). fmdrum column: shows next to dbox and drum, kits load and play, snapshots save ("everything works well").
+
+## 2026-10-15 — Test image 69: CRUSH1.OP1 (crush FX: bitcrusher, rate reducer, compressor)
+- New FX `crush`, firmware id 11 (DB `fx_types` 14), commit 40e0cc6; design, knob ranges, measurements:
+  notes/fx-crush.md. Fit: every FX table is generated in the slot block (name loops 14, id bounds 12); slot block 130 KB
+  (crush +6.3 KB), 254 KB left before pingpong's RAM. Screen: a placeholder (CRUSH title, four knob bars, a white
+  gain-reduction meter, rate / bits text); the pyramid SVG comes later and reads `crush_state` (crush.h).
+- Knobs (all clean fully anticlockwise, bit exact): blue RATE 44.1 kHz -> 400 Hz, no anti-alias filter; green BITS
+  16 -> 7 (first half) -> 1, mu-law morph between 1/4 and 3/4 (full at the centre: ~12-bit quiet resolution, ~5 bits
+  loud); white SQUASH (threshold -6 -> -36 dBFS, ratio up to 20:1, make-up up to +28.6 dB, release 150 -> 37 ms);
+  orange GRIT (clock jitter: wobble -> sizzle up to half; XOR bit flips above). Default `[10000, 12000, 12000, 3000]`.
+- Sim: crush_check all pass; fx_abi (12/12 incl. crush), ensemble, pingpong, distortion, drumprobe, drumhooks, knobhook,
+  amp_tune, amp, fm4, fmdrum, grain, harm, inprobe, modal, sprobe, va, wt, wt_import, hold_test, synth_edit_test,
+  screens_preview, drum_browser_check: all pass. Cycles per stereo call: typical 9-16k, worst 26.7k mean / 27.8k peak
+  (near-full rate + mu-law + SQUASH + GRIT); distortion is ~29k typical, 44.5k worst.
+- `firmware/images/CRUSH1.OP1` = WTPOS's command with `--name CRUSH1` (all engines; `--db-trim va=1 wavetable=1 grain=1
+  inprobe=0 sprobe=0 amp=1 harmonic=6 fm4=6`; all FX incl. crush) from commit 40e0cc6 in a clean `git archive`: synth
+  va 15 … fm4 22, dprobe drum 23, fmdrum 24; 176 of 176 synth presets, 28 drum presets; te-boot identical to stock.
+  sha256 949f4894526c698f90592b5c8dde53389efcb66adecf64cf6890790d24e8d493.
+- Listening checklist (synth FX on a sustained saw/pad and on drums; then as master FX on headphones):
+  1. Select `crush` from the FX list (synth, drum, master): listed (12 rows now), loads, placeholder screen shows.
+  2. All four knobs at 0: identical to FX off (A/B with the FX toggle).
+  3. RATE alone: play a melody high up and sweep down: aliases appear and move against the pitch; the sweep is smooth
+     (no stepping); at the bottom it is dark and warm, not harsh. Loudness about even.
+  4. BITS alone: up to the middle grainy loud parts, quiet parts still smooth (mu-law); past 3/4 stair-step crunch,
+     1 bit a fuzzy square; decays gate to silence. Turn slowly: no zipper or clicks per detent.
+  5. SQUASH with BITS around 3/4: decays should hang on and crackle instead of gating; on drums it pumps (fast
+     release). The screen's white meter moves with the pumping.
+  6. GRIT up to half: pitch wobble of the aliases (low RATE), turning to sizzle; above half: random glitches/spikes.
+     Silence stays silent.
+  7. As master FX with a full mix: any crackle, dropout or UI stall (CPU), especially RATE just below the top with BITS
+     at the middle and GRIT up.
+- Report: does each knob's range feel useful (where it gets interesting), loudness jumps, clicks, the default, any
+  crash or assert text (photo).
+- Result: _pending user flash_.
