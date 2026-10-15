@@ -184,15 +184,20 @@ int main(void)
     n = type_eq(drum_type_eq_load, "dbox", &r);
     expect(r == 1 && n == 1 && strs == 0 && frees == 0 && dp_type_hits[0] == 0, "dbox: TE's result, one compare, nothing else");
     n = type_eq(drum_type_eq_load, "drum", &r);
-    expect(r == 0 && n == 2 && strs == 1 && frees == 1 && !bad_free && dp_type_hits[0] == 0,
-           "drum (not reached by TE, but harmless): 0, our Value built and freed");
+    expect(r == 0 && n == 3 && strs == 2 && frees == 2 && !bad_free && dp_type_hits[0] == 0,
+           "drum (not reached by TE, but harmless): 0, each of our Values built and freed");
     n = type_eq(drum_type_eq_load, "dprobe", &r);
     expect(r == 1 && n == 2 && strs == 1 && frees == 1 && !bad_free && dp_type_hits[0] == 2,
            "dprobe on load: 1 (dbox path), Value freed with 2, load hits counted");
     n = type_eq(drum_type_eq_save, "dprobe", &r);
     expect(r == 1 && dp_type_hits[1] == 2 && dp_type_hits[0] == 2, "dprobe on save: 1, save hits counted");
+    n = type_eq(drum_type_eq_load, "fmdrum", &r);
+    expect(r == 1 && n == 3 && strs == 2 && frees == 2 && !bad_free && dp_type_hits[0] == 4,
+           "fmdrum (second name) on load: 1, both Values freed, load hits counted");
+    n = type_eq(drum_type_eq_save, "fmdrum", &r);
+    expect(r == 1 && dp_type_hits[1] == 4, "fmdrum on save: 1, save hits counted");
     n = type_eq(drum_type_eq_save, "sampler", &r);
-    expect(r == 0 && dp_type_hits[1] == 2, "other types: 0");
+    expect(r == 0 && dp_type_hits[1] == 4 && frees == 2, "other types: 0, nothing counted, every Value freed");
     printf("abi %08x\n", mask);
     return fails || mask;
 }

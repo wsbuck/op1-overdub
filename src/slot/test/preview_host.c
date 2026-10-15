@@ -7,6 +7,8 @@
 #include <string.h>
 #include "pingpong.h"
 #include "drumprobe.h"
+#include "fmdrum.h"
+#include "fmdrum_tables.h"
 #include "sprobe.h"
 #include "amp.h"
 #include "amp_tune.h"
@@ -51,6 +53,43 @@ struct dp_diag drumprobe_diag = { 37, 35, 90000, 12700, 5, 0x7F00, 3, 0x10000, 1
                                   { 32767, 0, 0, 20000, 9000, 0, 0, 0, 0, 0, 3000, 0 },
                                   { 0, 16384, 12288, 20000, 8192, 0, 0, 0 } };
 uint32_t dp_type_hits[2] = { 2, 5 };
+/* Our drum engines in previews: 18 the probe (engine 300), 19 fmdrum (engine 301). fmdrum: FD_PARAMS = the slot's 24 x 8
+ * per-key values (comma-separated), FD_KEY = the selected key, FD_PLAY = blocks since the selected key's note-on (a voice
+ * playing it), FD_LIT = "key:level,..." other sounding keys (level Q15). */
+const int32_t drum_first = 18, drum_count = 2;
+const uint8_t drum_kind[2] = { 1, 2 };
+struct fd_voice fmdrum_voice[FD_VOICES];
+static void fd_setup(void)
+{
+    const char *s = getenv("FD_PARAMS");
+    for (int i = 0; s && i < DP_KEYS * 8; i++) {
+        te_drum_params[i] = (int16_t)atoi(s);
+        s = strchr(s, ',');
+        s = s ? s + 1 : 0;
+    }
+    te_drum_edit = getenv("FD_KEY") ? atoi(getenv("FD_KEY")) : 0;
+    int key = te_drum_edit;
+    const int16_t *k = te_drum_params + key * 8;
+    if (getenv("FD_PLAY")) {                 /* the engine's envelopes after n blocks, as fmdrum.c steps them */
+        int n = atoi(getenv("FD_PLAY"));
+        struct fd_voice *v = &fmdrum_voice[0];
+        v->key = key;
+        v->age = (uint32_t)n;
+        v->aenv = (int32_t)(1073741824.0 * pow(fd_amp_dec[fd_pos(k[3]) >> 7] / 1073741824.0, n));
+        v->menv = (int32_t)(1073741824.0 * pow(fd_mod_dec[fd_pos(k[7]) >> 7] / 1073741824.0, n));
+        v->senv = (int32_t)(1073741824.0 * pow(fd_swp_dec[fd_pos(k[5]) >> 7] / 1073741824.0, n));
+        v->index_q8 = (int32_t)(fd_index_q8(k[2]) * (v->menv / 1073741824.0));
+    }
+    const char *lit = getenv("FD_LIT");
+    for (int j = 1; lit && j < FD_VOICES; j++) {
+        fmdrum_voice[j].key = atoi(lit);
+        lit = strchr(lit, ':');
+        fmdrum_voice[j].aenv = lit ? atoi(lit + 1) << 15 : 0;
+        fmdrum_voice[j].age = 5;
+        lit = lit ? strchr(lit, ',') : 0;
+        lit = lit ? lit + 1 : 0;
+    }
+}
 /* Knob probe (engine 20 in previews): the hook's record and the engine's live params, set in main() */
 struct kh_diag knobhook_diag;
 struct sp_ram sprobe_ram;
@@ -309,6 +348,10 @@ int main(int argc, char **argv)
     }
     if (e == 300)
         drum_ui_draw(0, 18);
+    else if (e == 301) {
+        fd_setup();
+        drum_ui_draw(0, 19);
+    }
     else if (e >= 100)
         for (int i = 0; i < frames; i++) {
             if (i == frames - 1)

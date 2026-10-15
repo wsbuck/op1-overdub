@@ -82,11 +82,12 @@
     RTS;
     .endm
 
-/* Drum engine: TE's per-key loader/saver type compare (slot.S DRUM_HOOKS, notes/drum-engine.md). Replaces
+/* Drum engines: TE's per-key loader/saver type compare (slot.S DRUM_HOOKS, notes/drum-engine.md). Replaces
  * CALL FUN_019bdea4 (JSON value ==, R0 = the patch's "type", R1 = Value("dbox")): TE's result first, unchanged for
- * "drum"/"dbox"; only when it is 0, compare with Value(\name) built the way TE builds its own (FUN_019bdc4c in a
- * 16-byte stack slot, destroyed by FUN_019bdd18(v, 2)). Counts our hits in dp_type_hits[0] (load) / [1] (save). */
-    .macro DRUM_TYPE_EQ name
+ * "drum"/"dbox"; only when it is 0, compare with Value(name) for each of \names in turn, each built the way TE builds
+ * its own (FUN_019bdc4c in a 16-byte stack slot) and destroyed by FUN_019bdd18(v, 2) before the next. Counts our hits
+ * in dp_type_hits[0] (load) / [1] (save). */
+    .macro DRUM_TYPE_EQ names:vararg
     .global _drum_type_eq_load
     .global _drum_type_eq_save
 _drum_type_eq_load:
@@ -102,6 +103,7 @@ _drum_type_eq_save:
     CALL _te_json_eq;                   /* TE's compare: R0 = type, R1 = Value("dbox") */
     CC = R0 == 0;
     IF !CC JUMP 6f;
+    .irp name, \names
     R0 = FP;
     R0 += -16;
     R1.L = \name;
@@ -117,8 +119,10 @@ _drum_type_eq_save:
     CALL _te_json_free;
     R0 = R6;
     CC = R0 == 0;
-    IF CC JUMP 6f;
-    P0.L = _dp_type_hits;
+    IF !CC JUMP 7f;
+    .endr
+    JUMP.S 6f;                          /* none matched: R0 = 0 */
+7:  P0.L = _dp_type_hits;
     P0.H = _dp_type_hits;
     P1 = R5;
     P0 = P0 + P1;

@@ -23,7 +23,7 @@ volatile int32_t te_drum_ratio[DP_VOICES];
 volatile int32_t te_drum_edit;
 int16_t te_drum_params[8 * DP_KEYS * 8];
 int16_t ranges[20 * 32];
-const int32_t drum_id = 18;
+const int32_t drumprobe_id = 18;
 
 static uint32_t voices[DP_VOICES][18];      /* TE's dbox objects: vptr, ..., +0x14 = voice index */
 static int mask;

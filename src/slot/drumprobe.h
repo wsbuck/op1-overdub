@@ -25,7 +25,7 @@ struct dp_diag {
     int16_t live[8];                       /* params of the newest sounding voice, as rendered (after the LFO) */
 };
 extern struct dp_diag drumprobe_diag;
-extern uint32_t dp_type_hits[2];           /* TE's per-key loader [0] / saver [1] took the dbox path for our type */
-extern const int32_t drum_id;              /* our drum engine id (slot_gen.inc) */
+extern uint32_t dp_type_hits[2];           /* slot.S: TE's per-key loader [0] / saver [1] took the dbox path for our types */
+extern const int32_t drumprobe_id;         /* the probe's drum engine id (slot_gen.inc) */
 
 #endif

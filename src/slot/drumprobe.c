@@ -41,7 +41,6 @@ struct dvoice {                            /* TE's dbox object, 0x48 B; ours exc
 };
 
 struct dp_diag drumprobe_diag RAM = { 0, 0, 0, 0, -1, 0, -1, 0, 0, 0, { 0 }, { 0 } };
-uint32_t dp_type_hits[2] RAM = { 0, 0 };   /* slot.S: TE's per-key loader / saver took the dbox path for our type */
 
 /* E1 (41.2 Hz) * 2^(key / 12) at 88.2 kHz, 2^32 = one cycle */
 static const uint32_t base_inc[DP_KEYS] = {
@@ -167,7 +166,7 @@ void drumprobe_slot_init(int32_t slot)
     drumprobe_diag.inits++;
     /* our range row (ReadInterface normalises with it) = dbox's row 9, filled by TE at boot, if it is sane */
     const int16_t *r9 = ranges + 9 * 32;
-    int16_t *rn = ranges + drum_id * 32;
+    int16_t *rn = ranges + drumprobe_id * 32;
     for (int i = 0; i < 8; i++)
         if (r9[4 * i] >= r9[4 * i + 1])
             return;

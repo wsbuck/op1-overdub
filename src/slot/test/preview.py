@@ -4,7 +4,8 @@
   python3 src/slot/test/preview.py OUTDIR [ENGINE K0 K1 K2 K3 ...]
 
 ENGINE >= 100 previews our FX screens: 100 + FX id for the master (stereo) screen, 200 + FX id for synth (mono);
-300 the drum probe's screen (drum_ui_draw, sample values).
+300 the drum probe's screen (drum_ui_draw, sample values); 301 fmdrum's (FD_PARAMS, FD_KEY, FD_PLAY, FD_LIT: see
+preview_host.c; NAME = the PNG's file name).
 
 Builds ui.c natively with stand-ins for TE (te_line records segments), draws them at the device's scale
 (SVG 320 x 160 -> 376 x 188 panel, ×1.175) on black, with the unseen bottom (y > 142) shaded.
@@ -124,7 +125,7 @@ def main():
             d.line([x0 * f, y0 * f, x1 * f, y1 * f], fill=PALETTE.get(c, (255, 0, 255)),
                    width=max(1, round(w * f)))
             n += 1
-        name = os.path.join(out, f"e{eng}_{'_'.join(map(str, k))}.png")
+        name = os.path.join(out, os.environ.get("NAME") or f"e{eng}_{'_'.join(map(str, k))}.png")
         if os.environ.get("CLEAN"):   # screenshots: only what the panel shows (y < 142)
             img = img.crop((0, 0, size[0], int(142 * SCALE)))
         img.save(name)

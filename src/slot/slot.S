@@ -189,40 +189,52 @@ _fx_ui_update:
     JUMP (P0);
     .endm
 
-/* Drum engine (a test engine, notes/drum-engine.md): one drum id \id after our synth ids, on TE's dbox voice objects
- * with our vtable _drum_vtable (slot_gen.inc). build_slot.py instantiates DRUM_HOOKS once and patches TE to use it:
+/* Drum engines (notes/drum-engine.md): ids \first .. \first + \count - 1 after our synth ids, on TE's dbox voice objects
+ * with our vtables (slot_gen.inc: _drum_vtables[i], _drum_inits[i] = engine i's vtable and C_ENTRY slot init).
+ * build_slot.py instantiates DRUM_HOOKS once and patches TE to use it:
  *   _drum_factory           the drum factory FUN_01a1b9c0 sends ids other than 8/9 to an assert at 0x01A1BA38; that
  *                           instruction (R0.L = 0x5A40, the message) becomes JUMP.L here. Frame live: P5 = Producer**
- *                           out, R6 = drum slot, SP lowered by 12, R4-R7/P5 saved. Our id: dbox's 12 voices (as TE's
- *                           case 9) pointed at our vtable, after drumprobe_slot_init(slot); other ids: the assert.
- *   _drum_validate_lookup   replaces CALL FUN_019b9810 (name -> id) in the patch validator FUN_01a037a8: our id
- *                           reads as 9, so our drum patches validate as dbox ones (other ids assert in drum context).
- *   _drum_ui_update         dbox screen page update (slot 0x0190F8F0, stock 0x01972470): our id draws
+ *                           out, R6 = drum slot, SP lowered by 12, R4-R7/P5 saved (R4 holds the vtable here). Our ids:
+ *                           the engine's slot init (slot), then dbox's 12 voices (as TE's case 9) pointed at its vtable;
+ *                           other ids: the assert.
+ *   _drum_validate_lookup   replaces CALL FUN_019b9810 (name -> id) in the patch validator FUN_01a037a8: our ids read
+ *                           as 9, so our drum patches validate as dbox ones (other ids assert in drum context).
+ *   _drum_ui_update         dbox screen page update (slot 0x0190F8F0, stock 0x01972470): our ids draw
  *                           drum_ui_draw(slot, id) (ui.c) instead; R0/R1 untouched for TE's. Drum slot [0xFF8016D8],
  *                           its id [0xFF801704 + slot * 4] (as the drum ScreenId's caller 0x01977394).
  *   _drum_type_eq_load/save replace CALL FUN_019bdea4 (JSON value ==) where TE's per-key loader FUN_01a0036c (0x01A00630)
  *                           and saver FUN_019ffc50 (0x019FFFBA) compare the patch's "type" with Value("dbox"), so our
- *                           type (\name) loads and saves dbox_data too (DRUM_TYPE_EQ, entry.inc). */
-    .macro DRUM_HOOKS id, name
+ *                           types (\names) load and save dbox_data too (DRUM_TYPE_EQ, entry.inc).
+ *   _dp_type_hits           how often the loader [0] / saver [1] took the dbox path for one of our types (screens). */
+    .macro DRUM_HOOKS first, count, names:vararg
     .text
     .align 4
     .global _drum_factory
 _drum_factory:
-    R1 = \id;
-    CC = R0 == R1;
+    R1 = \first;
+    R1 = R0 - R1;
+    R2 = \count;
+    CC = R1 < R2 (IU);
     IF CC JUMP 1f;
     R0.L = 0x5A40;                      /* the replaced instruction */
     JUMP.L _te_drum_assert;             /* 0x01A1BA3C: R0.H = 0x018F; CALL assert */
-1:  R0 = R6;
-    CALL _drum_slot_init_entry;
+1:  P1 = R1;
+    P0.L = _drum_vtables;
+    P0.H = _drum_vtables;
+    P0 = P0 + (P1 << 2);
+    R4 = [P0];                          /* the engine's vtable (R4 is saved in TE's frame) */
+    P0.L = _drum_inits;
+    P0.H = _drum_inits;
+    P0 = P0 + (P1 << 2);
+    P2 = [P0];
+    R0 = R6;
+    CALL (P2);                          /* <engine>_slot_init(slot) through its C_ENTRY */
     R7 = 0;
     R5 = 12;                            /* kDrumVoiceCount */
 2:  R0 = R7;
     CALL _te_dbox_voice;                /* FUN_0197189c(i): dbox voice i, built in place; returns it */
     P0 = R0;
-    P1.L = _drum_vtable;
-    P1.H = _drum_vtable;
-    [P0] = P1;
+    [P0] = R4;
     [P5++] = R0;
     R1 = R7;
     CALL _te_dbox_index;                /* FUN_01970da8(voice, i): +0x14 = i */
@@ -235,7 +247,7 @@ _drum_factory:
     UNLINK;
     JUMP (P0);
 
-    DRUM_TYPE_EQ \name
+    DRUM_TYPE_EQ \names
 
     .global _drum_validate_lookup
 _drum_validate_lookup:
@@ -244,22 +256,28 @@ _drum_validate_lookup:
     CALL _te_engine_lookup;             /* FUN_019b9810(R0 = name) */
     SP += 12;
     RETS = [SP++];
-    R1 = \id;
-    CC = R0 == R1;
+    R1 = \first;
+    R1 = R0 - R1;
+    R2 = \count;
+    CC = R1 < R2 (IU);
     IF !CC JUMP 3f;
     R0 = 9;
 3:  RTS;
 
     .global _drum_ui_update
 _drum_ui_update:
-    P0.L = 0x16D8;
-    P0.H = 0xFF80;
+    P0.L = _te_drum_slot;               /* 0xFF8016D8 (symbols: the simulator test maps them) */
+    P0.H = _te_drum_slot;
     P1 = [P0];                          /* drum slot */
-    P0.L = 0x1704;
+    P0.L = _te_drum_ids;                /* 0xFF801704 */
+    P0.H = _te_drum_ids;
     P0 = P0 + (P1 << 2);
     R3 = [P0];                          /* its drum engine id */
-    R2 = \id;
-    CC = R3 == R2;
+    R2 = \first;
+    R2 = R3 - R2;
+    P2 = R3;
+    R3 = \count;
+    CC = R2 < R3 (IU);
     IF CC JUMP 4f;
     JUMP.L _dbox_page_update;           /* R0 (page) and R1 (dt) untouched */
 4:  [--SP] = RETS;
@@ -278,7 +296,7 @@ _drum_ui_update:
     L2 = 0;
     L3 = 0;
     R0 = P1;                            /* slot */
-    R1 = \id;
+    R1 = P2;                            /* id */
     SP += -12;
     CALL _drum_ui_draw;
     SP += 12;
@@ -294,6 +312,13 @@ _drum_ui_update:
     LC0 = [SP++];
     RETS = [SP++];
     RTS;
+
+    .data
+    .align 4
+    .global _dp_type_hits
+_dp_type_hits:
+    .long 0, 0
+    .text
     .endm
 
 /* FX knob range row: 8 knobs x {min, max, scale}; full range and sensitivity. */

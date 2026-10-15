@@ -176,3 +176,68 @@ Static research (decompiles in the session scratchpad `save/`), then DRUMPROBE's
   voice's rendered value and row 9's min..max and scale; a level bar per voice.
 - Sim (`src/slot/test/drumprobe_check.py`): all pass; max 12,700 cycles per render call (budget 76,800); ABI through the
   entry wrappers. Host preview: `preview.py OUT 300 0 0 0 0`.
+
+## fmdrum: an FM drum kit (2026-10-14, test image DRUMFM1)
+A real drum engine on the DRUMPROBE/SAVEPROBE route: `src/slot/fmdrum.c` (+ `fmdrum.h`, tables and kits from
+`src/slot/gen_fmdrum.py`), screen `src/slot/ui_fmdrum.h`, sim `src/engine/test/fmdrum_check.py`. engines.json
+`{"drum": true, "kits": "src/slot/fmdrum_kits.json", "test": true}`.
+
+### Several drum engines (build_slot.py, slot.S DRUM_HOOKS)
+- Drum engines take the ids after the synth engines, in engines.json order (DRUMFM1: dprobe 23, fmdrum 24). Each gets its
+  own vtable (dbox's 12 words, render/note-on/active/note-off -> its C_ENTRYs) and `<source>_id`.
+- `DRUM_HOOKS first, count, names...`: the factory takes `id - first < count (IU)`, loads the engine's vtable into R4
+  (saved in TE's frame) and calls its slot init through `_drum_inits[i]`, then builds dbox's 12 voices as before; the
+  validator lookup and the dbox screen update test the same range; `DRUM_TYPE_EQ` compares the type with each name in
+  turn after TE's "dbox" compare (each Value built and freed as before). `_dp_type_hits` moved into DRUM_HOOKS.
+- Drum ScreenId: `R1 = last + 1` (25). The screen update reads the drum slot / ids through symbols (`_te_drum_slot`
+  0xFF8016D8, `_te_drum_ids` 0xFF801704; same instructions on the device) so the simulator can map them.
+- ui.c `drum_ui_draw(slot, id)` dispatches by `drum_kind[id - drum_first]` (build_slot.py DRUM_KINDS: drumprobe 1,
+  fmdrum 2).
+- DB: `"kits"` adds one dbox-folder preset per kit (patch fields from a stock dbox template, type fmdrum); every
+  per-key value is checked against the stock dbox presets' column range; factory drum presets are capped at
+  MAX_FACTORY_DRUM_PRESETS = 28 (stock 24 + 4 kits), so users keep room for 30 saved drum sounds (was 34).
+- Sim: `src/slot/test/drumhooks_check.py` (factory per id with TE's frame and assert path, validator, screen dispatch,
+  register preservation); knobhook_check covers two type names; drumprobe_check unchanged.
+
+### Sound (fmdrum.c)
+Per key: a 2-operator phase-modulation drum, carrier `sin(phc + I(t) sin(phm))`, the modulator at RATIO x the carrier,
+both swept together (pitch envelope in semitones, exponential), plus LCG noise through a Chamberlin SVF whose lp/bp/hp
+outputs are blended. Three envelopes per voice (amplitude for tone and noise, the modulator's index, the sweep), one
+step per 128-sample block; all gains, the index and both increments ramp linearly across the block. A note starts with
+a 32-sample attack to its start values (index and sweep at full); a retriggered or stolen voice keeps its phases and
+ramps from its current gains (no click). Aliasing: carrier held below 0.45 fs, modulator faded out between 0.4375 and
+0.5 fs, index limited so fc + (1.5 I + 4) fm <= 0.77 fs (beyond that the sidebands are below -50 dB; only components
+above 0.77 fs fold back under 20 kHz). DC: 8 Hz one-pole high-pass (a 1:1 ratio puts a sideband at 0 Hz); soft knee.
+State: `fmdrum_voice[12]` in the slot block, indexed by TE's voice index; note-on (TE's caller thread) only writes key,
+velocity and a trigger count that render picks up.
+
+### Knobs (per key, dbox's row 9: K0 -24320..24832, K1-K7 0..32767)
+| knob | name | range and curve |
+|---|---|---|
+| K0 blue | PITCH | 512 per semitone (dbox's own convention), 0 = A3 220 Hz: 14 Hz .. 3.6 kHz |
+| K1 green | RATIO | modulator : carrier, 32 steps rising 0.5 .. 15.5, harmonic (n/2) and inharmonic (sqrt 2, 2.76, pi, 5.19, ...) mixed |
+| K2 white | FM | peak index 0 .. 16 rad, quadratic (half knob = 4 rad); velocity scales it 0.5 .. 1 |
+| K3 orange | DECAY | amplitude T60 15 ms .. 4 s, exponential |
+| K4 SHIFT+blue | SWEEP | pitch starts 0 .. +48 semitones above, quadratic (half = +12) |
+| K5 SHIFT+green | SNAP | sweep time constant 1 .. 300 ms, exponential |
+| K6 SHIFT+white | NOISE | 0..1023 OFF; AIR to 8191 (dark lp->bp 300 Hz..1.5 kHz, level to 0.55, under the tone); SNARE to 16383 (band 1.5..5 kHz, level to 1, tone kept); HAT to 24575 (bright bp->hp 5..9 kHz, the tone fades out); CLAP to 32767 (noise only, the band falls back to 1.2 kHz and narrows, three bursts 8.7 ms apart fade in) |
+| K7 SHIFT+orange | MOD | the FM index's own decay, T60 3 ms .. 3 s, exponential |
+TE's LFO reaches K0-K3 only (knob-hook.md), so pitch, ratio, FM and decay are LFO targets.
+
+### Kits (folder dbox, 24 keys each; gen_fmdrum.py)
+`fm 808` (template dem drums): sine kicks, toms, snare, clap, metallic hats and cowbell, congas, maracas, cymbal, ping.
+`fm 909` (lo-fi, punch FX on): click kicks, bright snares, hats, crash, ride, shaker. `fm metal` (cuckoos nest, delay on):
+gong, plates, bells on a scale, chimes, glock, anvil, sizzle. `fm zaps` (dem drums): zaps, lasers, blips, dives, glitch.
+
+### Screen (ui_fmdrum.h)
+The selected key's class as the title (KICK, TOM, SNARE, CLAP, HAT, METAL, BELL, ZAP, PERC, from its values), an
+oblique drum (size = pitch, shell depth = DECAY, an FM rosette of 2 x RATIO petals with depth = FM on the head, the
+sweep as a blue curve falling onto it, noise as speckle or clap marks; it hops, ripples and follows the live index
+while the key plays), an envelope graph on log time (DECAY orange, FM index white, sweep blue, playhead), the eight
+values, and the 24 keys with class marks, lit while they sound. No division; ~60 AA segments, the rest 1-px lines.
+
+### Checks (sim, before DRUMFM1)
+fmdrum_check: pitch within 0.2 cents; sweep follows f0 2^(S e^(-t/tau)/12); FM sidebands = Bessel J_k(I) within
+0.5 dB; MOD decay; aliasing at the extremes <= -48 dB (energy off the true sidebands below 20 kHz); DC <= 1.1 %;
+decay T60s; noise zones; clap bursts; velocity; no clicks on knob changes or retrigger; all 96 kit keys -11..-0.3 dBFS,
+no clipping; no libgcc calls; worst render 22,000 cycles per call (172 per sample; tone-only keys ~85); ABI.

@@ -28,14 +28,17 @@ With --fx FX.json (e.g. src/slot/fx.json), adds our FX as FX ids 8, 9, ... and t
   optional "ram": "0x01E80000", "ram_size": "0x60000" defines _<source>_ram there (a FREE SDRAM buffer: undefined
   contents at boot); the range is reserved, so no code block may overlap it.
 Each is src/slot/<source>.c exporting <source>_mono and <source>_stereo (notes/fx-slot.md).
-An engine with "drum": true is a drum engine (one only; a test engine for now, notes/drum-engine.md): it gets the
-first id after the synth engines, runs on TE's dbox voice objects, and is src/slot/<source>.c in the slot block
-(<source>_render, _note_on, _active, _note_off, _slot_init). TE's drum factory, drum ScreenId, drum encoder, patch
-validator and the dbox screen's update are patched to accept it. Its DB entry replaces the dbox preset "replace"
-(same folder and row count: factory + user drum presets must stay <= 58, patch.cpp:656) with that preset's patch,
-type and name changed ("preset") and its dbox_data set to 24 x "dbox_default" (each value checked against the stock
-dbox presets' range: TE validates factory presets at boot). TE's per-key loader and saver are patched to treat its type
-like "dbox", so its per-key values load and save with the sound.
+An engine with "drum": true is a drum engine (any number, notes/drum-engine.md): drum engines get the ids after the
+synth engines, run on TE's dbox voice objects, and are src/slot/<source>.c in the slot block (<source>_render,
+_note_on, _active, _note_off, _slot_init; <source>_id is defined as the engine's id). TE's drum factory, drum ScreenId,
+drum encoder, patch validator and the dbox screen's update are patched to accept them; the screen is drawn by kind
+(DRUM_KINDS, ui.c). DB: "replace" swaps the dbox preset of that name for ours (same folder and row count) with its
+patch, type and name changed ("preset") and dbox_data = 24 x "dbox_default"; "kits" (a JSON file, src/slot/...:
+{name: {"template": a stock dbox preset, "dbox_data": 24 x 8}}) adds one dbox-folder preset per kit with the template's
+envelope/FX/LFO fields. Every per-key value is checked against the stock dbox presets' per-column range (TE validates
+factory presets at boot), and factory drum presets stay <= MAX_FACTORY_DRUM_PRESETS (factory + user drum sounds
+must stay <= 58, patch.cpp:656: the rest is the user's room). TE's per-key loader and saver are patched to treat our
+types like "dbox", so per-key values load and save with the sound.
 Optional "ranges": 8 x [min, max, scale, type] for an engine's knob range row (default: RANGE_ROW, 0..0x7FFF type 0);
 defaults and presets must lie inside it (TE's patch validator rejects other knob values, error 15); presets may then
 give all 8 knob values (signed, checked against the row). "knob_hook": true (any number of synth engines whose source
@@ -59,6 +62,7 @@ FIRST_ID = 15
 UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6, "amp": 7, "harm": 8,
             "fm4": 9}   # must match enum ui_kind in src/slot/ui.c
 HOOK_KINDS = {"sprobe": 1, "harm": 2, "fm4": 3}   # by source; must match knobhook.c's HOOK_* enum
+DRUM_KINDS = {"drumprobe": 1, "fmdrum": 2}         # by source; must match ui.c's DRUM_* enum
 # patch.cpp:616 `synthSynthes_preset_count <= kMaxSynthSynthes_presets` (0xb0 at 0x01a0582a): fixed array
 # of 0x38-byte entries at 0x01DDDB68. Counted without sampler presets (stock 160 + 11 iter + 4 va = 175
 # booted; 183 asserted).
@@ -93,6 +97,7 @@ TE_JSON_STR, TE_JSON_FREE = 0x019BDC4C, 0x019BDD18      # Value(const char *), V
 KNOB_APPLY_CALL, TE_KNOB_APPLY = 0x01A5063E, 0x01A1DFEC
 MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum presets + drum_user rows
 STOCK_DRUM_PRESETS = 24
+MAX_FACTORY_DRUM_PRESETS = 28              # stock 24 + 4 kits: leaves the user room for 30 saved drum sounds (stock 34)
 FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3}   # by source; must match ui.c's FX_* enum
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
@@ -105,6 +110,7 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          # drum side (notes/drum-engine.md, src/slot/drumprobe.h)
          "_te_drum_key": 0xFF801334, "_te_drum_vel": 0xFF8012EC, "_te_drum_ratio": 0xFF801304,
          "_te_drum_edit": 0xFF801044, "_te_drum_params": 0x01AAADB4,
+         "_te_drum_slot": 0xFF8016D8, "_te_drum_ids": 0xFF801704,   # current drum slot, drum engine id per slot
          "_te_fx_filter_mono_ctor": 0x019E77B4, "_te_fx_filter_stereo_ctor": 0x019E784C,
          # TE's retained SVG renderer (notes/svg-route.md)
          "_te_yaffs_open": 0x01A997F4, "_te_yaffs_close": 0x01A99908, "_te_svg_load": 0x019FB458,
@@ -190,14 +196,15 @@ def main():
         sys.exit("--chord needs --hold (chord notes are released through the key-up hook)")
     engines = json.load(open(a.engines))
     drums = [e for e in engines if e.get("drum")]
-    engines = [e for e in engines if not e.get("drum")] + drums      # ids: synth engines first, then the drum engine
+    engines = [e for e in engines if not e.get("drum")] + drums      # ids: synth engines first, then the drum engines
     n = len(engines)
     count = FIRST_ID + n
-    drum_id = count - 1 if drums else None
+    drum_first = count - len(drums)
+    drum_ids = {e["name"]: drum_first + j for j, e in enumerate(drums)}
     if not 1 <= n or count > 62:
         sys.exit("need 1..47 engines")
-    if len(drums) > 1:
-        sys.exit("one drum engine at most (slot.S DRUM_HOOKS)")
+    if any(e["source"] not in DRUM_KINDS for e in drums):
+        sys.exit(f"drum engines need a screen kind in DRUM_KINDS ({', '.join(DRUM_KINDS)})")
     hooked = [FIRST_ID + i for i, e in enumerate(engines) if e.get("knob_hook")]
     if any(e.get("drum") or e["source"] not in HOOK_KINDS for e in engines if e.get("knob_hook")):
         sys.exit(f"\"knob_hook\" only on synth engines with a knobhook.c handler ({', '.join(HOOK_KINDS)})")
@@ -268,14 +275,23 @@ def main():
     g += ["    .align 4"]
     for i, e in enumerate(engines[:nsyn]):
         g += [f"_vtable{FIRST_ID + i}:", longs(vt[:5]) + f"    .long {e['addr']}    /* render */\n" + longs(vt[6:])]
+    if drums:
+        g += [f"    DRUM_HOOKS {drum_first}, {len(drums)}, " + ", ".join(f"_name{drum_ids[e['name']]}" for e in drums)]
     for e in drums:                     # TE's dbox vtable with render, note-on, active and note-off ours
-        src = e["source"]
-        g += [f"    DRUM_HOOKS {drum_id}, _name{drum_id}"]
-        g += [f"    C_ENTRY _drum_{fn}_entry, _{src}_{fn}" for fn in ("render", "note_on", "active", "note_off", "slot_init")]
-        g += ["    .align 4", "_drum_vtable:", longs(dvt[:5]) + "    .long _drum_render_entry\n" + longs(dvt[6:7])
-              + "    .long _drum_note_on_entry\n" + longs(dvt[8:9]) + "    .long _drum_active_entry\n"
-              + longs(dvt[10:11]) + "    .long _drum_note_off_entry",
-              "    .global _drum_id", "_drum_id:", f"    .long {drum_id}"]
+        src, did = e["source"], drum_ids[e["name"]]
+        g += [f"    C_ENTRY _drum{did}_{fn}_entry, _{src}_{fn}" for fn in ("render", "note_on", "active", "note_off", "slot_init")]
+        g += ["    .align 4", f"_drum_vtable{did}:", longs(dvt[:5]) + f"    .long _drum{did}_render_entry\n" + longs(dvt[6:7])
+              + f"    .long _drum{did}_note_on_entry\n" + longs(dvt[8:9]) + f"    .long _drum{did}_active_entry\n"
+              + longs(dvt[10:11]) + f"    .long _drum{did}_note_off_entry",
+              f"    .global _{src}_id", f"_{src}_id:", f"    .long {did}"]
+    if drums:
+        g += ["    .align 4", "_drum_vtables:"] + [f"    .long _drum_vtable{drum_ids[e['name']]}" for e in drums]
+        g += ["_drum_inits:"] + [f"    .long _drum{drum_ids[e['name']]}_slot_init_entry" for e in drums]
+    # the drum screen's kind per drum id from _drum_first (ui.c drum_ui_draw)
+    g += ["    .align 4", "    .global _drum_first", "_drum_first:", f"    .long {drum_first}",
+          "    .global _drum_count", "_drum_count:", f"    .long {len(drums)}",
+          "    .global _drum_kind", "_drum_kind:", "    .byte " + (", ".join(str(DRUM_KINDS[e["source"]]) for e in drums) or "0"),
+          "    .align 4"]
     if hooked:
         g += [f"    KNOB_HOOK {', '.join(map(str, hooked))}", "    .align 4"]
         # knobhook.c's handler per engine id 15.. (0 = not hooked)
@@ -298,8 +314,8 @@ def main():
         g += ["    .short " + ", ".join(f"{v}" for r in e["ranges"] for v in r)] if "ranges" in e else ["    RANGE_ROW"]
     for j, t in enumerate(FLAG_TABLES):
         flags = bytearray(rd(t, 16) + bytes(count - 16))
-        if drums:
-            flags[drum_id] = flags[DBOX]                          # the LFO modules treat it as dbox
+        for did in drum_ids.values():
+            flags[did] = flags[DBOX]                              # the LFO modules treat our drum ids as dbox
         g += [f"    .global _flags{j}", f"_flags{j}:", "    .byte " + ", ".join(str(b) for b in flags), "    .align 4"]
     for i, e in enumerate(engines):
         g += ["    .align 4", f"_name{FIRST_ID + i}:", f"    .asciz \"{e['name']}\""]   # aligned like TE's
@@ -458,8 +474,8 @@ def main():
         # the factory's assert path: `R0.L = 0x5A40` -> JUMP.L _drum_factory (which redoes it for other ids)
         new = branch_halves(DRUM_FACTORY_ASSERT, sym["_drum_factory"], 0xE200)
         halves += [(DRUM_FACTORY_ASSERT, 0xE100, new[0]), (DRUM_FACTORY_ASSERT + 2, 0x5A40, new[1])]
-        # drum ScreenId: `R1 = 9; CC = R0 == R1` -> `R1 = id + 1; CC = R0 < R1 (IU)`: 9..id -> dbox's screen
-        halves += [(DRUM_SCREEN_R1, 0x6049, 0x6001 | (drum_id + 1) << 3), (DRUM_SCREEN_CC, 0x0808, 0x0988)]
+        # drum ScreenId: `R1 = 9; CC = R0 == R1` -> `R1 = last + 1; CC = R0 < R1 (IU)`: 9..last -> dbox's screen
+        halves += [(DRUM_SCREEN_R1, 0x6049, 0x6001 | (count) << 3), (DRUM_SCREEN_CC, 0x0808, 0x0988)]
         # drum encoder: `R0 = 9; CC = R6 == R0` -> `R0 = 8; CC = R0 < R6 (IU)`: ids > 8 take dbox's path (row 9)
         halves += [(DRUM_KNOB_R0, 0x6048, 0x6040), (DRUM_KNOB_CC, 0x0806, 0x09B0)]
         for addr, old, _ in halves[-6:]:
@@ -492,26 +508,44 @@ def main():
         if not nsyn:
             shutil.copyfile(src, a.db_out)
         con = sqlite3.connect(a.db_out)
-        for e in drums:                 # replace a dbox preset: keeps the drum preset count (boot assert at > 58)
-            row = [(rid, p) for rid, p in con.execute("SELECT id, patch FROM drum_presets WHERE folder='dbox'")
-                   if json.loads(p).get("name") == e["replace"]]
-            if len(row) != 1:
-                sys.exit(f"drum engine {e['name']}: no single dbox preset named {e['replace']!r} to replace")
-            patch = dict(json.loads(row[0][1]), type=e["name"], name=e["preset"])
-            if "dbox_default" in e:     # TE validates factory presets at boot: stay inside the stock dbox values
-                dd = e["dbox_default"]
-                stock_rows = [r for (p,) in con.execute("SELECT patch FROM drum_presets WHERE folder='dbox'")
-                              for r in json.loads(p).get("dbox_data", [])]
-                lo, hi = [min(r[k] for r in stock_rows) for k in range(8)], [max(r[k] for r in stock_rows) for k in range(8)]
-                if len(dd) != 8 or any(not lo[k] <= dd[k] <= hi[k] for k in range(8)):
-                    sys.exit(f"drum engine {e['name']}: dbox_default {dd} outside the stock dbox presets' {lo}..{hi}")
-                patch["dbox_data"] = [list(dd) for _ in range(24)]
-            con.execute("UPDATE drum_presets SET patch=? WHERE id=?", (json.dumps(patch, separators=(",", ":")), row[0][0]))
-            print(f"drum engine {drum_id} {e['name']}: drum preset {row[0][0]} {e['replace']!r} -> {e['preset']!r}")
+        # TE validates factory presets at boot: every per-key value stays inside the stock dbox presets' column range
+        dbox = {json.loads(p)["name"]: (rid, json.loads(p))
+                for rid, p in con.execute("SELECT id, patch FROM drum_presets WHERE folder='dbox'")}
+        stock_rows = [r for _, p in dbox.values() for r in p.get("dbox_data", [])]
+        lo, hi = [min(r[k] for r in stock_rows) for k in range(8)], [max(r[k] for r in stock_rows) for k in range(8)]
+
+        def dbox_data(what, rows):
+            if len(rows) != 24 or any(len(r) != 8 or any(not lo[k] <= r[k] <= hi[k] for k in range(8)) for r in rows):
+                sys.exit(f"{what}: dbox_data must be 24 x 8 inside the stock dbox presets' {lo}..{hi}")
+            return [list(r) for r in rows]
+        for e in drums:
+            did = drum_ids[e["name"]]
+            if "replace" in e:          # replace a dbox preset: keeps the drum preset count
+                if e["replace"] not in dbox:
+                    sys.exit(f"drum engine {e['name']}: no dbox preset named {e['replace']!r} to replace")
+                rid, old = dbox[e["replace"]]
+                patch = dict(old, type=e["name"], name=e["preset"])
+                if "dbox_default" in e:
+                    patch["dbox_data"] = dbox_data(f"drum engine {e['name']}", [e["dbox_default"]] * 24)
+                con.execute("UPDATE drum_presets SET patch=? WHERE id=?", (json.dumps(patch, separators=(",", ":")), rid))
+                print(f"drum engine {did} {e['name']}: drum preset {rid} {e['replace']!r} -> {e['preset']!r}")
+            if "kits" in e:             # add one dbox-folder preset per kit, fields from a stock template
+                kits = json.load(open(os.path.join(ROOT, e["kits"])))
+                for name, kit in kits.items():
+                    if kit["template"] not in dbox or any(name == json.loads(p)["name"] for (p,) in
+                                                          con.execute("SELECT patch FROM drum_presets")):
+                        sys.exit(f"drum kit {name!r}: unknown template {kit['template']!r} or name taken")
+                    patch = dict(dbox[kit["template"]][1], type=e["name"], name=name,
+                                 dbox_data=dbox_data(f"drum kit {name!r}", kit["dbox_data"]))
+                    con.execute("INSERT INTO drum_presets (patch, folder) VALUES (?, 'dbox')",
+                                (json.dumps(patch, separators=(",", ":")),))
+                print(f"drum engine {did} {e['name']}: kits {', '.join(kits)}")
         drum_presets = con.execute("SELECT count(*) FROM drum_presets").fetchone()[0]
-        if drum_presets > STOCK_DRUM_PRESETS:
-            sys.exit(f"{drum_presets} drum presets: more than stock's {STOCK_DRUM_PRESETS} would leave users fewer than "
-                     f"{MAX_DRUM_PATCHES - STOCK_DRUM_PRESETS} saved drum sounds before patch.cpp:656 asserts at boot")
+        if drum_presets > MAX_FACTORY_DRUM_PRESETS:
+            sys.exit(f"{drum_presets} drum presets: more than {MAX_FACTORY_DRUM_PRESETS} would leave users fewer than "
+                     f"{MAX_DRUM_PATCHES - MAX_FACTORY_DRUM_PRESETS} saved drum sounds before patch.cpp:656 asserts at boot")
+        print(f"drum presets: {drum_presets} (room for {MAX_DRUM_PATCHES - drum_presets} saved drum sounds; "
+              f"patch.cpp:656 asserts at boot above {MAX_DRUM_PATCHES} in all)")
         for f in fxs:
             con.execute("INSERT INTO fx_types VALUES ((SELECT max(id) + 1 FROM fx_types), ?, ?)",
                         (f["name"], json.dumps(f["default"])))
