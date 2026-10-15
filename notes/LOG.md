@@ -853,3 +853,59 @@
 - Report: PITCH semitones per detent, RATIO steps per detent, choke behaviour, snare verdict, readout behaviour, any crash or assert text (photo).
 - **Cleanup before an image without fmdrum**: as DRUMFM1 (fmdrum and dprobe sounds in slots and saves).
 - Result: _pending user flash_.
+
+## 2026-10-15 — Test image 66: AMP2.OP1 (DSP review pass 2: amp aliasing and blackface tone)
+- amp only (notes/amp.md "Chain"); commits 8601fc2, 65fa664, 2603d73. Simulator, before → after:
+  1. The seven SVFs in hand-written Blackfin assembly (each sum of two 32 × 32 products in one accumulator chain,
+     coefficients and samples loaded in parallel slots): 34 → 17..25 instructions per sample; 73,902 → 63,889 cycles
+     per DSP call. Not bit-exact (one truncation per sum instead of two): closer to a double reference than the C was
+     (rms error, Q24 LSB: cab high-pass 534 → 385, bells 61 → 43 / 6.6 → 4.8, low-passes 22 → 15).
+  2. First-order ADAA on both shapers (distortion.c's tube kernel and FIX, at most 32 straddling pairs per stage and
+     block; stage 2 is the tube at 1.5× its input), the loop split into passes, upsampler / drive / interstage in
+     assembly. Aliasing at maximum drive (DI, tone centre, the review's metric): 997 Hz −36.4 → −50.8 dB, 2489 Hz
+     −24.9 → −43.7 dB; fuzz preset −37.4 / −32.0 → −52.6 / −51.8; lead −47.0 / −38.6 → −63.2 / −56.9. Clean THD+N at
+     a −40 dBFS sine −61.3 → −62.4 dB (blue 0), −58.6 → −59.5 (clean preset). 63.9k → 53.9k cycles. The gate gain now
+     multiplies the drive gain (after the linear tight / pre-emphasis filters).
+  3. Blackface tone: the two shelves plus a fixed −8 dB bell at 450 Hz (Q 0.7) between the interstage low-pass and
+     stage 2, scaled to a peak gain of 0 dB like a passive stack (bright drives stage 2's highs 10 dB less than a
+     +10 dB shelf would) and made up after stage 2 (dark fully; bright fully at clean, less with drive), so tone 0 /
+     32767 stay about +4 / −4 dB from the centre at every drive, as in pass 1. The interstage got a second pole at
+     7 kHz (with the scoop, stage 1's aliases weigh more: float model 997 Hz −42.9 → −53.1 dB). Stack response (dB at
+     60 / 200 / 450 / 1k / 3k / 8k Hz): dark +4.6 −0.2 −7.9 −4.3 −7.4 −9.7, centre −0.3 −3.1 −8.0 −3.2 −0.4 −0.1,
+     bright −5.3 −6.1 −8.1 −2.1 +6.6 +9.6. Cab bells unchanged.
+- Final: aliasing at maximum drive, tone dark / centre / bright: 997 Hz −64.3 / −55.8 / −51.3 dB, 2489 Hz −49.3 /
+  −55.5 / −42.7 dB. Presets (−15 dBFS note, rms) clean −18.5 → −18.2, crunch −14.0 → −13.4, lead −10.8 → −10.6, fuzz
+  −14.4 → −13.6, ambient clean −18.9 → −18.8 dBFS (COMP_DB re-measured). Clean THD+N at −40 dBFS −60.5 / −57.3 dB:
+  the 2 dB over step 2 is the scoop cutting the 1 kHz test tone against stage 1's 2nd harmonic; the off-harmonic floor
+  stays at −83 dB. THD vs blue −50.5 … −5.1 dB (was −45.8 … −7.4).
+- Cycles per DSP call: 57.7k for guitar (amp_check max 58,066), **61,854 worst** (noise or a 0 dBFS 9 kHz sine at full
+  drive: FIXMAX hit in both stages); budget 76,800: 14.9k (19 %) margin at the worst case (pass 1: 73,902, 3.8 %).
+  Every pass now reads and writes a 128-word buffer in amp_ram (SDRAM).
+- Checks: amp (new: aliasing at maximum drive across the tone knob, the stack's mid scoop −6.4 dB at 450 Hz re
+  100 Hz / 3 kHz vs design −6.4, the ADAA pair average, the stack and the two-pole interstage in the expected
+  responses), amp_tune, fm4, fmdrum, grain, harm, inprobe, modal, sprobe, va, wt, wt_import, distortion, drumhooks,
+  drumprobe, ensemble, fx_abi, knobhook, pingpong: all pass. Knob mappings, presets, the amp screen and the tuner
+  unchanged.
+- `firmware/images/AMP2.OP1` = `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum
+  --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+  --db-trim harmonic=6 --db-trim fm4=6 --name AMP2` from commit 2603d73 in a clean `git archive`: synth ids va 15 …
+  fm4 22, dprobe drum 23, fmdrum 24; 176 of 176 synth presets, 28 drum presets (room for 30 saved drum sounds).
+  te-boot identical to stock. Includes DRUMFM2's fmdrum. sha256
+  a9a71eee026a285089b17449838729f85e7a95755260d9665535d8d6d3a25085.
+- **Before flashing**: 30 or fewer saved drum sounds, as DRUMFM2.
+- Listening checklist (guitar into the line jack, headphones; synth `amp`; hold or latch a note):
+  1. `clean`: soft and hard picking, chords. Glassier than AMP1/SOUND1 (the mid scoop), no grain on decays. Turn
+     green fully dark and fully bright: dark warm, bright sparkly, both about as loud as the centre ± 4 dB.
+  2. `crunch`: chords and single notes; green from dark to bright should change the grind itself (bright: more
+     bite in the clipping, dark: rounder), not only the treble on top.
+  3. `lead`: high notes on the B and E strings above the 12th fret and wide bends: listen for a whistle or ringing
+     tone that does not follow the bend (aliasing); should be gone or far below AMP1's.
+  4. `fuzz` and blue at full: repeat the bends and high notes with green fully dark, centre and fully bright.
+     Fully bright is the worst case (−42.7 dB at 2489 Hz in the sim): note any inharmonic fizz.
+  5. Chords at full drive: intermodulation is expected; listen for harsh non-musical hash compared with AMP1.
+  6. CPU: full drive, strum hard and continuously, with another FX on and the screen animating: any crackle, dropout
+     or UI stall (the DSP now peaks at 62k cycles in the sim, was 74k).
+  7. Turn blue and green slowly while playing: no zipper or level steps.
+- Report: clean / crunch / lead / fuzz at the tone extremes (too dark, bright, quiet, loud?), bends and high notes
+  (any aliasing whistle?), chords, crackle or dropouts, any crash or assert text (photo).
+- Result: _pending user flash_.

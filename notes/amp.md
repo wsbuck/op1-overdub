@@ -3,7 +3,8 @@
 A synth engine that plays TE's audio input (the line jack) through a guitar amp: gate, drive, tone, cab.
 Input research: notes/input.md (AMPPROBE, test images 55–55d). Code: `src/engine/amp.c`, `amp.h`, `amp_tables.h`
 (from `gen_amp_tables.py`); screen in `src/slot/ui.c` (`draw_amp`), tuner `src/slot/amp_tune.h`.
-Status: test engine (engines.json `"test": true`), first image AMP1 (LOG.md test image 58).
+Status: test engine (engines.json `"test": true`), first image AMP1 (LOG.md test image 58); DSP review pass 2 in AMP2
+(test image 66).
 
 ## Platform facts it builds on
 - `0xFF800CB4` (TE IN): int16 mono, 64 samples at 44.1 kHz, written at the start of every audio callback, before the
