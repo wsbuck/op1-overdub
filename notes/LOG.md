@@ -939,7 +939,7 @@
 - **Cleanup before an image without fmdrum**: as DRUMFM1.
 - Result: _pending user flash_.
 
-## 2026-10-15 — WTPOS: wavetable blue (position) smoothed per sample (no image yet)
+## 2026-10-15 — Test image 68: WTPOS.OP1 (wavetable blue smoothed per sample; DRUMFM3's fmdrum column)
 - Cause (Confirmed, sim): blue is params[0] = position, morphing through the bank's 12 frames (green = bank, `k >> 12`;
   blue never crosses a bank). wt.c read it once per block and used it for the whole block, so each encoder detent
   (1024 raw = 0.34 frame) stepped the frame blend at a block edge. Bell, one detent at position 12288: the output steps
@@ -965,3 +965,11 @@
   and `lfo:k,period` knob schedules. wt, amp, fm4, fmdrum, grain, harm, inprobe, modal, sprobe, va, wt_import: all pass.
 - Listen: wavetable, bell bank (green), turn blue slowly one detent at a time, low and high notes: no click per detent;
   turn fast: follows without a lag you notice. LFO on blue: no zipper.
+- First firmware build failed at link: `undefined reference to memset` in engine_render. The `struct osc_run`
+  initialiser zeroed `lk` with memset; the simulator links libc, so wt_check passed. Fixed in 7b91d8a (fields set one
+  by one; frame_pair fills lk before each run); wt_check passes (max 46,852 cycles).
+- `firmware/images/WTPOS.OP1` = DRUMFM3's command with `--name WTPOS`, from commit 7b91d8a in a clean `git archive`:
+  synth va 15 … fm4 22, dprobe drum 23, fmdrum 24; drum folders dbox 10, drum 14, fmdrum 4 (room for 30 saved drum
+  sounds); te-boot identical to stock. sha256 a8d8e6c8f4bdfa6aed0be16ed90cb5dee381e27681276a95550a66f213ae2312.
+- Also check DRUMFM3's list (test 67): the fmdrum column, kits load and play, snapshots save to user.
+- Result: _pending user flash_.
