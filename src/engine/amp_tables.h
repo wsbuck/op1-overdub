@@ -7,8 +7,8 @@
 #define AMP_HB_K 12                   /* upsampler taps per side of the odd phase */
 #define AMP_EMPH_A 133363146        /* pre-emphasis low-pass (900 Hz), Q31 */
 #define AMP_INTER_A 843229609      /* interstage low-pass (7000 Hz), Q31 */
-/* half-band odd-phase taps (Q15): mid = sum c[k] (x[c - k] + x[c + 1 + k]) */
-static const int16_t amp_hb[12] = {
+/* half-band odd-phase taps (Q15): mid = sum c[k] (x[c - k] + x[c + 1 + k]); word-aligned (amp.c loads pairs) */
+static const int16_t amp_hb[12] __attribute__((aligned(4))) = {
     20660, -6434, 3441, -2086, 1306, -811, 487, -277, 145, -67, 25, -5 };
 
 /* blue rows: gain Q23, tight high-pass a Q31, pre-emphasis e Q15, bias Q20, stage-2 gain Q12, loudness Q12 */

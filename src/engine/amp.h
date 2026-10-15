@@ -49,12 +49,19 @@ struct amp_ram {
     int32_t knob[4];                       /* slewed knobs */
     int32_t env;                           /* gate detector, Q15 */
     int32_t hold;                          /* gate hold, samples */
-    int32_t tight, emph, inter;            /* one-pole states (Q24, Q24, Q20) */
+    int32_t tight, emph, inter;            /* one-pole states (Q24) */
     int32_t gain_prev, comp_prev;          /* last block's drive gain and make-up (ramped across the block; amp.c) */
     struct amp_svf f[AMP_FILTERS];
     int16_t buf[AMP_HIST + AMP_IN];        /* upsampler history (the last processed block's end), then this block's
                                             * TE IN (compared to detect a new block) */
-    int32_t z[AMP_OUT];                    /* DSP scratch (Q24), before the filters */
+    int16_t bs[AMP_HIST + AMP_IN];         /* buf shifted by one sample (bs[i + 1] = buf[i]): the upsampler's word
+                                            * loads are aligned in one of the two */
+    int32_t gd[AMP_IN];                    /* per input sample: gate gain x drive gain (Q23) */
+    int32_t pc[3];                         /* drive pass coefficients: tight a, pre-emphasis a, e (1 - a) (Q31) */
+    int32_t in1[AMP_OUT + 1];              /* stage-1 input (Q20, biased): [0] the last block's last, then the block */
+    int32_t in2[AMP_OUT + 1];              /* stage-2 input (Q20), the same layout */
+    int32_t *list[AMP_OUT + 1];            /* ADAA: the pairs straddling the knee (amp.c adaa) */
+    int32_t z[AMP_OUT];                    /* DSP scratch (Q24) */
     int16_t y[AMP_OUT];                    /* this block's output (before the voice gains) */
 };
 extern struct amp_ram amp_ram;
@@ -90,13 +97,7 @@ static inline int32_t amp_tube(int32_t v)
     return c - (((a3 >> 13) * 4855) >> 10);                     /* 4855 = 4/27 Q15; the linear term exact */
 }
 
-/* Stage 2: s2(a) = 1.5 (a - a^3 / 3) on a = clamp(v, -1, 1): +-1 at full (Q20 in and out; distortion.c's s2_c). */
-static inline int32_t amp_stage2(int32_t v)
-{
-    int32_t c = amp_lim(v, -AMP_U1, AMP_U1), a = c >> 6;        /* Q14 */
-    int32_t a3 = ((a * a) >> 14) * a;                           /* Q28 */
-    int32_t s = c - (((a3 >> 13) * 10923) >> 10);               /* 10923 = 1/3 Q15; the linear term exact */
-    return s + (s >> 1);
-}
+/* Stage 2: s2(a) = 1.5 (a - a^3 / 3) on a = clamp(x, -1, 1) is the tube at 1.5 x: s2(x) = amp_tube(1.5 x), so
+ * amp.c runs both stages through one kernel (the stage-2 gain carries the 1.5). */
 
 #endif

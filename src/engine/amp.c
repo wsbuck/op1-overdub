@@ -9,10 +9,12 @@
  *   [2] white   gate threshold: off at 0, then -84 .. -30 dBFS (opens above it, closes 6 dB below, 50 ms hold)
  *   [3] orange  cab: direct (no cab) -> 1x12 open back -> 2x12 -> 4x12 closed back
  *
- * Chain per block: TE IN (64 at 44.1 kHz) -> gate detector -> 2x half-band upsampler (24 taps, 88.2 kHz) -> gate gain ->
- * tight high-pass -> pre-emphasis -> drive -> tube (biased) -> 7 kHz interstage low-pass -> stage 2 -> low and high
- * shelf (tone) -> high-pass, mid bell, presence bell, two low-passes (cab) -> loudness -> limiter (-3 dBFS, gain from
- * the previous block's peak, 93 ms release) -> soft knee.
+ * Chain per block: TE IN (64 at 44.1 kHz) -> gate detector -> 2x half-band upsampler (24 taps, 88.2 kHz) -> tight
+ * high-pass -> pre-emphasis -> drive x gate gain -> tube (biased, ADAA) -> 7 kHz interstage low-pass -> stage 2 (ADAA) ->
+ * low and high shelf (tone) -> high-pass, mid bell, presence bell, two low-passes (cab) -> loudness -> limiter (-3 dBFS,
+ * gain from the previous block's peak, 93 ms release) -> soft knee. Run as passes over the block (amp_dsp): gate (C),
+ * then hand-written loops: upsampler, drive, stage 1, interstage, stage 2, the SVFs; both shapers are distortion.c's
+ * tube kernel with first-order antiderivative anti-aliasing (stage 2 = the tube at 1.5x its input).
  *
  * One voice only plays the input (else a chord would stack copies of the guitar). Every voice calls render; the
  * shared state is amp_ram (amp.h). Per call:
@@ -26,8 +28,8 @@
  *      handover is an 11.6 ms crossfade of the same y[], so the level stays put. Non-owners at gain 0 output silence
  *      (the DSP runs once per block whoever renders first). A voice that skipped a block, or has a fresh note-on, fades in from 0.
  *
- * Fixed point: audio Q24 (1.0 = full scale), the shaper in Q20, coefficients Q31 / Q28 / Q29 (amp_tables.h, from
- * gen_amp_tables.py), qmul() for 32 x 32. No division operator (udiv() / recip_q31() loops, per block only).
+ * Fixed point: audio Q24 (1.0 = full scale), the shapers' inputs Q20, coefficients Q31 / Q28 / Q29 (amp_tables.h, from
+ * gen_amp_tables.py), 32 x 32 multiplies without the low x low partial product. No division operator (udiv() / recip_q31() loops, per block only).
  * State bytes: 0..3 note-on mark (TE writes 0x80000000), 4..7 the block of this voice's last render, 28 iter's
  * released flag; the rest is TE's (note-on writes 8..11, 16..27).
  */
@@ -168,6 +170,244 @@ static __attribute__((noinline)) void svf_block(struct amp_svf *f, const int32_t
             "2:\tR1 = R0 - R7;\n\t"
             "[%[st]] = R6;\n\t[%[st] + 4] = R7;\n" SVF_ARGS);
 }
+/* ---- the drive section (passes over the block) ----
+ * hb_pass: 2x up into z: the even sample is the input delayed by AMP_HB_K, the odd one the half-band interpolation
+ *   (dual 16-bit MACs, taps in R2-R7); Q24.
+ * drive_pass: z -> v[1..128]: tight high-pass, pre-emphasis, x gate x drive gain (gd, per input sample), saturated
+ *   to +-32, + bias (Q20). v[0] gets the last block's last v (stored through the pipelined store).
+ * adaa: the tube's first-order antiderivative anti-aliasing, v -> y (Q24, 1.0 = clip), from distortion.c: per pair
+ *   (a, b) of consecutive inputs the mean of the curve over [a, b]; within the knee the closed form
+ *   (a + b) / 2 - (a + b) (a^2 + b^2) / 27 (no division); pairs straddling the knee go on a list and take
+ *   (F(b) - F(a)) / (b - a) (at most FIXMAX per call: the rest keep the closed form of the clamped pair).
+ * inter_pass: z (stage 1) -> w[1..128]: the interstage low-pass, minus stage 1's DC, x the stage-2 gain. */
+#define HB_B(C, X) "A0 += R0.L * " C ".H, A1 += R0.H * " C ".L (IS)" X ";\n\t"   /* c[-k] hb[k] + c[-k-1] hb[k+1] */
+#define HB_F(C, X) "A0 += R1.L * " C ".L, A1 += R1.H * " C ".H (IS)" X ";\n\t"   /* c[1+k] hb[k] + c[2+k] hb[k+1] */
+#define HB_ONE(IB, IF)                                                                                               \
+    "MNOP || R0 = [" IB "--] || R1 = [" IF "++];\n\t"                                                                \
+    "A0 = R0.L * R2.H, A1 = R0.H * R2.L (IS) || R0 = [" IB "--] || NOP;\n\t"                                         \
+    HB_F("R2", " || R1 = [" IF "++] || NOP") HB_B("R3", " || R0 = [" IB "--] || NOP")                               \
+    HB_F("R3", " || R1 = [" IF "++] || NOP") HB_B("R4", " || R0 = [" IB "--] || NOP")                               \
+    HB_F("R4", " || R1 = [" IF "++] || NOP") HB_B("R5", " || R0 = [" IB "--] || NOP")                               \
+    HB_F("R5", " || R1 = [" IF "++] || NOP") HB_B("R6", " || R0 = [" IB "--] || NOP")                               \
+    HB_F("R6", " || R1 = [" IF "++] || NOP") HB_B("R7", " || " IB " += M0 || NOP")                                   \
+    HB_F("R7", " || " IF " -= M1 || NOP")                                                                            \
+    "R0 = (A0 += A1);\n\t"                                                                                           \
+    "R0 >>>= 6;\n\t"                                       /* Q30 -> Q24 */                                         \
+    "R1 = W[%[ev]++] (X);\n\t"                                                                                          \
+    "R1 <<= 9;\n\t"                                        /* the even sample: c[0], Q24 */                         \
+    "[%[x]++] = R1;\n\t"                                                                                               \
+    "[%[x]++] = R0;\n\t"
+/* 2x up into x2 (Q24): x2[2i] = c[0], x2[2i + 1] = sum hb[k] (c[-k] + c[1 + k]), c = b + i + AMP_HB_K. Word loads of
+ * sample pairs (dual 16-bit MACs, the taps in R2-R7 as pairs): for even i from bs, for odd i from b, where the words
+ * c - 1 - 2j and c + 1 + 2j are aligned. */
+static __attribute__((noinline)) void hb_pass(struct amp_ram *g, int32_t *x2)
+{
+    const int16_t *b = g->buf;
+    int16_t *bs = g->bs;
+    const int16_t *ev = b + AMP_HB_K;
+    for (int i = 0; i < AMP_HIST + AMP_IN - 1; i++)
+        bs[i + 1] = b[i];
+    __asm__ volatile(
+        "R2 = [%[hb]];\n\tR3 = [%[hb] + 4];\n\tR4 = [%[hb] + 8];\n\tR5 = [%[hb] + 12];\n\t"
+        "R6 = [%[hb] + 16];\n\tR7 = [%[hb] + 20];\n\t"
+        "I0 = %[e0];\n\tI1 = %[e0];\n\tI1 += 4;\n\tI2 = %[o0];\n\tI3 = %[o0];\n\tI3 += 4;\n\t"
+        "R0 = 28;\n\tM0 = R0;\n\tR0 = 20;\n\tM1 = R0;\n\t"
+        "R0 = %[n];\n\tLC0 = R0;\n\t"
+        "LSETUP (1f, 2f) LC0;\n1:\t"
+        HB_ONE("I0", "I1")
+        HB_ONE("I2", "I3")
+        "2:\tNOP;\n"
+        : [x] "+a"(x2), [ev] "+a"(ev)
+        : [hb] "a"(amp_hb), [e0] "a"(bs + AMP_HB_K), [o0] "a"(b + AMP_HB_K), [n] "i"(AMP_IN / 2)
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "A0", "A1", "I0", "I1", "I2", "I3", "M0", "M1", "cc", "LC0",
+          "LT0", "LB0", "memory");
+}
+
+/* One drive sample: R0 s (Q24) -> R3 v (Q20); R4 gain, R5 bias, R6 tight state, R7 pre-emphasis state; I1 pc[]. The
+ * first instruction stores the previous v (R3); LOADG: the gain load (once per input sample). */
+#define DRIVE_SMP(LOADG)                                                                                             \
+    "R1 = R0 - R6 (NS) || [I2++] = R3 || R2 = [I1++];\n\t"     /* s - tight lp; R2 tight a */                       \
+    "A1 = R2.H * R1.L (M), A0 = R2.H * R1.H" LOADG ";\n\t"                                                           \
+    "A1 += R1.H * R2.L (M);\n\t"                                                                                     \
+    "A1 = A1 >>> 15 || R3 = [I1++] || NOP;\n\t"                /* R3 pre-emphasis a */                              \
+    "R2 = (A0 += A1);\n\t"                                                                                           \
+    "R6 = R6 + R2;\n\t"                                                                                              \
+    "R0 = R0 - R6;\n\t"                                        /* tight */                                          \
+    "R1 = R0 - R7;\n\t"                                        /* d = s - pre-emphasis lp */                        \
+    "A1 = R3.H * R1.L (M), A0 = R3.H * R1.H || R2 = [I1++] || NOP;\n\t"   /* R2 e (1 - a) */                        \
+    "A1 += R1.H * R3.L (M);\n\t"                                                                                     \
+    "A1 = A1 >>> 15;\n\t"                                                                                            \
+    "R3 = (A0 += A1);\n\t"                                                                                           \
+    "R7 = R7 + R3;\n\t"                                                                                              \
+    "A1 = R2.H * R1.L (M), A0 = R2.H * R1.H || I1 -= M1 || NOP;\n\t"                                                 \
+    "A1 += R1.H * R2.L (M);\n\t"                                                                                     \
+    "A1 = A1 >>> 15;\n\t"                                                                                            \
+    "R3 = (A0 += A1);\n\t"                                                                                           \
+    "R0 = R0 + R3;\n\t"                                        /* s + e (s - new lp) */                             \
+    "R0 <<= 4;\n\t"                                                                                                  \
+    "A1 = R4.H * R0.L (M), A0 = R4.H * R0.H;\n\t"                                                                    \
+    "A1 += R0.H * R4.L (M);\n\t"                                                                                     \
+    "A1 = A1 >>> 15;\n\t"                                                                                            \
+    "R0 = (A0 += A1);\n\t"                                     /* drive, Q20 */                                     \
+    "R0 = R0 << 6 (S);\n\t"                                                                                          \
+    "R0 >>>= 6;\n\t"                                           /* saturated to +-32 */                              \
+    "R3 = R0 + R5 (NS) || R0 = [I0++] || NOP;\n\t"             /* + bias; the next s */
+static __attribute__((noinline)) void drive_pass(struct amp_ram *g, int32_t bias)
+{
+    __asm__ volatile(
+        "I0 = %[x];\n\tI1 = %[pc];\n\tI2 = %[v];\n\tI3 = %[gd];\n\tR0 = 12;\n\tM1 = R0;\n\t"
+        "R5 = %[bias];\n\tR6 = [%[st]];\n\tR7 = [%[st] + 4];\n\tR3 = [%[v] + 4 * %[n2]];\n\tR0 = [I0++];\n\t"
+        "R1 = %[n];\n\tLC0 = R1;\n\t"
+        "LSETUP (1f, 2f) LC0;\n1:\t"
+        DRIVE_SMP(" || R4 = [I3++] || NOP")
+        DRIVE_SMP("")
+        "2:\tNOP;\n\t"
+        "[I2++] = R3;\n\t"
+        "[%[st]] = R6;\n\t[%[st] + 4] = R7;\n"
+        :
+        : [x] "a"(g->z), [pc] "a"(g->pc), [v] "a"(g->in1), [gd] "a"(g->gd), [bias] "a"(bias), [st] "a"(&g->tight),
+          [n] "i"(AMP_IN), [n2] "i"(AMP_OUT)
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "A0", "A1", "I0", "I1", "I2", "I3", "M1", "cc", "LC0", "LT0",
+          "LB0", "memory");
+}
+
+/* 2^14 / (1 + i / 64), i = 0 .. 64: reciprocal, linearly interpolated (7.6e-5 relative error); distortion.c's */
+static const uint16_t recip_tab[65] = {
+    16384, 16132, 15888, 15650, 15420, 15197, 14980, 14769, 14564, 14364, 14170, 13981, 13797, 13618, 13443, 13273,
+    13107, 12945, 12788, 12633, 12483, 12336, 12193, 12053, 11916, 11782, 11651, 11523, 11398, 11275, 11155, 11038,
+    10923, 10810, 10700, 10592, 10486, 10382, 10280, 10180, 10082, 9986, 9892, 9800, 9709, 9620, 9533, 9447,
+    9362, 9279, 9198, 9118, 9039, 8962, 8886, 8812, 8738, 8666, 8595, 8525, 8456, 8389, 8322, 8257, 8192,
+};
+
+#define LOOP_IN "R1 = %[n];\n\tLC0 = R1;\n\tLSETUP (1f, 2f) LC0;\n1:\t"
+#define LIST "[%[lp]] = %[y];\n\t%[lq] = %[lp] + %[four];\n\tIF CC %[lp] = %[lq];\n\t"
+#define LOOP_OUT [up] "+a"(up), [y] "+a"(y), [lp] "+a"(lp), [lq] "=&a"(lq)
+#define LOOP_CLOBBERS "R1", "R2", "R3", "A0", "M3", "cc", "LC0", "LT0", "LB0", "memory"
+
+/* The closed-form mean of each pair (a, b) clamped to the knee (16-bit products for the cubic, the linear term
+ * exact); a pair whose ends lie on different sides of +-1.5 goes on the list (distortion.c's tube_fast). */
+static __attribute__((noinline)) int32_t **tube_fast(const int32_t *v, int32_t *y, int32_t **lp)
+{
+    int32_t a = amp_lim(v[0], -AMP_KNEE, AMP_KNEE), am = v[0] - AMP_KNEE, ap = v[0] + AMP_KNEE, k = AMP_KNEE, nk = -AMP_KNEE;
+    const int32_t *up = v + 1;
+    int32_t **lq;
+    __asm__ volatile(
+        "R2 = %[c27] (X);\n\tM3 = R2;\n\t"
+        LOOP_IN
+        "R1 = [%[up]++];\n\t"
+        "R2 = R1 - %[k];\n\t"
+        "%[am] = %[am] ^ R2;\n\t"
+        "R3 = R1 + %[k];\n\t"
+        "%[ap] = %[ap] ^ R3;\n\t"
+        "%[am] = %[am] | %[ap];\n\t"
+        "CC = %[am] < 0;\n\t"
+        "%[am] = R2;\n\t"
+        "%[ap] = R3;\n\t"
+        "R1 = MAX (R1, %[nk]);\n\t"
+        "R1 = MIN (R1, %[k]);\n\t"           /* b clamped */
+        "R2 = %[a] >>> 7;\n\t"               /* a, b in Q13 */
+        "R3 = R1 >>> 7;\n\t"
+        "A0 = R2.L * R2.L (IS);\n\t"
+        "A0 += R3.L * R3.L (IS);\n\t"        /* a^2 + b^2, Q26 */
+        "R3 = R2 + R3;\n\t"
+        "R2 = M3;\n\t"
+        "R3 = R3.L * R2.L (IS);\n\t"
+        "R3 >>>= 15;\n\t"                    /* (a + b) / 27, Q13 */
+        "R2 = A0;\n\t"
+        "R2 >>>= 14;\n\t"                    /* Q12 */
+        "R2 = R2.L * R3.L (IS);\n\t"
+        "R2 >>>= 1;\n\t"                     /* (a + b) (a^2 + b^2) / 27, Q24 */
+        "R3 = %[a] + R1;\n\t"
+        "R3 <<= 3;\n\t"
+        "R3 = R3 - R2;\n\t"
+        "[%[y]++] = R3;\n\t"
+        LIST
+        "2:\t%[a] = R1;\n"
+        : LOOP_OUT, [a] "+d"(a), [am] "+d"(am), [ap] "+d"(ap)
+        : [k] "d"(k), [nk] "d"(nk), [four] "a"(4), [c27] "i"(1214), [n] "i"(2 * (AMP_OUT / 2))
+        : LOOP_CLOBBERS);
+    return lp;
+}
+
+/* Straddling pairs: (F(b) - F(a)) / (b - a), F = v^2 / 2 - v^4 / 27 inside the knee, + |v| - 1.5 beyond it; for a
+ * step below 2^-10 the closed form stays (distortion.c's FIX with F_TUBE: SIGNBITS-normalised |du|, recip_tab). */
+#define SQ(X, Y) /* Y = X * X >> 31 */                                                                              \
+    "A1 = " X ".L * " X ".L (FU);\n\tA1 = A1 >> 16;\n\tA0 = " X ".H * " X ".H, A1 += " X ".H * " X ".L (M);\n\t"     \
+    "A1 += " X ".H * " X ".L (M);\n\tA1 = A1 >>> 15;\n\t" Y " = (A0 += A1);\n\t"
+#define F_TUBE(I, O, T1, T2) /* v^2 / 2 - v^4 / 27 inside */                                                         \
+    O " = MAX (" I ", R7);\n\t" O " = MIN (" O ", R6);\n\t" T1 " = ABS " I ";\n\t" T2 " = ABS " O ";\n\t"           \
+    T1 " = " T1 " - " T2 ";\n\t" T1 " <<= 4;\n\t" O " <<= 9;\n\t" SQ(O, O) SQ(O, T2) O " >>>= 4;\n\t"             \
+    O " = " O " + " T1 ";\n\t" T1 " = M3;\n\tA1 = " T1 ".L * " T2 ".L (M);\n\tA0 = " T2 ".H * " T1 ".L;\n\t"       \
+    "A1 = A1 >>> 15;\n\t" T2 " = (A0 += A1);\n\t" O " = " O " - " T2 ";\n\t"
+#define FIX(F, K)                                                                                                    \
+    __asm__ volatile(                                                                                                \
+        "R0 = 1;\n\tR1 = R0 << 24;\n\tM1 = R1;\n\tR1 = R0 << 20;\n\tM2 = R1;\n\t"                            \
+        "R1 = 2427 (X);\n\tM3 = R1;\n\tR6.H = %[kh];\n\tR6.L = %[kl];\n\tR7 = -R6;\n\t"                               \
+        "LSETUP (1f, 2f) LC0 = %[n];\n"                                                                              \
+        "1:\tP1 = [%[lp]++];\n\tP1 += -4;\n\tI0 = P1;\n\tP2 = P1 + %[off];\n\tR0 = [P2];\n\tR1 = [P2 + 4];\n\t"         \
+        F("R1", "R2", "R3", "R4") F("R0", "R5", "R3", "R4")                                                          \
+        "R2 = R2 - R5;\n\tR1 = R1 - R0;\n\tR5 = ABS R1;\n\tR5 >>= 10;\n\t"     /* dF, du; R5 = 0: small step */      \
+        "CC = R1 < 0;\n\tR3 = -R2;\n\tIF CC R2 = R3;\n\tR1 = ABS R1;\n\t"                                          \
+        "R3.L = SIGNBITS R1;\n\tR3 = R3.L (X);\n\tR0 = LSHIFT R1 BY R3.L;\n\t"  /* normalised |du| */               \
+        "R1 = R0 >> 24;\n\tBITCLR (R1, 6);\n\tP1 = R1;\n\tR0 >>= 8;\n\tP1 = %[tab] + (P1 << 1);\n\t"                 \
+        "R1 = W [P1] (Z);\n\tR4 = W [P1 + 2] (Z);\n\tR4 = R1 - R4;\n\tR4 = R4.L * R0.L (FU);\n\tR4 >>= 16;\n\t"       \
+        "R1 = R1 - R4;\n\t"                                                     /* 2^14 / normalised |du| */         \
+        "R3 += -5;\n\tR2 = ASHIFT R2 BY R3.L;\n\t"                                                                   \
+        "A1 = R1.L * R2.L (M);\n\tA0 = R2.H * R1.L;\n\tA1 = A1 >>> 15;\n\tR2 = (A0 += A1);\n\tR2 >>>= 4;\n\t"          \
+        "CC = R5 == 0;\n\tR0 = [I0];\n\tIF CC R2 = R0;\n"                                                         \
+        "2:\t[I0] = R2;\n"                                                                                           \
+        : [lp] "+a"(lp)                                                                                              \
+        : [off] "a"(off), [tab] "a"(recip_tab), [n] "a"(n), [kh] "i"((K) >> 16), [kl] "i"((K) & 0xFFFF)              \
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P1", "P2", "I0", "A0", "A1", "M1", "M2", "M3", "cc",       \
+          "LC0", "LT0", "LB0", "memory")
+
+#define FIXMAX 32                           /* straddling pairs recomputed per stage and block (CPU bound) */
+
+/* The tube with ADAA over the block: v[0 .. AMP_OUT] in (Q20), y[0 .. AMP_OUT - 1] out (Q24). */
+static __attribute__((noinline)) void adaa(struct amp_ram *g, const int32_t *v, int32_t *y)
+{
+    int32_t **lp = g->list, **end = tube_fast(v, y, lp), n = end - lp, off = (const char *)v - (const char *)y;
+    n = n > FIXMAX ? FIXMAX : n;
+    if (n > 0)
+        FIX(F_TUBE, AMP_KNEE);
+}
+
+/* Interstage: il += a (y1 - dc - il) on stage 1's output z without its DC (silence stays exactly 0), then il x gain
+ * (Q22) -> in2[1 ..] (Q20); in2[0] gets the last block's last value through the pipelined store. */
+static __attribute__((noinline)) void inter_pass(struct amp_ram *g, int32_t dc, int32_t gain)
+{
+    __asm__ volatile(
+        "I0 = %[z];\n\tI2 = %[w];\n\tR4 = %[a];\n\tR5 = %[dc];\n\tR6 = [%[st]];\n\tR7 = %[gain];\n\t"
+        "R3 = [%[w] + 4 * %[n]];\n\tR0 = [I0++];\n\t"
+        "R1 = %[n];\n\tLC0 = R1;\n\t"
+        "LSETUP (1f, 2f) LC0;\n"
+        "1:\tR1 = R0 - R5 (NS) || [I2++] = R3 || R0 = [I0++];\n\t"
+        "R1 = R1 - R6;\n\t"
+        "A1 = R4.H * R1.L (M), A0 = R4.H * R1.H;\n\t"
+        "A1 += R1.H * R4.L (M);\n\t"
+        "A1 = A1 >>> 15;\n\t"
+        "R2 = (A0 += A1);\n\t"
+        "R6 = R6 + R2;\n\t"
+        "R1 = R6 << 5;\n\t"
+        "A1 = R7.H * R1.L (M), A0 = R7.H * R1.H;\n\t"
+        "A1 += R1.H * R7.L (M);\n\t"
+        "A1 = A1 >>> 15;\n"
+        "2:\tR3 = (A0 += A1);\n\t"
+        "[I2++] = R3;\n\t"
+        "[%[st]] = R6;\n"
+        :
+        : [z] "a"(g->z), [w] "a"(g->in2), [a] "a"(AMP_INTER_A), [dc] "a"(dc), [gain] "a"(gain), [st] "a"(&g->inter),
+          [n] "i"(AMP_OUT)
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "A0", "A1", "I0", "I2", "cc", "LC0", "LT0", "LB0", "memory");
+}
+
+/* tube_fast's mean for the constant input bias (Q24): stage 1's DC, removed after the interstage low-pass. */
+static int32_t tube_dc(int32_t bias)
+{
+    int32_t a = bias >> 7, m = ((((a * a * 2) >> 14) * (((2 * a) * 1214) >> 15)) >> 1);
+    return (bias << 4) - m;
+}
+
 static void amp_init(struct amp_ram *g, const int16_t *params)
 {
     uint32_t *w = (uint32_t *)g;
@@ -212,13 +452,15 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
     }
     const int32_t dgain = (gain - g->gain_prev) >> 6, dcomp = (comp - g->comp_prev) >> 7;
     int32_t gk = g->gain_prev, ck = g->comp_prev;
-    const int32_t tb = amp_tube(bias);
+    /* drive pass coefficients: e (s - new lp) = e (1 - a) (s - old lp) */
+    g->pc[0] = tight_a;
+    g->pc[1] = AMP_EMPH_A;
+    g->pc[2] = fmul(emph, (int32_t)(0x7FFFFFFF - AMP_EMPH_A)) << 1;
 
     int16_t *b = g->buf;                                            /* 24 samples of history, then the block */
 
     int32_t env = g->env, hold = g->hold, open = g->gate_open, gg = g->gate_gain;
     int32_t thr_c = thr >> 1;
-    int32_t tl = g->tight, el = g->emph, il = g->inter;
     int32_t lg = g->lim_gain, peak = 0, in_peak = 0;
     /* limiter: the gain for this block from the last block's peak (out_peak, Q15) */
     int32_t lt = 32767, p = g->out_peak;
@@ -231,8 +473,9 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
     int16_t *y = g->y;
     int32_t *zb = g->z;
 
+    /* gate detector on the raw input (it runs AMP_HB_K samples ahead of the delayed audio: a little lookahead); the
+     * gate gain multiplies the drive gain (after the tight and pre-emphasis filters: they are linear) */
     for (int i = 0; i < AMP_IN; i++) {
-        /* gate detector on the raw input (it runs AMP_HB_K samples ahead of the delayed audio: a little lookahead) */
         int32_t x = b[AMP_HIST + i], ax = x < 0 ? -x : x;
         in_peak = ax > in_peak ? ax : in_peak;
         ax <<= 9;                                                   /* Q24 */
@@ -252,26 +495,16 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
             open = 0;
         }
         gg = open ? gg + (((1 << 30) - gg) >> 5) : gg - (gg >> 12); /* 0.7 ms attack, 93 ms release */
-
-        /* 2x up: the even sample is the input delayed by AMP_HB_K, the odd one the half-band interpolation */
-        const int16_t *c = b + i + AMP_HB_K;
-        int32_t acc = 0;
-        for (int k = 0; k < AMP_HB_K; k++)
-            acc += amp_hb[k] * (c[-k] + c[1 + k]);
-        for (int h = 0; h < 2; h++) {
-            int32_t s = fmul(h ? acc >> 6 : c[0] << 9, gg) << 1;    /* Q24, gated */
-            tl += fmul(tight_a, s - tl);                            /* tight */
-            s -= tl;
-            el += fmul(AMP_EMPH_A, s - el);                         /* pre-emphasis */
-            s += fmul(s - el, emph) << 1;
-            int32_t u = qmul(s << 4, gk);                           /* drive, Q20 */
-            u = amp_lim(u, -32 * AMP_U1, 32 * AMP_U1);
-            int32_t y1 = amp_tube(u + bias) - tb;                   /* stage 1 */
-            il += fmul(AMP_INTER_A, y1 - il);                       /* interstage */
-            zb[2 * i + h] = amp_stage2(((il >> 4) * k2) >> 8) << 4; /* stage 2, Q24 */
-        }
+        g->gd[i] = fmul(gk, gg) << 1;                               /* Q23 */
         gk += dgain;
     }
+    if (!g->dsp_blocks)
+        g->in1[AMP_OUT] = bias;                                     /* stage 1's previous input: at rest */
+    hb_pass(g, zb);                                                 /* 2x up */
+    drive_pass(g, bias);                                            /* tight, pre-emphasis, drive -> v */
+    adaa(g, g->in1, zb);                                              /* stage 1 */
+    inter_pass(g, tube_dc(bias), (k2 + (k2 >> 1)) << 10);           /* interstage, x 1.5 k2 (Q22) -> w */
+    adaa(g, g->in2, zb);                                              /* stage 2, Q24 */
     svf_block(&f[F_LOW], zb, zb, SHELF);                            /* tone */
     svf_block(&f[F_HIGH], zb, zb, SHELF);
     svf_block(&f[F_HP], zb, zb, HP);                                /* cab */
@@ -294,9 +527,6 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
     g->hold = hold;
     g->gate_open = open;
     g->gate_gain = gg;
-    g->tight = tl;
-    g->emph = el;
-    g->inter = il;
     g->gain_prev = gk;                                              /* = gain and comp within the ramps' truncation */
     g->comp_prev = ck;
     g->lim_gain = lnew;

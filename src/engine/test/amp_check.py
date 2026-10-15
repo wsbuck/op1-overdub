@@ -10,6 +10,8 @@ here) and runs every case under bfin-elf-run in one Docker container. Checks:
   gate           opens above the threshold, stays closed between the thresholds (hysteresis), stays open there once
                  open, closes after the hold below the close threshold, and is always open at white 0
   drive          harmonic distortion rises with blue; clean is clean
+  aliasing       at maximum drive (DI), -15 dBFS sines at 997 and 2489 Hz: the power off the harmonics (aliases and
+                 noise, 20 Hz..20 kHz) against the harmonics' power (both shapers have first-order ADAA)
   cab and tone   the measured response (white noise, clean drive) against gen_amp_tables.py's design
   ownership      one voice plays the input whatever the chord; handovers (new note, release, stop, steal) crossfade
                  without a step; the mix equals the single-voice reference within the crossfade's rounding;
@@ -80,6 +82,7 @@ GATE_WHITE = int(round((-56 + 84) / 54 * 32767))
 PRESETS = {                                 # engines.json "amp" presets (knobs), kept in sync by main()
 }
 DRIVES = [0, 8192, 16384, 24576, 32767]
+ALIAS_F = {997: -46.0, 2489: -40.0}         # Hz: limit (dB re the harmonics) at maximum drive
 
 
 def cases(workdir):
@@ -89,6 +92,8 @@ def cases(workdir):
     write(workdir, "gtr_hot", guitar(82.4, 0, 3.0))
     write(workdir, "gtr_noise", guitar(196, -15, 3.0, period=1.0, floor_db=-70))
     write(workdir, "sine", sine(220, -15, 1.0))
+    for f0 in ALIAS_F:
+        write(workdir, f"sine{f0}", sine(f0, -15, 1.0))
     write(workdir, "noise", RNG.normal(0, dbfs(-24), int(1.5 * FI)))
     write(workdir, "silence", np.zeros(FI // 2))
     g, _ = gate_signal()
@@ -100,6 +105,8 @@ def cases(workdir):
     for b in DRIVES:
         c[f"drive_{b}"] = (b, 16384, 0, 0, nb(1.0), "sine", "0n0", "")
         c[f"loud_{b}"] = (b, 16384, 0, 0, nb(3.0), "gtr", "0n0", "")
+    for f0 in ALIAS_F:
+        c[f"alias_{f0}"] = (32767, 16384, 0, 0, nb(1.0), f"sine{f0}", "0n0", "")
     for o in (0, 11264, 22528, 32767):
         c[f"cab_{o}"] = (0, 16384, 0, o, nb(1.5), "noise", "0n0", "")
     for t in (0, 32767):
@@ -163,6 +170,21 @@ def thd(x, f0, fs=FO):
     fr = np.fft.rfftfreq(len(x), 1 / fs)
     h = [m[np.abs(fr - f0 * n) < 4].max() for n in range(1, 11)]
     return 10 * np.log10(sum(v * v for v in h[1:]) / h[0] ** 2), h
+
+
+def alias_db(y, f0, fs=FO):
+    """Power off the harmonics of f0 (within 12 Hz) against the harmonics' power, 20 Hz..20 kHz, 0.4..0.9 s,
+    4-term Blackman-Harris window."""
+    y = y[int(0.4 * fs):int(0.9 * fs)].astype(float)
+    n = np.arange(len(y)) / (len(y) - 1)
+    w = 0.35875 - 0.48829 * np.cos(2 * np.pi * n) + 0.14128 * np.cos(4 * np.pi * n) - 0.01168 * np.cos(6 * np.pi * n)
+    p = np.abs(np.fft.rfft(y * w)) ** 2
+    fr = np.fft.rfftfreq(len(y), 1 / fs)
+    band = (fr > 20) & (fr < 20000)
+    harm = np.zeros(len(fr), bool)
+    for k in range(1, int(20000 / f0) + 1):
+        harm |= np.abs(fr - k * f0) < 12
+    return 10 * np.log10(p[band & ~harm].sum() / p[band & harm].sum())
 
 
 def response(workdir, name, inp):
@@ -251,10 +273,15 @@ def main():
     check(all(th[i + 1] > th[i] for i in range(len(th) - 1)) and th[0] < -30 and th[-1] > -12,
           "THD rises with blue: " + " ".join(f"{v:.1f}" for v in th) + " dB")
 
+    for f0, lim in ALIAS_F.items():
+        al = alias_db(load(workdir, f"alias_{f0}")[0], f0)
+        check(al < lim, f"aliasing at maximum drive, {f0} Hz: {al:.1f} dB re the harmonics (limit {lim:.0f})")
+
     # ---- cab and tone ----
     f = gat.RESP_F
     sel = (f >= 60) & (f <= 10000)
-    base = onepole_hp(f, gat.TIGHT[0]) * onepole_lp(f, gat.INTER_FC)
+    # the shapers' ADAA averages each pair of samples: (1 + z^-1) / 2 per stage where the curve is linear
+    base = onepole_hp(f, gat.TIGHT[0]) * onepole_lp(f, gat.INTER_FC) * np.cos(np.pi * f / FO) ** 2
     i1k = np.argmin(np.abs(f - 1000))
     for o in (0, 11264, 22528, 32767):
         h = response(workdir, f"cab_{o}", "noise")

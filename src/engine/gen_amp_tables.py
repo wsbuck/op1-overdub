@@ -136,9 +136,9 @@ def halfband():
     return c / (2 * c.sum())
 
 
-def fmt(name, ctype, vals, per=8):
+def fmt(name, ctype, vals, per=8, attr=""):
     body = ",\n    ".join(", ".join(str(v) for v in vals[i:i + per]) for i in range(0, len(vals), per))
-    return f"static const {ctype} {name}[{len(vals)}] = {{\n    {body} }};\n"
+    return f"static const {ctype} {name}[{len(vals)}]{attr} = {{\n    {body} }};\n"
 
 
 def blue_tables():
@@ -190,8 +190,8 @@ def main():
          f"#define AMP_HB_K {HB_K}                   /* upsampler taps per side of the odd phase */",
          f"#define AMP_EMPH_A {q(emph_a, 31)}        /* pre-emphasis low-pass ({EMPH_FC:.0f} Hz), Q31 */",
          f"#define AMP_INTER_A {q(inter_a, 31)}      /* interstage low-pass ({INTER_FC:.0f} Hz), Q31 */",
-         "/* half-band odd-phase taps (Q15): mid = sum c[k] (x[c - k] + x[c + 1 + k]) */",
-         fmt("amp_hb", "int16_t", [q(v, 15) for v in hb], 12),
+         "/* half-band odd-phase taps (Q15): mid = sum c[k] (x[c - k] + x[c + 1 + k]); word-aligned (amp.c loads pairs) */",
+         fmt("amp_hb", "int16_t", [q(v, 15) for v in hb], 12, " __attribute__((aligned(4)))"),
          "/* blue rows: gain Q23, tight high-pass a Q31, pre-emphasis e Q15, bias Q20, stage-2 gain Q12, loudness Q12 */",
          "#define AMP_BLUE_W 6",
          fmt("amp_blue", "int32_t", flat(blue_rows), 6),
