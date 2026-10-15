@@ -31,7 +31,11 @@
 #include <stdint.h>
 #include "crush.h"
 
+#ifdef __bfin__
 #define RAM __attribute__((section(".data")))
+#else
+#define RAM                             /* host builds (the screen preview, preview.py) */
+#endif
 #define BLOCK 64
 #define SUB 8                           /* compressor sub-block */
 #define ONE 65536                       /* one sample, Q16 */

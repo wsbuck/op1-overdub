@@ -143,9 +143,22 @@ void te_line(void *raster, const int32_t *a, const int32_t *b, int32_t width, co
 /* Our FX for previews: ids 8 ensemble, 9 pingpong, 10 distortion, 11 crush (fx.json order). */
 const uint8_t fx_kind[4] = { 1, 2, 3, 4 };
 const int32_t fx_count = 4;
-/* crush: what crush.c would publish mid-pump: 12 dB of gain reduction, 11 kHz, 9 bits, mostly mu-law */
-struct crush crush_state[2] = { { .gr = 13107, .rate_hz = 11025, .bits_q12 = 9 << 12, .mu = 20000 },
-                                { .gr = 13107, .rate_hz = 11025, .bits_q12 = 9 << 12, .mu = 20000 } };
+/* crush: the real crush.c (linked by preview.py) runs on silence until its knob smoothing has settled, so crush_state
+ * holds what the device would publish; CRUSH_GR (0 .. 32767) then sets the gain reduction (silence gives none). */
+void crush_mono(void *self, int16_t *buf, const int16_t *p);
+void crush_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
+static void crush_settle(void)
+{
+    int16_t l[64], r[64];
+    for (int b = 0; b < 200; b++) {
+        memset(l, 0, sizeof l);
+        memset(r, 0, sizeof r);
+        crush_mono(0, l, host_knobs);
+        crush_stereo(0, l, r, host_knobs);
+    }
+    const char *g = getenv("CRUSH_GR");
+    crush_state[0].gr = crush_state[1].gr = g ? atoi(g) : 0;
+}
 struct ens { uint32_t lfo, vib; int32_t depth, vdepth, ens, mix; int32_t d[2][3]; };
 struct ens ensemble_state[2] = { { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } }, { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } } };
 
@@ -364,13 +377,16 @@ int main(int argc, char **argv)
         }
         drum_ui_draw(0, 19);
     }
-    else if (e >= 100)
+    else if (e >= 100) {
+        if (e % 100 == 11)
+            crush_settle();
         for (int i = 0; i < frames; i++) {
             if (i == frames - 1)
                 host_drawing = 1;
             host_tick(i);
             fx_ui_draw(e % 100, e >= 200 ? 0 : 3, 0);
         }
+    }
     else if (e == 21)
         for (int i = 0; i < frames; i++) {
             if (i == frames - 1)

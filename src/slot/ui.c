@@ -1847,7 +1847,7 @@ static void draw_pedals(void *r, const int16_t *k)
     svg_cost(r);
 }
 
-/* crush: placeholder until its SVG screen (design/fx/crush.svg, being designed) is wired up. Four bars in the knob
+/* crush: the line fallback when content/display/crush3d.svg is missing (draw_pyramid below). Four bars in the knob
  * colours (RATE, BITS, SQUASH, GRIT) and the compressor's gain reduction as a white meter on the right; the hold rate
  * and bit depth below the title. The DSP's view (smoothed knobs, rate, bits, gain reduction, flips) is crush_state
  * (crush.h, notes/fx-crush.md "Screen"). */
@@ -1878,6 +1878,173 @@ static void draw_crush(void *r, const int16_t *k, int stereo)
         line_fp(r, FP(290), FP(40), FP(290), top, FP(4), WHITE);
 }
 
+/* crush: the 3D pyramid (design/fx/crush3d.svg, published as content/display/crush3d.svg; its header documents every
+ * id, threshold, matrix and recolour; gen_crush3d.py runtime_state() is the reference, followed here). Inputs from
+ * the DSP (crush_state): the smoothed knobs, the real bit depth (bits_q12) and mu-law share, the compressor's gain
+ * reduction (the pump); the frame counter is the clock (30 fps). Knobs Q15, matrices Q10. */
+enum { P_SUN, P_FARG, P_PYR, P_SMOOTH, P_CMU, P_CAP1, P_CAP2, P_PILE, P_PRESS, P_PUFF, P_CH1, P_CH2, P_CHR, P_SINGLE };
+static const char *const pyr_single[P_SINGLE] = { "sun", "farg", "pyr", "smooth", "cmu", "cap1", "cap2", "pile", "press",
+                                                  "puff", "ch1", "ch2", "chr" };
+enum { PA_VOX, PA_C = 4, PA_H = 8, PA_HW = 11, PA_HF = 14, PA_K = 17, PA_G = 23, PA_GS = 26, PA_D = 29, PA_DS = 33,
+       PA_N = 37 };
+static const char *const pyr_multi[PA_N] = {
+    "vox1", "vox2", "vox3", "vox4", "c1", "c2", "c3", "c4", "h1", "h2", "h3", "hw1", "hw2", "hw3", "hf1", "hf2", "hf3",
+    "k1", "k2", "k3", "k4", "k5", "k6", "g1", "g2", "g3", "gs1", "gs2", "gs3", "d1", "d2", "d3", "d4",
+    "ds1", "ds2", "ds3", "ds4" };
+/* Recoloured styles: (id, stroke?, role). Roles index the palette rows below. */
+enum { RL_L, RL_R, RL_RS, RL_T, RL_CORE, RL_COURSE, RL_SUN, RL_FARL, RL_FARR, RL_SHADOW, RL_HORIZON, RL_SAND, RL_N };
+static const struct { const char *id; uint8_t stroke, role; } pyr_rc_ids[] = {
+    { "faceL", 0, RL_L }, { "faceL", 1, RL_L }, { "faceR", 0, RL_R }, { "faceR", 1, RL_RS },
+    { "vl1", 0, RL_L }, { "vl2", 0, RL_L }, { "vl3", 0, RL_L }, { "vl4", 0, RL_L },
+    { "vr1", 0, RL_R }, { "vr2", 0, RL_R }, { "vr3", 0, RL_R }, { "vr4", 0, RL_R },
+    { "vt1", 0, RL_T }, { "vt2", 0, RL_T }, { "vt3", 0, RL_T }, { "vt4", 0, RL_T },
+    { "hf1", 0, RL_T }, { "hf2", 0, RL_T }, { "hf3", 0, RL_T }, { "hw1", 0, RL_CORE }, { "hw2", 0, RL_CORE },
+    { "hw3", 0, RL_CORE }, { "gl1", 0, RL_R }, { "gl2", 0, RL_R }, { "gl3", 0, RL_R },   /* XOR slices: shades swap */
+    { "gr1", 0, RL_L }, { "gr2", 0, RL_L }, { "gr3", 0, RL_L },
+    { "c1", 1, RL_COURSE }, { "c2", 1, RL_COURSE }, { "c3", 1, RL_COURSE }, { "c4", 1, RL_COURSE },
+    { "sun", 0, RL_SUN }, { "farL", 0, RL_FARL }, { "farR", 0, RL_FARR }, { "shadow", 0, RL_SHADOW },
+    { "horizon", 1, RL_HORIZON }, { "sand", 1, RL_SAND } };
+#define PYR_RC (sizeof pyr_rc_ids / sizeof pyr_rc_ids[0])
+/* BITS posterise rows: A nb >= 9, B 5..9, C 2..5, D < 2 (colors.svg values) */
+#define CP_PURPLEGREY 0xAEB1DC
+#define CP_LPG 0xE6E7FF
+#define CP_WHITE 0xFFFFFF
+#define CP_GREY 0x7C7990
+#define CP_OFFGREY 0x353238
+#define CP_BLACK 0x010000
+#define CP_DARKBLUE 0x383572
+#define CP_OFFBLUE 0x1D2040
+#define CP_GREEN 0x00ED95
+static const uint32_t pyr_pal[4][RL_N] = {
+    { CP_PURPLEGREY, CP_GREY, CP_GREY, CP_LPG, CP_OFFGREY, CP_DARKBLUE, CP_DARKBLUE, CP_DARKBLUE, CP_OFFBLUE, CP_OFFBLUE,
+      CP_GREY, CP_OFFGREY },
+    { CP_LPG, CP_OFFGREY, CP_OFFGREY, CP_WHITE, CP_BLACK, CP_BLACK, CP_DARKBLUE, CP_DARKBLUE, CP_DARKBLUE, CP_BLACK,
+      CP_GREY, CP_GREY },
+    { CP_WHITE, CP_OFFGREY, CP_OFFGREY, CP_WHITE, CP_OFFGREY, CP_BLACK, CP_GREY, CP_OFFGREY, CP_OFFGREY, CP_BLACK,
+      CP_WHITE, CP_BLACK },
+    { CP_WHITE, CP_OFFGREY, CP_GREEN, CP_WHITE, CP_OFFGREY, CP_BLACK, CP_WHITE, CP_WHITE, CP_OFFGREY, CP_BLACK,
+      CP_WHITE, CP_BLACK } };
+/* Falling debris (header table, Q10): fall DX DY, ground shadow start GX GY and landing LX LY; 1 / period (Q16). */
+static const int32_t pyr_deb[4][6] = {
+    { -31406, 43612, 122295, 109568, 90889, 107796 }, { 5734, 41441, 219224, 102400, 224963, 110848 },
+    { -31406, 22979, 99215, 111268, 67809, 109496 }, { 5734, 66191, 191539, 104448, 197263, 112896 } };
+static const uint32_t pyr_deb_inv[4] = { 65536, 56014, 48908, 43401 };   /* 1 / (1 + 0.17 i) s */
+static const int16_t pyr_crack[6] = { 2621, 6554, 10486, 14746, 19005, 23593 };   /* o >= .08 .2 .32 .45 .58 .72 */
+static const int16_t pyr_debris_on[4] = { 14746, 19251, 23757, 28262 };            /* nd = ceil((o - .45) / .55 * 4) */
+static struct svgdoc pyramid RAM = { 0, 0 };
+static void *pyr_node[P_SINGLE] RAM = { 0 };
+static void *pyr_multi_node[PA_N] RAM = { 0 };
+static struct recol pyr_rc[PYR_RC] RAM = { { 0, { 0 } } };
+static int32_t pyr_look RAM = -1;
+static uint32_t pyr_frame RAM = 0;
+
+static int pyramid_ready(void)
+{
+    if (pyramid.state)
+        return pyramid.state > 0;
+    if (!svg_open(&pyramid, "/yaffs2/content/display/crush3d.svg", "crush3d.svg"))
+        return 0;
+    for (int i = 0; i < P_SINGLE; i++)
+        pyr_node[i] = te_node_find(pyramid.doc, pyr_single[i], 0);
+    for (int i = 0; i < PA_N; i++)
+        pyr_multi_node[i] = te_node_find(pyramid.doc, pyr_multi[i], 0);
+    for (unsigned i = 0; i < PYR_RC; i++)
+        recol_init(&pyr_rc[i], pyramid.doc, pyr_rc_ids[i].id, pyr_rc_ids[i].stroke);
+    return 1;
+}
+
+static void draw_pyramid(void *r, const int16_t *kraw, int stereo)
+{
+    const struct crush *st = crush_state ? &crush_state[stereo] : 0;
+    int32_t k[4];
+    for (int i = 0; i < 4; i++)
+        k[i] = st ? st->k[i] : knob_pos(kraw[i]);
+    int32_t rr = k[0], b = k[1], s = k[2], o = k[3];
+    /* bit depth (Q12) and the mu-law flag as the DSP has them; without the DSP state, the design's own mapping */
+    int32_t nb = st ? st->bits_q12 : 65536 - ((15 * b) >> 3);
+    int mu = st ? st->mu > 16384 : b >= 13107 && b <= 19661;
+    int32_t gr = st ? st->gr : 0;
+    uint32_t f = ++pyr_frame;
+
+    /* blue RATE: one voxel level replaces the smooth pyramid */
+    int lvl = rr < 3932 ? 0 : rr < 13107 ? 1 : rr < 21299 ? 2 : rr < 27853 ? 3 : 4;
+    show(pyr_node[P_SMOOTH], lvl == 0);
+    for (int i = 0; i < 4; i++)
+        show(pyr_multi_node[PA_VOX + i], i + 1 == lvl);
+    /* green BITS: courses, mu-law courses, missing stones, collapsed top, rubble */
+    int tiers = nb >= 12 << 12 ? 4 : nb >= 8 << 12 ? 3 : nb >= 4 << 12 ? 2 : nb >= 2 << 12 ? 1 : 0;
+    for (int i = 0; i < 4; i++)
+        show(pyr_multi_node[PA_C + i], !mu && i + 1 <= tiers);
+    show(pyr_node[P_CMU], mu);
+    static const int32_t hole_at[3] = { 8 << 12, 5 << 12, 3 << 12 };
+    for (int i = 0; i < 3; i++) {
+        int on = nb <= hole_at[i];
+        show(pyr_multi_node[PA_H + i], on);
+        show(pyr_multi_node[PA_HW + i], on);
+        show(pyr_multi_node[PA_HF + i], on);
+    }
+    show(pyr_node[P_CAP1], nb <= 3 << 12);
+    show(pyr_node[P_PILE], nb <= 3 << 12);
+    show(pyr_node[P_CAP2], nb <= 6144);
+    int row = nb >= 9 << 12 ? 0 : nb >= 5 << 12 ? 1 : nb >= 2 << 12 ? 2 : 3;
+    if (row != pyr_look) {
+        pyr_look = row;
+        for (unsigned i = 0; i < PYR_RC; i++)
+            recol_set(&pyr_rc[i], pyr_pal[row][pyr_rc_ids[i].role], 256);
+    }
+
+    /* white SQUASH: squat (at least 60 % of the height) and widen about the base centre, pumping with the gain
+     * reduction; orange GRIT: the whole pyramid trembles with the clock jitter */
+    int32_t q = (s * (14746 + ((18022 * gr) >> 15))) >> 15;                  /* s (0.45 + 0.55 gr) */
+    int32_t sy = 1024 - ((q * 410) >> 15), sx = 1024 + ((q * 184) >> 15);
+    int32_t dx = o > 1638 ? ((512 + ((1536 * o) >> 15)) * jit(f, 1, (10 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
+    int32_t dy = o > 9830 ? (((614 * o) >> 15) * jit(f, 2, (14 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
+    set_matrix(pyr_node[P_PYR], sx, 0, 0, sy, 160 * (1024 - sx) + dx, 104 * (1024 - sy) + dy);
+    show(pyr_node[P_PRESS], s >= 655);
+    int32_t top = nb <= 6144 ? 44616 : nb <= 3 << 12 ? 34303 : 23989;      /* what is left of the apex (Q10) */
+    translate(pyr_node[P_PRESS], dx, 106496 - (((106496 - top) * sy) >> 10) - 23989 + dy);
+    show(pyr_node[P_PUFF], s >= 655 && gr > 18022);
+    set_matrix(pyr_node[P_PUFF], sx, 0, 0, sy, 160 * (1024 - sx), 104 * (1024 - sy));
+
+    /* orange GRIT: cracks, notches, falling debris (with ground shadows), XOR slices shifted out */
+    for (int i = 0; i < 6; i++)
+        show(pyr_multi_node[PA_K + i], o >= pyr_crack[i]);
+    show(pyr_node[P_CH1], o >= 9830);
+    show(pyr_node[P_CH2], o >= 20316);
+    show(pyr_node[P_CHR], o >= 20316);
+    uint32_t t16 = f * 2185u;                                                /* seconds, Q16 (30 fps) */
+    for (int i = 0; i < 4; i++) {
+        uint32_t ph = (t16 + 26870u * (uint32_t)i) * pyr_deb_inv[i];        /* frac((t + 0.41 i) / T), Q32 */
+        int32_t u = (int32_t)(((ph >> 16) * 5) >> 2);                        /* x 1.25, Q16 */
+        int on = o > pyr_debris_on[i] && u <= 65536;
+        show(pyr_multi_node[PA_D + i], on);
+        show(pyr_multi_node[PA_DS + i], on);
+        if (!on)
+            continue;
+        int32_t u10 = u >> 6, u2 = (u10 * u10) >> 10;
+        const int32_t *d = pyr_deb[i];
+        translate(pyr_multi_node[PA_D + i], (d[0] * u10) >> 10, (d[1] * u2) >> 10);
+        int32_t sc = 358 + ((666 * u10) >> 10);
+        int32_t X = d[2] + (((d[4] - d[2]) * u10) >> 10), Y = d[3] + (((d[5] - d[3]) * u10) >> 10);
+        set_matrix(pyr_multi_node[PA_DS + i], sc, 0, 0, sc, X - ((sc * d[2]) >> 10), Y - ((sc * d[3]) >> 10));
+    }
+    int32_t pon = o > 19661 ? ((o - 19661) * 5) >> 1 : 0;                   /* (o - 0.6) / 0.4 */
+    int32_t amp = 4096 + ((14336 * o) >> 15);                                /* 4 + 14 o, Q10 */
+    for (int i = 0; i < 3; i++) {
+        uint32_t rate = (uint32_t)(7 + 9 * i) << 8;
+        show(pyr_multi_node[PA_G + i], (jit(f, 10 + i, rate) + 32768) >> 1 < ((pon * 27853) >> 15));
+        int32_t n = jit(f, 20 + i, rate), an = n < 0 ? -n : n;
+        int32_t a = (amp * (13107 + ((19661 * an) >> 15))) >> 15;
+        translate(pyr_multi_node[PA_GS + i], n >= 0 ? a : -a, 0);
+    }
+    /* idle parallax: the far pyramids and the sun drift against the big one (16 s orbit) */
+    int32_t w = sin_t(f * 8947849u);                                        /* sin(2 pi t / 16), Q15 */
+    translate(pyr_node[P_FARG], -((3 * w) >> 5), 0);
+    translate(pyr_node[P_SUN], -((3 * w) >> 6), 0);
+    svg_render(pyramid.doc);
+    svg_cost(r);
+}
+
 /* FX screen: id = our FX id (8..), mode = edit mode (0 synth, 1 drum, 3 master), slot = sound slot. */
 void fx_ui_draw(int id, int mode, int slot)
 {
@@ -1902,8 +2069,12 @@ void fx_ui_draw(int id, int mode, int slot)
         else
             draw_distortion(r, k);
     }
-    else if (kind == FX_CRUSH)
-        draw_crush(r, k, mode == 3);
+    else if (kind == FX_CRUSH) {
+        if (pyramid_ready())
+            draw_pyramid(r, k, mode == 3);
+        else
+            draw_crush(r, k, mode == 3);
+    }
 }
 
 /* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the

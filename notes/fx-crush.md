@@ -1,8 +1,7 @@
 # Crush FX (`crush`, firmware id 11, DB `fx_types` 14; source `src/slot/crush.c`, firmware 246)
 
 **Status: sim-checked (`src/slot/test/crush_check.py`: all pass; `fx_abi_check.py` 12/12 with crush), firmware builds
-and links. Not on device (test image CRUSH1, notes/LOG.md).** Screen: a placeholder in ui.c; the real one (an Egyptian
-pyramid that gets dilapidated, `design/fx/crush.svg` + `gen_crush.py`) is being designed separately.
+and links. Not on device (test images CRUSH1, CRUSH2 with the 3D pyramid screen; notes/LOG.md).**
 FX contract and slot mechanics: fx-slot.md. Confidence: **Measured** = simulator (bfin-elf-run), **Hypothesis** = not
 checked.
 
@@ -68,18 +67,31 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   through (no zipper).
 
 ## Screen
-- The screen reads **`crush_state[mode == 3]`** (`struct crush`, `src/slot/crush.h`): `[0]` the synth/drum (mono)
-  instance, `[1]` the master (stereo) one; updated once per 64-frame block:
-  - `gr`: compressor gain reduction, smoothed (half way per block), 0 .. 32767 = 0 .. 30 dB (the pyramid's pump);
-  - `k[4]`: the knobs after the DSP's smoothing (RATE, BITS, SQUASH, GRIT), 0 .. 32767;
-  - `rate_hz` (44100 .. 400), `bits_q12` (16.0 .. 1.0 in Q12), `mu` (mu-law share, Q15): ready-made readouts;
-  - `flips`: bit flips so far (wraps): a counter to trigger cracks or falling stones.
-  The raw knobs are `FX_KNOBS(mode, slot)` in ui.c as for the other FX.
-- ui.c: `extern struct crush crush_state[2] __attribute__((weak))`, kind `FX_CRUSH = 4` (= `FX_UI_KINDS["crush"]` in
-  build_slot.py), drawn by `draw_crush()` (placeholder: four knob bars, a gain-reduction meter, rate / bits text).
-  Host preview: `src/slot/test/preview.py OUT 111 k0 k1 k2 k3` (preview_host.c fakes a mid-pump state).
-- For the SVG route (as pedals/choir): add `"crush": "crush.svg"` to `FX_SVGS` in build.py and a `crush_ready()` /
-  `draw_pyramid()` pair in ui.c that falls back to `draw_crush()`.
+- **The 3D pyramid** (design/fx/crush3d.svg, generator design/fx/gen_crush3d.py, which imports gen_crush.py's helpers;
+  the SVG header documents every id, threshold, matrix and recolour; `runtime_state()` is the reference). Published as
+  `content/display/crush3d.svg` (build.py `FX_SVGS`). ui.c `pyramid_ready()` / `draw_pyramid()`: loaded lazily, every
+  id found once with must = 0 (13 single nodes, 37 numbered ones, 38 recoloured styles); per frame visibility,
+  matrices, recolours (only when the posterise row changes), one `svg_render`. Falls back to `draw_crush()` (the line
+  placeholder) when the file is missing.
+- Inputs from the DSP, so the picture follows the sound (deviation from the design's own map, on purpose):
+  - BITS: `bits_q12` is nb (the DSP's 16 -> 7 -> 1 map, not the design's 16 - 15 b), so courses, holes, the
+    collapsed top and the colour rows come at the real bit depth; mu-law courses while `mu > 0.5` (knob ~0.375 ..
+    0.625; the design used 0.4 .. 0.6);
+  - RATE, SQUASH, GRIT: the DSP's smoothed knobs `k[]` (not the raw ones), so the picture moves with the sound's glide;
+  - `gr` drives the squash pump (q = s (0.45 + 0.55 gr), at least 60 % of the height) and the dust puff (gr > 0.55);
+  - `flips` is not used: GRIT's cracks, slices and debris follow the design (o thresholds and the frame clock). The
+    counter stays available.
+  - Clock: the frame counter at 30 fps (t = frames / 30); jitter is ui.c's `jit()` hash (the header allows any).
+- `crush_state[mode == 3]` (`struct crush`, `src/slot/crush.h`; `[0]` synth/drum, `[1]` master), updated once per block:
+  `gr` (0 .. 32767 = 0 .. 30 dB, smoothed), `k[4]` (smoothed knobs), `rate_hz`, `bits_q12`, `mu` (Q15), `flips`.
+- Check: `src/slot/test/crush_screen_check.py [OUTDIR]` renders the design's 14 states through the C path (preview.py
+  links the real crush.c and settles it on the knobs; `CRUSH_GR` sets the gain reduction) and through
+  `runtime_state` (rsvg), side by side. The 8 states where both BITS maps agree and GRIT is 0 match within
+  anti-aliasing (mean |diff| 0.3 .. 1.3 of 255); the rest differ by design (bit map) or randomness (GRIT).
+- Cost (Hypothesis until read on the device with `--svg-cost`): 10 visible shape elements (voxel levels, mu-law) to 59
+  (everything at max) of 86; pedals has 66 shapes and read 17.6 M cycles per frame on the device, choir 2 .. 11 M.
+  The large fills are the two faces, the shadow and the sun (smaller than pedals' bodies). The per-frame C work is a
+  few thousand cycles (no loops over pixels; matrices and ~90 flag writes).
 
 ## Implementation
 - Fixed point: signals Q15 in int32, compressor envelope Q26, gains Q15 / Q13 / Q20, clock Q16. 16 x 16 MACs where

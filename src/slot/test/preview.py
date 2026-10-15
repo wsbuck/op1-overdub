@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from PIL import Image, ImageDraw
 
 DESIGN = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "design")
-SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "fm4.svg": "synth"}   # name -> design/ subfolder
+SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "crush3d.svg": "fx", "fm4.svg": "synth"}   # name -> design/ subfolder
 SVGS = tuple(SVG_PATHS)
 SVG_DIR = None                       # main(): a temp folder holding every document (preview_host looks there by name)
 NS = "{http://www.w3.org/2000/svg}"
@@ -97,6 +97,7 @@ def main():
                     "-DPROF=((volatile uint32_t *)host_prof)", "-DFX_KNOBS(m,s)=((const int16_t *)host_knobs)", "-DTE_MATRIX=((const int32_t *)host_matrix)",
                     "-include", os.path.join(HERE, "preview_decl.h"),
                     os.path.join(SLOT, "ui.c"), os.path.join(HERE, "preview_host.c"),
+                    os.path.join(SLOT, "crush.c"),
                     "-DDISTORTION_CURVE_ONLY", os.path.join(SLOT, "distortion.c"), "-o", exe,
                     ], check=True)
     ids = os.path.join(tmp, "ids.txt")
