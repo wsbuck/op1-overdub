@@ -85,45 +85,89 @@ static inline int32_t fmul(int32_t a, int32_t b)
 #define fmul(a, b) qmul((a), (b))
 #endif
 
-/* Simper SVF over the block in place, state and coefficients in registers. The outputs (Q29 mix: products are Q22,
- * << 2): SHELF v0 + m1 band + m2 low (both shelves: the high shelf's m0 = A^2 is divided out here and multiplied
- * into the loudness), HP v0 + m1 band - low, BELL v0 + m1 band, LOW the low output. */
+/* Simper SVF over the block, in to out (may be the same), hand-written: per sample
+ *   v3 = v0 - ic2;  v1 = a1 ic1 + a2 v3;  c2 = a2 ic1 + a3 v3;  v2 = ic2 + c2;  ic1 = 2 v1 - ic1;  ic2 += 2 c2
+ * with each sum of two products in one accumulator chain (32 x 32 without the low x low partial products, one
+ * truncation per sum), coefficients reloaded each sample in parallel slots (I1, rewound by M1), the next input
+ * loaded and the output stored in parallel. Outputs (Q29 mix: products << 2): SHELF v0 + m1 v1 + m2 v2 (both
+ * shelves: the high shelf's m0 = A^2 is divided out here and multiplied in elsewhere), HP v0 + m1 v1 - v2, BELL
+ * v0 + m1 v1, LOW v2: 25 / 24 / 23 / 17 instructions per sample. Reads in[AMP_OUT] (one past the end). */
 enum { SHELF, HP, BELL, LOW };
-static void svf_block(struct amp_svf *f, int32_t *z, int kind)
+#define SVF_IN                                                                                                       \
+    "I0 = %[in];\n\tI2 = %[out];\n\tI1 = %[co];\n\tM1 = %[rw];\n\t"                                                   \
+    "R6 = [%[st]];\n\tR7 = [%[st] + 4];\n\tR2 = %[n];\n\tLC0 = R2;\n\tR0 = [I0++];\n\t"
+/* v1 -> R5, c2 -> R2, then ic1 (R6), v2 (R1), ic2 (R7); on entry R5 a1, R3 a2, R1 v3; R4 <- a3; X1, X2 extra slots */
+#define SVF_CHAINS(X1, X2)                                                                                           \
+    "A1 = R5.H * R6.L (M), A0 = R5.H * R6.H || R4 = [I1++] || NOP;\n\t"                                              \
+    "A1 += R6.H * R5.L (M);\n\t"                                                                                     \
+    "A1 += R3.H * R1.L (M), A0 += R3.H * R1.H;\n\t"                                                                  \
+    "A1 += R1.H * R3.L (M);\n\t"                                                                                     \
+    "A1 = A1 >>> 15;\n\t"                                                                                            \
+    "R5 = (A0 += A1);\n\t"                                                                                           \
+    "A1 = R3.H * R6.L (M), A0 = R3.H * R6.H;\n\t"                                                                    \
+    "A1 += R6.H * R3.L (M);\n\t"                                                                                     \
+    "A1 += R4.H * R1.L (M), A0 += R4.H * R1.H" X1 ";\n\t"                                                            \
+    "A1 += R1.H * R4.L (M);\n\t"                                                                                     \
+    "A1 = A1 >>> 15" X2 ";\n\t"                                                                                      \
+    "R2 = (A0 += A1);\n\t"                                                                                           \
+    "R6 = R5 - R6;\n\t"                                                                                              \
+    "R6 = R6 + R5;\n\t"                                                                                              \
+    "R1 = R7 + R2;\n\t"                                                                                              \
+    "R7 = R1 + R2;\n\t"
+#define SVF_START "R5 = [I1++];\n\tR3 = [I1++];\n\tR1 = R0 - R7;\n\tLSETUP (1f, 2f) LC0;\n1:\t"
+#define M1R3 " || R3 = [I1++] || NOP"
+#define M2R4 " || R4 = [I1++] || NOP"
+/* m1 (R3) x v1 (R5) into A0 / A1, rewinding the coefficients; reloads a1 (R5), a2 (R3) for the next sample */
+#define SVF_M1(X3, X4)                                                                                               \
+    "A1 = R3.H * R5.L (M), A0 = R3.H * R5.H || I1 -= M1 || NOP;\n\t"                                                 \
+    "A1 += R5.H * R3.L (M);\n\t" X3 X4
+#define SVF_END "R2 <<= 2;\n\tR2 = R2 + R0 (NS) || R0 = [I0++] || NOP;\n\t"
+#define SVF_LOOP_END "2:\tR1 = R0 - R7 (NS) || [I2++] = R2 || NOP;\n\t[%[st]] = R6;\n\t[%[st] + 4] = R7;\n"
+#define SVF_ARGS                                                                                                     \
+    : : [st] "a"(f), [in] "a"(in), [out] "a"(out), [co] "a"(&f->a1), [rw] "a"(rw), [n] "i"(AMP_OUT)                   \
+    : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "A0", "A1", "I0", "I1", "I2", "M1", "cc", "LC0", "LT0", "LB0", \
+      "memory"
+static __attribute__((noinline)) void svf_block(struct amp_svf *f, const int32_t *in, int32_t *out, int kind)
 {
-    int32_t ic1 = f->ic1, ic2 = f->ic2;
-    const int32_t a1 = f->a1, a2 = f->a2, a3 = f->a3, m1 = f->m1, m2 = f->m2;
-#define SVF_CORE                                                    \
-        int32_t v0 = z[n], v3 = v0 - ic2;                           \
-        int32_t v1 = fmul(a1, ic1) + fmul(a2, v3);                  \
-        int32_t v2 = ic2 + fmul(a2, ic1) + fmul(a3, v3);            \
-        ic1 = 2 * v1 - ic1;                                         \
-        ic2 = 2 * v2 - ic2;
+    int32_t rw = kind == SHELF ? 20 : kind == LOW ? 12 : 16;
     if (kind == SHELF)
-        for (int n = 0; n < AMP_OUT; n++) {
-            SVF_CORE
-            z[n] = v0 + ((fmul(v1, m1) + fmul(v2, m2)) << 2);
-        }
+        __asm__ volatile(SVF_IN SVF_START
+            SVF_CHAINS(M1R3, M2R4)
+            SVF_M1("A1 += R4.H * R1.L (M), A0 += R4.H * R1.H || R5 = [I1++] || NOP;\n\t",
+                   "A1 += R1.H * R4.L (M) || R3 = [I1++] || NOP;\n\tA1 = A1 >>> 15;\n\tR2 = (A0 += A1);\n\t")
+            SVF_END SVF_LOOP_END SVF_ARGS);
     else if (kind == HP)
-        for (int n = 0; n < AMP_OUT; n++) {
-            SVF_CORE
-            z[n] = v0 + (fmul(v1, m1) << 2) - v2;
-        }
+        __asm__ volatile(SVF_IN SVF_START
+            SVF_CHAINS(M1R3, "")
+            SVF_M1("A1 = A1 >>> 15 || R5 = [I1++] || NOP;\n\t", "R2 = (A0 += A1) || R3 = [I1++] || NOP;\n\t")
+            SVF_END "R2 = R2 - R1;\n" SVF_LOOP_END SVF_ARGS);
     else if (kind == BELL)
-        for (int n = 0; n < AMP_OUT; n++) {
-            SVF_CORE
-            z[n] = v0 + (fmul(v1, m1) << 2);
-        }
-    else
-        for (int n = 0; n < AMP_OUT; n++) {
-            SVF_CORE
-            z[n] = v2;
-        }
-#undef SVF_CORE
-    f->ic1 = ic1;
-    f->ic2 = ic2;
+        __asm__ volatile(SVF_IN SVF_START
+            SVF_CHAINS(M1R3, "")
+            SVF_M1("A1 = A1 >>> 15 || R5 = [I1++] || NOP;\n\t", "R2 = (A0 += A1) || R3 = [I1++] || NOP;\n\t")
+            SVF_END SVF_LOOP_END SVF_ARGS);
+    else    /* LOW: a1..a3 stay in R3..R5; v0 R0, v3 R1, v1 R0, c2 R2 */
+        __asm__ volatile(SVF_IN
+            "R3 = [I1++];\n\tR4 = [I1++];\n\tR5 = [I1++];\n\tR1 = R0 - R7;\n\tLSETUP (1f, 2f) LC0;\n1:\t"
+            "A1 = R3.H * R6.L (M), A0 = R3.H * R6.H;\n\t"
+            "A1 += R6.H * R3.L (M);\n\t"
+            "A1 += R4.H * R1.L (M), A0 += R4.H * R1.H;\n\t"
+            "A1 += R1.H * R4.L (M);\n\t"
+            "A1 = A1 >>> 15;\n\t"
+            "R0 = (A0 += A1);\n\t"
+            "A1 = R4.H * R6.L (M), A0 = R4.H * R6.H;\n\t"
+            "A1 += R6.H * R4.L (M);\n\t"
+            "A1 += R5.H * R1.L (M), A0 += R5.H * R1.H;\n\t"
+            "A1 += R1.H * R5.L (M);\n\t"
+            "A1 = A1 >>> 15;\n\t"
+            "R2 = (A0 += A1);\n\t"
+            "R6 = R0 - R6;\n\t"
+            "R6 = R6 + R0;\n\t"
+            "R1 = R7 + R2;\n\t"
+            "R7 = R1 + R2 (NS) || [I2++] = R1 || R0 = [I0++];\n"
+            "2:\tR1 = R0 - R7;\n\t"
+            "[%[st]] = R6;\n\t[%[st] + 4] = R7;\n" SVF_ARGS);
 }
-
 static void amp_init(struct amp_ram *g, const int16_t *params)
 {
     uint32_t *w = (uint32_t *)g;
@@ -228,13 +272,13 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
         }
         gk += dgain;
     }
-    svf_block(&f[F_LOW], zb, SHELF);                                /* tone */
-    svf_block(&f[F_HIGH], zb, SHELF);
-    svf_block(&f[F_HP], zb, HP);                                    /* cab */
-    svf_block(&f[F_MID], zb, BELL);
-    svf_block(&f[F_PRES], zb, BELL);
-    svf_block(&f[F_LP1], zb, LOW);
-    svf_block(&f[F_LP2], zb, LOW);
+    svf_block(&f[F_LOW], zb, zb, SHELF);                            /* tone */
+    svf_block(&f[F_HIGH], zb, zb, SHELF);
+    svf_block(&f[F_HP], zb, zb, HP);                                /* cab */
+    svf_block(&f[F_MID], zb, zb, BELL);
+    svf_block(&f[F_PRES], zb, zb, BELL);
+    svf_block(&f[F_LP1], zb, zb, LOW);
+    svf_block(&f[F_LP2], zb, zb, LOW);
     for (int n = 0; n < AMP_OUT; n++) {
         int32_t z = fmul(zb[n] << 4, ck);                           /* loudness */
         ck += dcomp;

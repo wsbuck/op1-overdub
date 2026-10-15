@@ -19,7 +19,7 @@
 struct amp_svf {
     int32_t ic1, ic2;                      /* state, Q24 */
     int32_t a1, a2, a3;                    /* Q31 */
-    int32_t m0, m1, m2;                    /* output mix, Q29 */
+    int32_t m1, m2, m0;                    /* output mix, Q29 (in the order svf_block loads them) */
 };
 
 enum { F_LOW, F_HIGH, F_HP, F_MID, F_PRES, F_LP1, F_LP2, AMP_FILTERS };
