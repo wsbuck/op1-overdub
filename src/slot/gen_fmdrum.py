@@ -7,16 +7,22 @@ Both outputs are committed; rerun after changing a curve or a kit below. Engine:
 mapping: notes/drum-engine.md "fmdrum". The knob curves live here once: the engine reads the tables, the screen
 (ui_fmdrum.h) shows the same values, src/engine/test/fmdrum_check.py imports this module to check both.
 
-Per key, 8 int16 (TE's dbox per-key values, range row 9: K0 -24320..24832, K1-K7 0..32767):
+Per key, 8 int16 (TE's dbox per-key values, range row 9: K0 -24320..24832, K1-K7 0..32767). An amount on each plain
+knob, its time (or its partner) on SHIFT:
   K0 blue    PITCH   512 per semitone, 0 = A3 (220 Hz): 14 Hz .. 3.6 kHz (dbox's own convention)
-  K1 green   RATIO   modulator : carrier, 32 steps from 0.5 to 15.5 (harmonic and inharmonic mixed, rising)
+  K1 green   SWEEP   pitch sweep from above, 0 .. +48 semitones, quadratic (half = +12)
   K2 white   FM      peak index 0 .. 16 rad, quadratic (half = 4 rad)
   K3 orange  DECAY   amplitude (tone and noise), 15 ms .. 4 s to -60 dB, exponential
-  K4 SHIFT+blue    SWEEP   pitch sweep from above, 0 .. +48 semitones, quadratic (half = +12)
-  K5 SHIFT+green   SNAP    sweep time constant, 1 .. 300 ms, exponential
-  K6 SHIFT+white   NOISE   one knob through the noise families: OFF, AIR (dark, under the tone), SNARE (band, with
-                           the tone), HAT (bright, the tone fades out), CLAP (mid band, three bursts, noise only)
-  K7 SHIFT+orange  MOD     modulator decay (the FM index's own envelope), 3 ms .. 3 s to -60 dB, exponential
+  K4 SHIFT+blue    RATIO   modulator : carrier, 32 steps: the 15 harmonic ratios (n / 2, TONE) rising, then the 17
+                           inharmonic ones (METAL) rising
+  K5 SHIFT+green   SWDEC   sweep time constant, 1 .. 300 ms, exponential
+  K6 SHIFT+white   FMDEC   the FM index's own decay, 3 ms .. 3 s to -60 dB, exponential
+  K7 SHIFT+orange  NOISE   one knob through the noise families: OFF, AIR (dark, under the tone), SNARE (band, with
+                           the tone), HAT (bright, the tone fades out), CLAP (mid band, three bursts, noise only);
+                           stock dbox values stop at 32255, still CLAP
+Keys 10..13 are a hi-hat choke group (fmdrum.c): a hit there on a key in the HAT zone releases the group's other HAT
+voices in ~5 ms. The kits share key roles: 0-2 kicks, 3/5/7 toms, 4/6 snares, 8 rim, 9 clap, 10-13 hats, 14-15
+cymbals, 16-23 percussion and effects.
 """
 import json
 import math
@@ -34,9 +40,10 @@ SEMI = 512                                 # K0 units per semitone
 K0_MIN, K0_MAX = -24320, 24832             # dbox's range row 9 (device, DRUMPROBE)
 STOCK_LO = [-24320, 0, 0, 1296, 0, 0, 0, 0]          # the stock dbox presets' per-column range: factory kits stay inside
 STOCK_HI = [24638, 32767, 32767, 32767, 32767, 32767, 32767, 32255]
-RATIOS = [0.5, 0.7071, 1.0, 1.1892, 1.4142, 1.5, 1.7321, 2.0, 2.2361, 2.4142, 2.5, 2.7565, 3.0, 3.1416, 3.5, 3.7321,
-          4.0, 4.2426, 4.6, 5.0, 5.1926, 5.4317, 6.0, 6.2832, 7.0, 7.1268, 8.0, 8.6603, 9.4248, 11.0, 13.0, 15.5]
-HARMONIC = [r for r in RATIOS if abs(r * 2 - round(r * 2)) < 1e-6]   # n / 2: pitched spectra
+HARMONIC = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 11.0, 13.0, 15.5]   # n / 2: pitched (TONE)
+INHARMONIC = [0.7071, 1.1892, 1.4142, 1.7321, 2.2361, 2.4142, 2.7565, 3.1416, 3.7321, 4.2426, 4.6, 5.1926, 5.4317,
+              6.2832, 7.1268, 8.6603, 9.4248]                                            # METAL
+RATIOS = HARMONIC + INHARMONIC
 FM_MAX = 16.0                              # rad at K2 = 32767
 SWEEP_MAX = 48                             # semitones at K4 = 32767
 DECAY = (0.015, 4.0)                       # K3: T60 range, s
@@ -201,16 +208,20 @@ def c_array(name, ctype, vals, per=12):
     return s + "};\n"
 
 
-# ---- factory kits: per key (pitch Hz, ratio, FM rad, decay s, sweep semitones, snap s, noise K6, mod decay s) ----
+# ---- factory kits: per key (pitch Hz, ratio, FM rad, decay s, sweep semitones, sweep time s, noise K7, FM decay s) ----
+# Knob order (fmdrum.h): PITCH, SWEEP, FM, DECAY, RATIO, SWDEC, FMDEC, NOISE.
 def key(hz, ratio=1.0, fm=0.0, decay=0.3, sweep=0.0, snap=0.02, noise=0, mod=0.05):
-    k = [k0_of(hz), k1_of(ratio), k2_of(fm), k_expo(decay, *DECAY), k4_of(sweep), k_expo(snap, *SNAP), noise,
-         k_expo(mod, *MODDEC)]
+    k = [k0_of(hz), k4_of(sweep), k2_of(fm), k_expo(decay, *DECAY), k1_of(ratio), k_expo(snap, *SNAP),
+         k_expo(mod, *MODDEC), noise]
     for j, v in enumerate(k):              # TE validates factory presets: stay inside what stock dbox kits hold
         k[j] = min(STOCK_HI[j], max(STOCK_LO[j], v))
     return k
 
 
-AIR, SNARE, HAT, CLAP = 4600, 12000, 20480, 32767    # K6 points inside each zone (HAT 20480: half tone, half noise)
+AIR, SNARE, HAT, CLAP = 4600, 12000, 20480, 32767    # NOISE points inside each zone (HAT 20480: half tone, half noise;
+#                                                        CLAP clamps to the stock 32255, still CLAP)
+# Shared key roles: 0-2 kicks, 3/5/7 toms, 4/6 snares, 8 rim, 9 clap, 10-13 hats (choke group: HAT zone), 14-15
+# cymbals, 16-23 free (percussion, effects).
 KITS = {
     # 808-ish: long sine kicks with a gentle sweep, toms, a noisy snare, clap, square-ish metal hats and cowbell
     "fm 808": ("dem drums", [
@@ -224,20 +235,20 @@ KITS = {
         key(140, 1.0, 0.5, 0.5, 8, 0.05, 0, 0.06),           # 7 C   high tom
         key(1700, 1.0, 1.0, 0.05, 2, 0.01, 0, 0.02),         # 8 C#  rim
         key(150, 1.0, 0.0, 0.35, 0, 0.02, CLAP, 0.02),       # 9 D   clap
-        key(2500, 1.0, 0.4, 0.06, 0, 0.01, 0, 0.02),         # 10 D# clave
-        key(3000, 1.4142, 7.0, 0.07, 0, 0.01, HAT, 0.08),    # 11 E  closed hat
-        key(560, 1.5, 1.6, 0.35, 0, 0.01, 0, 0.35),          # 12 F  cowbell
+        key(3000, 1.4142, 7.0, 0.07, 0, 0.01, HAT, 0.08),    # 10 D# closed hat
+        key(3200, 1.4142, 7.0, 0.04, 0, 0.01, HAT + 1000, 0.05),    # 11 E  closed hat tight
+        key(3000, 1.4142, 7.0, 0.18, 0, 0.01, HAT, 0.15),    # 12 F  half-open hat
         key(3000, 1.4142, 7.0, 0.7, 0, 0.01, HAT, 0.6),      # 13 F# open hat
-        key(260, 1.0, 0.4, 0.3, 3, 0.01, 0, 0.03),           # 14 G  conga low
-        key(3200, 2.7565, 9.0, 1.6, 0, 0.01, HAT + 2000, 1.2),   # 15 G# cymbal
-        key(370, 1.0, 0.4, 0.25, 3, 0.01, 0, 0.03),          # 16 A  conga high
-        key(400, 1.0, 0.0, 0.09, 0, 0.01, 24000, 0.01),      # 17 A# maracas
-        key(41, 1.0, 0.2, 2.0, 20, 0.05, 0, 0.02),           # 18 B  sub boom
-        key(120, 1.0, 0.0, 0.5, 0, 0.02, 30000, 0.02),       # 19 C  clap wide
-        key(65, 1.0, 0.4, 0.7, 12, 0.08, 0, 0.05),           # 20 C# floor tom
-        key(220, 1.0, 1.5, 0.25, 36, 0.04, 0, 0.05),         # 21 D  laser tom
-        key(880, 3.5, 2.5, 1.2, 0, 0.01, 0, 0.6),            # 22 D# ping
-        key(52, 1.0, 1.0, 0.45, 36, 0.012, AIR, 0.008),      # 23 E  kick click
+        key(3200, 2.7565, 9.0, 1.6, 0, 0.01, HAT + 2000, 1.2),   # 14 G  cymbal
+        key(2600, 3.1416, 6.0, 1.3, 0, 0.01, HAT - 2500, 1.3),   # 15 G# ride (was 808's fifth kick)
+        key(2500, 1.0, 0.4, 0.06, 0, 0.01, 0, 0.02),         # 16 A  clave
+        key(560, 1.5, 1.6, 0.35, 0, 0.01, 0, 0.35),          # 17 A# cowbell
+        key(260, 1.0, 0.4, 0.3, 3, 0.01, 0, 0.03),           # 18 B  conga low
+        key(370, 1.0, 0.4, 0.25, 3, 0.01, 0, 0.03),          # 19 C  conga high
+        key(400, 1.0, 0.0, 0.09, 0, 0.01, 24000, 0.01),      # 20 C# maracas
+        key(65, 1.0, 0.4, 0.7, 12, 0.08, 0, 0.05),           # 21 D  floor tom
+        key(41, 1.0, 0.2, 2.0, 20, 0.05, 0, 0.02),           # 22 D# sub boom
+        key(880, 3.5, 2.5, 1.2, 0, 0.01, 0, 0.6),            # 23 E  ping
     ]),
     # 909-ish: punchier kicks (FM click, faster sweep), brighter snares, metallic hats; TE's punch FX on
     "fm 909": ("lo-fi", [
@@ -266,58 +277,58 @@ KITS = {
         key(200, 1.0, 3.0, 0.2, 24, 0.02, SNARE, 0.02),      # 22 snare zap
         key(800, 1.0, 1.0, 0.12, 12, 0.006, 0, 0.02),        # 23 blip
     ]),
-    # FM metal: bells, gongs, bars, plates, inharmonic hits dbox can't make
+    # FM metal: its own kick/snare/clap/hats on the shared keys, then bells, chimes and bars dbox can't make
     "fm metal": ("cuckoos nest", [
-        key(65, 1.4142, 4.0, 3.0, 0, 0.01, 0, 2.5),          # 0 gong
-        key(98, 2.7565, 3.5, 2.0, 0, 0.01, 0, 1.2),          # 1 plate low
-        key(131, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 2 bell low
-        key(147, 1.4142, 5.0, 1.5, 0, 0.01, 0, 0.8),         # 3 clang
-        key(196, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 4 bell
-        key(220, 5.1926, 2.5, 1.8, 0, 0.01, 0, 0.9),         # 5 bowl
-        key(262, 4.0, 2.0, 1.5, 0, 0.01, 0, 1.0),            # 6 glass
-        key(294, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 7 bell D
-        key(330, 2.7565, 4.0, 1.0, 0, 0.01, 0, 0.5),         # 8 bar
-        key(392, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 9 bell G
-        key(440, 1.7321, 6.0, 0.6, 0, 0.01, 0, 0.25),        # 10 anvil
-        key(523, 3.5, 2.5, 2.0, 0, 0.01, 0, 1.5),            # 11 bell C
-        key(587, 7.1268, 2.0, 1.2, 0, 0.01, 0, 0.7),         # 12 chime
-        key(660, 2.2361, 5.0, 0.4, 0, 0.01, 0, 0.15),        # 13 tin
-        key(784, 3.5, 2.5, 1.8, 0, 0.01, 0, 1.2),            # 14 bell G5
-        key(880, 1.4142, 4.0, 0.9, 0, 0.01, 0, 0.5),         # 15 triangle-ish
-        key(1047, 3.5, 2.0, 1.6, 0, 0.01, 0, 1.0),           # 16 bell C6
-        key(1319, 5.4317, 2.0, 1.0, 0, 0.01, 0, 0.6),        # 17 glock
-        key(170, 1.1892, 8.0, 0.25, 4, 0.02, 0, 0.12),       # 18 metal snare body
-        key(2400, 8.6603, 6.0, 0.4, 0, 0.01, HAT - 3000, 0.3),      # 19 sizzle
-        key(110, 6.2832, 7.0, 0.8, 0, 0.01, 0, 0.3),         # 20 spring hit
-        key(75, 2.7565, 6.0, 1.2, 12, 0.03, 0, 0.4),         # 21 metal kick
-        key(1800, 1.4142, 9.0, 0.15, 0, 0.01, HAT + 1000, 0.15),    # 22 hat metal
-        key(392, 9.4248, 4.0, 2.2, 0, 0.01, 0, 1.6),         # 23 shimmer
+        key(75, 2.7565, 6.0, 1.2, 12, 0.03, 0, 0.4),         # 0 metal kick
+        key(65, 1.4142, 4.0, 3.0, 0, 0.01, 0, 2.5),          # 1 gong
+        key(110, 6.2832, 7.0, 0.8, 0, 0.01, 0, 0.3),         # 2 spring hit
+        key(98, 2.7565, 3.5, 2.0, 0, 0.01, 0, 1.2),          # 3 plate low
+        key(170, 1.1892, 8.0, 0.25, 4, 0.02, SNARE - 2000, 0.12),   # 4 metal snare
+        key(147, 1.4142, 5.0, 1.5, 0, 0.01, 0, 0.8),         # 5 clang
+        key(440, 1.7321, 6.0, 0.3, 0, 0.01, SNARE + 2000, 0.2),     # 6 anvil snare
+        key(330, 2.7565, 4.0, 1.0, 0, 0.01, 0, 0.5),         # 7 bar
+        key(660, 2.2361, 5.0, 0.4, 0, 0.01, 0, 0.15),        # 8 tin rim
+        key(150, 1.0, 0.0, 0.45, 0, 0.02, 30500, 0.02),      # 9 clap (wide)
+        key(1800, 1.4142, 9.0, 0.15, 0, 0.01, HAT + 1000, 0.15),    # 10 hat metal
+        key(2200, 2.2361, 8.0, 0.06, 0, 0.01, HAT + 2000, 0.05),    # 11 hat tight
+        key(2400, 8.6603, 6.0, 0.4, 0, 0.01, HAT - 3000, 0.3),      # 12 sizzle
+        key(1800, 1.4142, 9.0, 0.9, 0, 0.01, HAT + 1000, 0.8),      # 13 open hat metal
+        key(392, 9.4248, 4.0, 2.2, 0, 0.01, 0, 1.6),         # 14 shimmer
+        key(2600, 3.1416, 12.0, 2.5, 0, 0.01, HAT + 3000, 2.0),     # 15 crash metal
+        key(131, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 16 bell low
+        key(196, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 17 bell
+        key(294, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 18 bell D
+        key(392, 3.5, 3.0, 2.5, 0, 0.01, 0, 2.0),            # 19 bell G
+        key(523, 3.5, 2.5, 2.0, 0, 0.01, 0, 1.5),            # 20 bell C
+        key(587, 7.1268, 2.0, 1.2, 0, 0.01, 0, 0.7),         # 21 chime
+        key(1319, 5.4317, 2.0, 1.0, 0, 0.01, 0, 0.6),        # 22 glock
+        key(880, 1.4142, 4.0, 0.9, 0, 0.01, 0, 0.5),         # 23 triangle-ish
     ]),
-    # zaps: big fast sweeps, lasers, blips, FM bursts
+    # zaps: its own kicks/snares/clap/hats on the shared keys, then lasers, blips, glitches
     "fm zaps": ("dem drums", [
         key(60, 1.0, 0.5, 0.4, 48, 0.03, 0, 0.02),           # 0 zap kick
-        key(80, 1.0, 2.0, 0.3, 48, 0.05, 0, 0.05),           # 1 zap
-        key(110, 2.0, 3.0, 0.3, 40, 0.08, 0, 0.08),          # 2 laser
-        key(150, 1.5, 2.0, 0.25, 36, 0.12, 0, 0.1),          # 3 pew
-        key(200, 1.0, 4.0, 0.2, 48, 0.02, 0, 0.03),          # 4 snap zap
-        key(300, 3.0, 2.0, 0.15, 30, 0.04, 0, 0.06),         # 5 blip down
-        key(400, 1.0, 1.0, 0.08, 24, 0.01, 0, 0.02),         # 6 tick
-        key(90, 0.5, 6.0, 0.5, 24, 0.06, 0, 0.2),            # 7 growl
-        key(250, 1.0, 0.0, 0.3, 48, 0.2, 0, 0.02),           # 8 slide
-        key(700, 1.5, 3.0, 0.12, 20, 0.015, 0, 0.05),        # 9 chirp
-        key(1000, 2.0, 1.0, 0.06, 12, 0.005, 0, 0.02),       # 10 click
-        key(120, 7.0, 8.0, 0.35, 36, 0.05, 0, 0.1),          # 11 metal zap
-        key(55, 1.0, 1.0, 0.8, 48, 0.1, 0, 0.05),            # 12 dive
-        key(330, 1.0, 2.0, 0.2, 48, 0.25, AIR, 0.1),         # 13 sweep noise
-        key(180, 2.0, 5.0, 0.18, 30, 0.03, SNARE, 0.04),     # 14 zap snare
-        key(2000, 1.4142, 6.0, 0.05, 24, 0.01, HAT, 0.04),   # 15 zap hat
-        key(70, 1.0, 3.0, 0.25, 40, 0.015, 0, 0.01),         # 16 punch
-        key(500, 4.0, 3.0, 0.4, 36, 0.1, 0, 0.3),            # 17 ufo
-        key(160, 1.0, 0.0, 0.3, 30, 0.04, CLAP, 0.02),       # 18 clap zap
-        key(45, 1.0, 0.0, 1.5, 36, 0.15, 0, 0.02),           # 19 drop
-        key(600, 11.0, 4.0, 0.2, 18, 0.02, 0, 0.1),          # 20 glitch
-        key(240, 1.4142, 10.0, 0.15, 24, 0.02, 0, 0.03),     # 21 static
-        key(140, 2.0, 2.0, 0.6, 12, 0.3, 0, 0.4),            # 22 wobble
+        key(70, 1.0, 3.0, 0.25, 40, 0.015, 0, 0.01),         # 1 punch
+        key(45, 1.0, 0.0, 1.5, 36, 0.15, 0, 0.02),           # 2 drop
+        key(80, 1.0, 2.0, 0.3, 48, 0.05, 0, 0.05),           # 3 zap
+        key(180, 2.0, 5.0, 0.18, 30, 0.03, SNARE, 0.04),     # 4 zap snare
+        key(55, 1.0, 1.0, 0.8, 48, 0.1, 0, 0.05),            # 5 dive
+        key(200, 1.0, 4.0, 0.2, 48, 0.02, SNARE + 3000, 0.03),      # 6 snap snare
+        key(250, 1.0, 0.0, 0.3, 48, 0.2, 0, 0.02),           # 7 slide
+        key(400, 1.0, 1.0, 0.08, 24, 0.01, 0, 0.02),         # 8 tick
+        key(160, 1.0, 0.0, 0.3, 30, 0.04, CLAP, 0.02),       # 9 clap zap
+        key(2000, 1.4142, 6.0, 0.05, 24, 0.01, HAT, 0.04),   # 10 zap hat
+        key(2400, 2.4142, 5.0, 0.04, 12, 0.006, HAT + 1500, 0.03),  # 11 zap hat tight
+        key(1600, 1.7321, 7.0, 0.12, 30, 0.02, HAT - 1500, 0.08),   # 12 zap hat swept
+        key(2000, 1.4142, 6.0, 0.6, 24, 0.02, HAT, 0.4),     # 13 zap hat open
+        key(1200, 2.7565, 9.0, 1.4, 36, 0.06, HAT + 2500, 1.0),     # 14 zap crash
+        key(120, 7.0, 8.0, 0.35, 36, 0.05, 0, 0.1),          # 15 metal zap
+        key(110, 2.0, 3.0, 0.3, 40, 0.08, 0, 0.08),          # 16 laser
+        key(150, 1.5, 2.0, 0.25, 36, 0.12, 0, 0.1),          # 17 pew
+        key(300, 3.0, 2.0, 0.15, 30, 0.04, 0, 0.06),         # 18 blip down
+        key(90, 0.5, 6.0, 0.5, 24, 0.06, 0, 0.2),            # 19 growl
+        key(700, 1.5, 3.0, 0.12, 20, 0.015, 0, 0.05),        # 20 chirp
+        key(500, 4.0, 3.0, 0.4, 36, 0.1, 0, 0.3),            # 21 ufo
+        key(600, 11.0, 4.0, 0.2, 18, 0.02, 0, 0.1),          # 22 glitch
         key(1500, 1.0, 0.0, 0.1, 48, 0.008, 0, 0.02),        # 23 bleep
     ]),
 }
@@ -333,22 +344,23 @@ def main():
     h = ["/* Generated by gen_fmdrum.py; do not edit. Tables for fmdrum.c and its screen (ui_fmdrum.h). */",
          "#ifndef FMDRUM_TABLES_H", "#define FMDRUM_TABLES_H", "#include <stdint.h>", "",
          "/* 2^(i / 64), Q15 (65536 = 2.0) */", c_array("fd_exp2", "uint32_t", exp2),
-         "/* K1 >> 10: modulator : carrier ratio, Q16; x100 for the screen; bit i set = harmonic (n / 2) */",
+         "/* RATIO >> 10: modulator : carrier ratio, Q16 (15 harmonic, then 17 inharmonic); x100 for the screen; bit i set =\n"
+         " * harmonic (n / 2) */",
          c_array("fd_ratio", "uint32_t", ratio, 8), c_array("fd_ratio_x100", "uint16_t", [round(r * 100) for r in RATIOS]),
          f"#define FD_RATIO_HARMONIC 0x{harm:08x}u",
-         "/* K >> 7: per-block envelope factor, Q30: K3 amplitude decay (T60 15 ms .. 4 s), K7 modulator decay (T60 3 ms .. 3 s),\n"
-         " * K5 sweep (time constant 1 .. 300 ms) */",
+         "/* knob >> 7: per-block envelope factor, Q30: DECAY (T60 15 ms .. 4 s), FMDEC (the index, T60 3 ms .. 3 s), SWDEC\n"
+         " * (the sweep, time constant 1 .. 300 ms) */",
          c_array("fd_amp_dec", "int32_t", amp, 8), c_array("fd_mod_dec", "int32_t", mod, 8),
          c_array("fd_swp_dec", "int32_t", swp, 8),
-         "/* the same times for the screen, 0.1 ms units: [0] DECAY T60, [1] SNAP tau, [2] MOD T60 */",
+         "/* the same times for the screen, 0.1 ms units: [0] DECAY T60, [1] SWDEC tau, [2] FMDEC T60 */",
          "static const uint16_t fd_time_10us[3][256] __attribute__((unused)) = {"]
     for row in ms:
         h += ["  {"] + ["    " + ", ".join(str(v) for v in row[i:i + 16]) + "," for i in range(0, 256, 16)] + ["  },"]
     h += ["};",
-          "/* K6 >> 9 (65 points, interpolated): tone level Q15, noise level Q15, SVF f = 2 sin(pi fc / fs) Q15, damping q\n"
+          "/* NOISE >> 9 (65 points, interpolated): tone level Q15, noise level Q15, SVF f = 2 sin(pi fc / fs) Q15, damping q\n"
           " * Q15, output weights lp/bp/hp Q12 (blend x norm: RMS 0.16 at level 1), clap amount Q15 */",
-          "/* the screen's envelope graph: dB per block (Q16) for [0] DECAY (T60), [1] SNAP (e^(-t / tau)), [2] MOD (T60), by\n"
-          " * K >> 7; and its time points, 1 .. 4096 blocks in quarter octaves (blocks, Q8) */",
+          "/* the screen's envelope graph: dB per block (Q16) for [0] DECAY (T60), [1] SWDEC (e^(-t / tau)), [2] FMDEC (T60),\n"
+          " * by knob >> 7; and its time points, 1 .. 4096 blocks in quarter octaves (blocks, Q8) */",
           "static const int32_t fd_db_blk[3][256] __attribute__((unused)) = {"]
     for lo, hi, tau in ((DECAY[0], DECAY[1], False), (SNAP[0], SNAP[1], True), (MODDEC[0], MODDEC[1], False)):
         row = []

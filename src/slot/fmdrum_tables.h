@@ -13,23 +13,24 @@ static const uint32_t fd_exp2[65] __attribute__((unused)) = {
     62757, 63441, 64132, 64830, 65536,
 };
 
-/* K1 >> 10: modulator : carrier ratio, Q16; x100 for the screen; bit i set = harmonic (n / 2) */
+/* RATIO >> 10: modulator : carrier ratio, Q16 (15 harmonic, then 17 inharmonic); x100 for the screen; bit i set =
+ * harmonic (n / 2) */
 static const uint32_t fd_ratio[32] __attribute__((unused)) = {
-    32768, 46341, 65536, 77935, 92681, 98304, 113515, 131072,
-    146545, 158217, 163840, 180650, 196608, 205888, 229376, 244587,
-    262144, 278043, 301466, 327680, 340302, 355972, 393216, 411776,
-    458752, 467062, 524288, 567561, 617664, 720896, 851968, 1015808,
+    32768, 65536, 98304, 131072, 163840, 196608, 229376, 262144,
+    327680, 393216, 458752, 524288, 720896, 851968, 1015808, 46341,
+    77935, 92681, 113515, 146545, 158217, 180650, 205888, 244587,
+    278043, 301466, 340302, 355972, 411776, 467062, 567561, 617664,
 };
 
 static const uint16_t fd_ratio_x100[32] __attribute__((unused)) = {
-    50, 71, 100, 119, 141, 150, 173, 200, 224, 241, 250, 276,
-    300, 314, 350, 373, 400, 424, 460, 500, 519, 543, 600, 628,
-    700, 713, 800, 866, 942, 1100, 1300, 1550,
+    50, 100, 150, 200, 250, 300, 350, 400, 500, 600, 700, 800,
+    1100, 1300, 1550, 71, 119, 141, 173, 224, 241, 276, 314, 373,
+    424, 460, 519, 543, 628, 713, 866, 942,
 };
 
-#define FD_RATIO_HARMONIC 0xe54954a5u
-/* K >> 7: per-block envelope factor, Q30: K3 amplitude decay (T60 15 ms .. 4 s), K7 modulator decay (T60 3 ms .. 3 s),
- * K5 sweep (time constant 1 .. 300 ms) */
+#define FD_RATIO_HARMONIC 0x00007fffu
+/* knob >> 7: per-block envelope factor, Q30: DECAY (T60 15 ms .. 4 s), FMDEC (the index, T60 3 ms .. 3 s), SWDEC
+ * (the sweep, time constant 1 .. 300 ms) */
 static const int32_t fd_amp_dec[256] __attribute__((unused)) = {
     550364530, 558392365, 566359561, 574264125, 582104167, 589877904, 597583657, 605219850,
     612785006, 620277746, 627696788, 635040944, 642309118, 649500302, 656613576, 663648107,
@@ -135,7 +136,7 @@ static const int32_t fd_swp_dec[256] __attribute__((unused)) = {
     1067684351, 1067817969, 1067948647, 1068076451, 1068201442, 1068323682, 1068443233, 1068560151,
 };
 
-/* the same times for the screen, 0.1 ms units: [0] DECAY T60, [1] SNAP tau, [2] MOD T60 */
+/* the same times for the screen, 0.1 ms units: [0] DECAY T60, [1] SWDEC tau, [2] FMDEC T60 */
 static const uint16_t fd_time_10us[3][256] __attribute__((unused)) = {
   {
     150, 153, 157, 160, 164, 167, 171, 175, 179, 183, 187, 191, 195, 199, 204, 208,
@@ -192,10 +193,10 @@ static const uint16_t fd_time_10us[3][256] __attribute__((unused)) = {
     19983, 20531, 21095, 21674, 22269, 22881, 23509, 24155, 24818, 25500, 26200, 26919, 27658, 28418, 29198, 30000,
   },
 };
-/* K6 >> 9 (65 points, interpolated): tone level Q15, noise level Q15, SVF f = 2 sin(pi fc / fs) Q15, damping q
+/* NOISE >> 9 (65 points, interpolated): tone level Q15, noise level Q15, SVF f = 2 sin(pi fc / fs) Q15, damping q
  * Q15, output weights lp/bp/hp Q12 (blend x norm: RMS 0.16 at level 1), clap amount Q15 */
-/* the screen's envelope graph: dB per block (Q16) for [0] DECAY (T60), [1] SNAP (e^(-t / tau)), [2] MOD (T60), by
- * K >> 7; and its time points, 1 .. 4096 blocks in quarter octaves (blocks, Q8) */
+/* the screen's envelope graph: dB per block (Q16) for [0] DECAY (T60), [1] SWDEC (e^(-t / tau)), [2] FMDEC (T60),
+ * by knob >> 7; and its time points, 1 .. 4096 blocks in quarter octaves (blocks, Q8) */
 static const int32_t fd_db_blk[3][256] __attribute__((unused)) = {
   {
     380436, 372193, 364128, 356238, 348519, 340968, 333580, 326352, 319281, 312362, 305594, 298973,

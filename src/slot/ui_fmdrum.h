@@ -2,20 +2,22 @@
  * drawing helpers; drawn on the dbox screen the drum engines borrow (slot.S _drum_ui_update -> drum_ui_draw).
  *
  * The selected key (the last one pressed: the one the knobs edit) as a drum, with its envelopes, over the 24 keys:
- *   title    what the key's 8 values make it: KICK, TOM, SNARE, CLAP, HAT, METAL, BELL, ZAP or PERC, in that class's
- *            colour, and the key number
- *   drum     an oblique drum: low pitch = a big drum, DECAY = a deep shell (orange lugs). On the head the FM: a rosette
- *            of 2 x RATIO petals (harmonic ratios close in one turn, inharmonic ones need two and shimmer), petal depth
- *            = FM. SWEEP is the blue curve falling onto the head (its bend = SNAP); NOISE the speckle above the head
- *            (AIR dark and low, SNARE grey, HAT bright and high) or orange clap marks.
- *            While the key plays: the head hops and turns white, the rosette follows the live index (MOD's decay) and
- *            turns, a blue dot rides the sweep, ripples spread with the amplitude and the speckle sprays.
+ *   title    white: what the key's 8 values make it (KICK, TOM, SNARE, CLAP, HAT, METAL, BELL, ZAP, PERC) and its
+ *            number; after a knob turn, for ~1.5 s, that knob's name and value instead, in the knob's colour (as harm,
+ *            ui_harm.h): the 8 values are compared every frame, a change of key is not a turn
+ *   drum     an oblique drum in grey and white: low pitch = a big drum, DECAY = a deep shell. On the head the FM: a
+ *            rosette of 2 x RATIO petals (harmonic ratios close in one turn, inharmonic ones need two and shimmer),
+ *            petal depth = FM. SWEEP is the green curve falling onto the head (its bend = SWDEC); NOISE is white/grey
+ *            speckle above the head, low and sparse (AIR), higher (SNARE), high and dense (HAT), or clap marks (CLAP).
+ *            While the key plays: the head hops and turns white, the rosette follows the live index (FMDEC) and turns,
+ *            a dot rides the sweep, ripples spread with the amplitude and the speckle sprays.
  *   graph    level against log time (1.5 ms .. 6 s; ticks at 10 ms, 0.1 s, 1 s): DECAY (orange), the FM index's decay
- *            (MOD, white, starting at the FM depth) and the sweep (blue, starting at the SWEEP depth); a playhead while
- *            the key sounds
- *   values   PITCH Hz, RATIO, FM index (rad), DECAY; below, SHIFT's: SWEEP, SNAP, NOISE zone, MOD (knob colours)
- *   keys     the OP-1's 24 keys (F .. E): each key's class colour as a mark, lit while it sounds, the selected key
- *            outlined white
+ *            (white, starting at the FM depth), the sweep (green, starting at the SWEEP depth); a playhead while the
+ *            key sounds
+ *   values   grey labels over the knob values: PITCH SWEEP FM DECAY; below, dimmer and marked SHIFT: RATIO (TONE or
+ *            METAL) SWDEC FMDEC NOISE. Knob colours are used for knob values only.
+ *   keys     the OP-1's 24 keys (F .. E): each key's class colour as a mark (the only class colours), lit while it
+ *            sounds, the selected key outlined white
  * Reads the slot's per-key values (TE's 0x01AAADB4) and fmdrum's voices (fmdrum.h). No division; 1-px lines except
  * the title, the head outline and the sweep curve (about 60 anti-aliased segments, as the other engine screens).
  */
@@ -27,38 +29,49 @@
 extern struct fd_voice fmdrum_voice[] __attribute__((weak));
 
 #define LIGHTORANGE 19
+#define FD_SHOW 45                              /* frames a turned knob's readout stays in the title (~1.5 s) */
 enum { FC_KICK, FC_TOM, FC_SNARE, FC_CLAP, FC_HAT, FC_METAL, FC_BELL, FC_ZAP, FC_PERC };
 static const char *const fd_class_name[9] = { "KICK", "TOM", "SNARE", "CLAP", "HAT", "METAL", "BELL", "ZAP", "PERC" };
-static const uint8_t fd_class_colour[9] = { BLUE, LIGHTBLUE, WHITE, ORANGE, LIGHTGREEN, GREEN, LIGHTGREEN, RED, GREY };
+/* the key strip's marks only: CLAP lavender and ZAP red, so they read apart */
+static const uint8_t fd_class_colour[9] = { BLUE, LIGHTBLUE, WHITE, PURPLEGREY, LIGHTGREEN, GREEN, LIGHTGREEN, RED, GREY };
+static const char *const fd_knob_name[8] = { "PITCH", "SWEEP", "FM", "DECAY", "RATIO", "SWDEC", "FMDEC", "NOISE" };
+static const uint8_t fd_knob_colour[8] = { BLUE, GREEN, WHITE, ORANGE, BLUE, GREEN, WHITE, ORANGE };
+static const uint8_t fd_shift_colour[4] = { LIGHTBLUE, LIGHTGREEN, GREY, LIGHTORANGE };
 
-static uint32_t fd_frame RAM = 0;
+struct fd_view {
+    uint32_t frame;
+    int32_t edit;                               /* the key the last frame showed (-1: none yet) */
+    int16_t last[8];                            /* its values then */
+    int32_t shown, until;                       /* the turned knob and the frame its readout ends */
+};
+static struct fd_view fd_v RAM = { 0, -1, { 0 }, 0, 0 };
 
 /* what a key's values make it */
 static int fd_class(const int16_t *k)
 {
-    int z = fd_noise_zone_of(k[6]);
+    int z = fd_noise_zone_of(k[FD_NOISE]);
     if (z == 4)
         return FC_CLAP;
     if (z == 3)
         return FC_HAT;
     if (z == 2)
         return FC_SNARE;
-    int32_t idx = fd_index_q8(k[2]), dec = fd_pos(k[3]) >> 7;
-    int harm = (FD_RATIO_HARMONIC >> (fd_pos(k[1]) >> 10)) & 1;
-    if (fd_sweep_q(k[4]) >= 30 * 512)
+    int32_t idx = fd_index_q8(k[FD_FM]), dec = fd_pos(k[FD_DECAY]) >> 7;
+    int harm = (FD_RATIO_HARMONIC >> (fd_pos(k[FD_RATIO]) >> 10)) & 1;
+    if (fd_sweep_q(k[FD_SWEEP]) >= 30 * 512)
         return FC_ZAP;
     if (idx >= 384 && dec >= 192)               /* >= 1.5 rad and a decay of ~1 s or more */
         return FC_BELL;
     if (!harm && idx >= 512)                    /* inharmonic, >= 2 rad */
         return FC_METAL;
-    if (k[0] < -9000)                           /* below ~80 Hz */
+    if (k[FD_PITCH] < -9000)                    /* below ~80 Hz */
         return FC_KICK;
-    if (k[0] < 5300)                            /* below ~400 Hz */
+    if (k[FD_PITCH] < 5300)                     /* below ~400 Hz */
         return FC_TOM;
     return FC_PERC;
 }
 
-/* pitch K0 -> Hz (as fmdrum.c's inc_of: 13.75 Hz x 2^octaves) */
+/* pitch -> Hz (as fmdrum.c's inc_of: 13.75 Hz x 2^octaves) */
 static uint32_t fd_hz(int16_t k0)
 {
     int32_t u = k0 + 24576;
@@ -78,10 +91,61 @@ static int32_t fd_log2_q8(uint32_t x)
     return (n << 8) + (int32_t)frac;
 }
 
-/* 0.1 ms units -> "450MS", "4000MS" (always ms: the stroke font's S and 5 look alike, so no "1.2S") */
+/* 0.1 ms units -> "450MS" below 1 s, "1.2SEC" above (no division: at most 4 subtractions per digit) */
 static char *fd_put_time(char *p, uint32_t t10)
 {
-    return put_str(put_dec(p, (t10 * 6554 + 32768) >> 16), "MS");
+    if (t10 < 9995)
+        return put_str(put_dec(p, (t10 * 6554 + 32768) >> 16), "MS");
+    uint32_t s = 0, d = 0;
+    t10 += 500;                                 /* round to 0.1 s */
+    while (t10 >= 10000) {
+        t10 -= 10000;
+        s++;
+    }
+    while (t10 >= 1000) {
+        t10 -= 1000;
+        d++;
+    }
+    return put_str(put_dec(put_str(put_dec(p, s), "."), d), "SEC");
+}
+
+/* knob i's value as text */
+static char *fd_value(char *p, int i, const int16_t *k, int long_ratio)
+{
+    if (i == FD_PITCH) {
+        uint32_t hz = fd_hz(k[FD_PITCH]), kh = 0;
+        if (hz < 1000)
+            return put_str(put_dec(p, hz), "HZ");
+        while (hz >= 1000) {                    /* at most 3 steps (3.6 kHz) */
+            hz -= 1000;
+            kh++;
+        }
+        return put_str(put_dec(put_str(put_dec(p, kh), "."), (hz * 655) >> 16), "K");
+    }
+    if (i == FD_SWEEP)
+        return put_str(put_dec(put_str(p, "+"), ((uint32_t)fd_sweep_q(k[FD_SWEEP]) + 256) >> 9), "ST");
+    if (i == FD_FM) {
+        uint32_t q = (uint32_t)fd_index_q8(k[FD_FM]);
+        return put_dec(put_str(put_dec(p, q >> 8), "."), ((q & 255) * 10) >> 8);
+    }
+    if (i == FD_RATIO) {
+        int ri = fd_pos(k[FD_RATIO]) >> 10;
+        uint32_t fr = fd_ratio_x100[ri], ip = 0, tens = 0;
+        while (fr >= 100) {
+            fr -= 100;
+            ip++;
+        }
+        while (fr >= 10) {
+            fr -= 10;
+            tens++;
+        }
+        p = put_dec(put_dec(put_str(put_dec(p, ip), "."), tens), fr);
+        return long_ratio ? put_str(p, (FD_RATIO_HARMONIC >> ri) & 1 ? " TONE" : " METAL") : p;
+    }
+    if (i == FD_NOISE)
+        return put_str(p, fd_noise_zone[fd_noise_zone_of(k[FD_NOISE])]);
+    int t = i == FD_DECAY ? 0 : i == FD_SWDEC ? 1 : 2;
+    return fd_put_time(p, fd_time_10us[t][fd_pos(k[i]) >> 7]);
 }
 
 /* ellipse of 1-px lines: n segments of `step` turns (uint32) from a0 */
@@ -110,7 +174,7 @@ static uint32_t fd_hash(uint32_t a)
 #define FD_GX0 172
 #define FD_GW 140
 #define FD_GY0 28
-#define FD_GY1 84
+#define FD_GY1 68                               /* 40 units for 60 dB */
 #define FD_GX(i_q8) (FP(FD_GX0) + (fp32)((((int32_t)(i_q8)) * (FP(FD_GW) / 48)) >> 8))
 
 /* one envelope: level(t) = top - slope x t over the 49 time points, until it reaches -60 dB */
@@ -125,7 +189,7 @@ static void fd_curve(void *r, int32_t top_db_q16, int32_t slope_q16, int colour)
             db = -(60 << 16);
         if (db > 0)
             db = 0;
-        fp32 x = FD_GX(i << 8), y = FP(FD_GY0) + (fp32)(((-db) >> 8) * 239 >> 6);   /* 56 units per 60 dB */
+        fp32 x = FD_GX(i << 8), y = FP(FD_GY0) + (fp32)(((-db) >> 8) * 171 >> 6);   /* 40 units per 60 dB */
         if (i)
             line_fast(r, px, py, x, y, colour);
         px = x;
@@ -186,12 +250,27 @@ static void fd_keys(void *r, const int16_t *kit, int edit, const int32_t *lit)
 static void draw_fmdrum(int slot)
 {
     void *r = te_raster();
-    char buf[24], *p;
+    char buf[24];
+    struct fd_view *vw = &fd_v;
     slot &= 7;
     int edit = te_drum_edit;
     edit = edit < 0 ? 0 : edit >= FD_KEYS ? FD_KEYS - 1 : edit;
     const int16_t *kit = te_drum_params + slot * FD_KEYS * 8, *k = kit + edit * 8;
-    fd_frame++;
+    vw->frame++;
+
+    /* a turned knob: the edit key's values changed since the last frame (a change of key is not a turn) */
+    if (vw->edit == edit) {
+        for (int i = 0; i < 8; i++)
+            if (k[i] != vw->last[i]) {
+                vw->shown = i;
+                vw->until = (int32_t)vw->frame + FD_SHOW;
+            }
+    } else {
+        vw->until = 0;
+    }
+    vw->edit = edit;
+    for (int i = 0; i < 8; i++)
+        vw->last[i] = k[i];
 
     /* the voices: per key the loudest level (keys); the youngest voice playing the selected key (the drum) */
     int32_t lit[FD_KEYS];
@@ -211,40 +290,42 @@ static void draw_fmdrum(int slot)
     int32_t amp = live ? live->aenv >> 15 : 0;                      /* Q15 */
     uint32_t age = live ? live->age : 0;
 
-    /* ---- title: the key's class and number ---- */
-    int cls = fd_class(k);
-    text(r, fd_class_name[cls], FP(8), FP(7), FP(2), fd_class_colour[cls]);
-    put_dec(put_str(buf, "KEY "), (uint32_t)edit + 1);
-    int len = 0;
-    while (fd_class_name[cls][len])
-        len++;
-    text_fast(r, buf, FP(14 + 12 * len), FP(13), FP(1), GREY);
+    /* ---- title: the key's class and number (white), or the knob just turned (its colour) ---- */
+    if ((int32_t)(vw->until - (int32_t)vw->frame) > 0) {
+        char *q = put_str(put_str(buf, fd_knob_name[vw->shown]), " ");
+        fd_value(q, vw->shown, k, 1);
+        text(r, buf, FP(8), FP(7), FP(2), fd_knob_colour[vw->shown]);
+    } else {
+        int cls = fd_class(k), len = 0;
+        text(r, fd_class_name[cls], FP(8), FP(7), FP(2), WHITE);
+        while (fd_class_name[cls][len])
+            len++;
+        put_dec(put_str(buf, "KEY "), (uint32_t)edit + 1);
+        text_fast(r, buf, FP(14 + 12 * len), FP(13), FP(1), GREY);
+    }
 
-    /* ---- the drum ---- */
-    int32_t u = k[0] + 24320;
+    /* ---- the drum (grey and white) ---- */
+    int32_t u = k[FD_PITCH] + 24320;
     u = u < 0 ? 0 : u > 49152 ? 49152 : u;
     int32_t rxu = 62 - ((u * 43) >> 16);                            /* 62 (14 Hz) .. 30 (3.6 kHz) */
     fp32 rx = FP(rxu), ry = FP((rxu * 10) >> 5);
-    fp32 depth = FP(6 + (((fd_pos(k[3]) >> 7) * 16) >> 8));
+    fp32 depth = FP(6 + (((fd_pos(k[FD_DECAY]) >> 7) * 16) >> 8));
     fp32 cx = FP(86), hy = FP(72) - (age && age < 12 ? FP(12 - (int32_t)age) >> 2 : 0);   /* the hop */
     fp32 by = FP(72) + depth;
-    /* shell: sides, the near half of the bottom rim, lugs (orange: DECAY) */
-    line_fast(r, cx - rx, hy, cx - rx, by, GREY);
+    line_fast(r, cx - rx, hy, cx - rx, by, GREY);                  /* shell, the near half of the bottom rim, lugs */
     line_fast(r, cx + rx, hy, cx + rx, by, GREY);
     fd_ellipse(r, cx, by, rx, ry, 16, 0x08000000u, 0, GREY);
     for (int i = 1; i < 6; i++) {
         uint32_t a = (uint32_t)i * 0x15555555u;                    /* 30 .. 150 degrees: the near side */
         fp32 lx = cx + (((rx >> 5) * cos_t(a)) >> 10), ly = ((ry >> 5) * sin_t(a)) >> 10;
-        line_fast(r, lx, hy + ly + FP(3), lx, by + ly - FP(2), ORANGE);
+        line_fast(r, lx, hy + ly + FP(3), lx, by + ly - FP(2), PURPLEGREY);
     }
-    /* ripples while it sounds */
-    if (live && amp > 200)
+    if (live && amp > 200)                                          /* ripples while it sounds */
         for (int j = 0; j < 2; j++) {
             fp32 g = FP((int32_t)((age * 2 + (uint32_t)j * 9) & 15) + 3);
             fd_ellipse(r, cx, hy, rx + g, ry + (g >> 1), 32, 0x08000000u, 0, amp > 5000 ? GREY : DARKBLUE);
         }
-    /* head outline (anti-aliased) */
-    {
+    {                                                               /* head outline (anti-aliased) */
         fp32 px = cx + rx, py = hy;
         for (int i = 1; i <= 24; i++) {
             uint32_t a = (uint32_t)i * 0x0AAAAAABu;
@@ -255,16 +336,16 @@ static void draw_fmdrum(int slot)
         }
     }
     /* the FM rosette: radius (fraction of the head) 0.56 + 0.31 depth cos(petals x angle) */
-    int ri = fd_pos(k[1]) >> 10, harm = (FD_RATIO_HARMONIC >> ri) & 1;
-    int32_t ipk = fd_index_q8(k[2]), iq8 = live ? live->index_q8 : ipk;
+    int ri = fd_pos(k[FD_RATIO]) >> 10, harm = (FD_RATIO_HARMONIC >> ri) & 1;
+    int32_t ipk = fd_index_q8(k[FD_FM]), iq8 = live ? live->index_q8 : ipk;
     int32_t dq = iq8 >= 2048 ? 32767 : iq8 << 4;                    /* depth: full at 8 rad */
     {
         uint32_t n_q16 = fd_ratio[ri] << 1;                         /* petals = 2 x ratio */
         int segs = harm ? 64 : 128;                                 /* inharmonic: two turns */
         uint32_t dps = (0x04000000u >> 8) * (n_q16 >> 8);           /* petals x 1/64 turn, mod 2^32 */
-        uint32_t ph0 = live ? fd_frame * 0x01000000u : 0x40000000u;
+        uint32_t ph0 = live ? vw->frame * 0x01000000u : 0x40000000u;
         int32_t amp_q15 = (10158 * dq) >> 15;
-        int col = live ? WHITE : ipk ? GREEN : DARKGREEN;
+        int col = live ? WHITE : ipk ? GREY : DARKBLUE;
         fp32 px = 0, py = 0;
         for (int i = 0; i <= segs; i++) {
             uint32_t th = 0x04000000u * (uint32_t)i, ps = dps * (uint32_t)i + ph0;
@@ -277,13 +358,13 @@ static void draw_fmdrum(int slot)
             py = y;
         }
     }
-    /* the sweep: a blue curve falling onto the head, its bend from SNAP (the sweep envelope over ~160 ms) */
-    int32_t sq = fd_sweep_q(k[4]);
+    /* the sweep (green: SWEEP's colour): a curve falling onto the head, its bend from SWDEC (~160 ms shown) */
+    int32_t sq = fd_sweep_q(k[FD_SWEEP]);
     fp32 head_top = hy - ry;
     if (sq > 0) {
         fp32 room = head_top - FP(26);
         fp32 h = room > 0 ? (fp32)((((room >> 5) * (sq >> 3)) * 341) >> 15) : 0;   /* sq / 24576 of the room above */
-        int32_t f = fd_swp_dec[fd_pos(k[5]) >> 7];                  /* per block, Q30 */
+        int32_t f = fd_swp_dec[fd_pos(k[FD_SWDEC]) >> 7];           /* per block, Q30 */
         int32_t f2 = (f >> 15) * (f >> 15), f4 = (f2 >> 15) * (f2 >> 15), f8 = (f4 >> 15) * (f4 >> 15);
         int32_t fs = (((f8 >> 15) * (f2 >> 15)) >> 15) * (f >> 15);      /* f^11 per segment */
         fp32 x0 = cx - ((rx * 7) >> 3), dx = (((rx * 7) >> 3) * 6554) >> 16;   /* 10 segments to the centre */
@@ -292,7 +373,7 @@ static void draw_fmdrum(int slot)
         for (int j = 1; j <= 10; j++) {
             int32_t e1 = (e >> 15) * (fs >> 15);
             fp32 x = x0 + dx * j, y = head_top - (fp32)(((h >> 5) * (e1 >> 15)) >> 10);
-            line_fp(r, px, py, x, y, FP(3) >> 1, BLUE);
+            line_fp(r, px, py, x, y, FP(3) >> 1, GREEN);
             if (dotx < 0 && se >= e1 && se >= 0) {
                 dotx = px;
                 doty = py;
@@ -301,23 +382,23 @@ static void draw_fmdrum(int slot)
             py = y;
             e = e1;
         }
-        line_fp(r, px, py, px - FP(3), py - FP(4), FP(3) >> 1, BLUE);   /* arrow head */
-        line_fp(r, px, py, px + FP(1), py - FP(5), FP(3) >> 1, BLUE);
+        line_fp(r, px, py, px - FP(3), py - FP(4), FP(3) >> 1, GREEN);  /* arrow head */
+        line_fp(r, px, py, px + FP(1), py - FP(5), FP(3) >> 1, GREEN);
         if (dotx >= 0)
-            line_fp(r, dotx, doty - FP(1), dotx, doty + FP(1), FP(4), LIGHTBLUE);
+            line_fp(r, dotx, doty - FP(1), dotx, doty + FP(1), FP(4), WHITE);
     }
-    /* noise: speckle above the head, or clap marks */
-    int32_t k6 = fd_pos(k[6]);
-    int zone = fd_noise_zone_of(k[6]);
+    /* noise: white/grey speckle above the head, zones apart by height and density; CLAP adds clap marks */
+    int32_t kn = fd_pos(k[FD_NOISE]);
+    int zone = fd_noise_zone_of(k[FD_NOISE]);
     if (zone) {
-        int32_t nl = fd_noise[(k6 >> 9) * FD_NOISE_W + 1];         /* noise level, Q15 */
-        int n = (nl * 40) >> 15;
+        int32_t nl = fd_noise[(kn >> 9) * FD_NOISE_W + 1];         /* noise level, Q15 */
+        static const uint8_t dens[5] = { 0, 14, 30, 46, 22 }, rise_u[5] = { 0, 5, 12, 22, 14 };
+        int n = (nl * dens[zone]) >> 15;
         if (live)
             n = (n * (amp > 16384 ? 32767 : amp << 1)) >> 15;
-        fp32 rise = zone == 1 ? FP(7) : zone == 2 ? FP(14) : FP(24);
-        int c0 = zone == 1 ? DARKBLUE : zone == 2 ? GREY : zone == 3 ? WHITE : ORANGE;
-        int c1 = zone == 1 ? GREY : zone == 2 ? WHITE : zone == 3 ? LIGHTGREEN : LIGHTORANGE;
-        uint32_t seed = live ? fd_frame : 7;
+        fp32 rise = FP(rise_u[zone]);
+        int c0 = zone == 1 ? DARKBLUE : zone == 3 ? WHITE : GREY, c1 = zone == 1 ? GREY : zone == 2 ? WHITE : GREY;
+        uint32_t seed = live ? vw->frame : 7;
         fp32 spread = live ? FP(1) + (fp32)(age > 16 ? FP(1) : (fp32)age << 6) : FP(1);
         for (int i = 0; i < n; i++) {
             uint32_t hsh = fd_hash((uint32_t)i * 2654435761u + seed);
@@ -329,7 +410,7 @@ static void draw_fmdrum(int slot)
             line_fast(r, x, y, x + FP(1), y, (hsh >> 13) & 1 ? c0 : c1);
         }
         if (zone == 4) {                                            /* clap: three marks each side */
-            int col = live ? WHITE : ORANGE;
+            int col = live ? WHITE : GREY;
             for (int j = 0; j < 3; j++) {
                 fp32 dy = FP(5 * j);
                 line_fp(r, cx - rx - FP(4), hy - FP(10) + dy, cx - rx - FP(11), hy - FP(14) + (dy << 1) - FP(2), FP(3) >> 1, col);
@@ -338,59 +419,32 @@ static void draw_fmdrum(int slot)
         }
     }
 
-    /* ---- the graph ---- */
+    /* ---- the graph (40 units tall, ticks without labels) ---- */
     line_fast(r, FP(FD_GX0), FP(FD_GY1), FP(FD_GX0 + FD_GW), FP(FD_GY1), DARKBLUE);
     line_fast(r, FP(FD_GX0), FP(FD_GY0), FP(FD_GX0), FP(FD_GY1), DARKBLUE);
     static const int16_t tick_q8[3] = { 2852, 6254, 9656 };        /* 10 ms, 0.1 s, 1 s: 4 log2(t / 1 block), Q8 */
-    static const char *const tick_name[3] = { "10MS", "100MS", "1 SEC" };
-    for (int i = 0; i < 3; i++) {
-        fp32 x = FD_GX(tick_q8[i]);
-        vline_fast(r, x, FP(FD_GY1 - 3), FP(FD_GY1), GREY);
-        text_fast(r, tick_name[i], x - FP(i == 0 ? 9 : 11), FP(FD_GY1 + 3), FP(3) >> 2, GREY);
-    }
+    for (int i = 0; i < 3; i++)
+        vline_fast(r, FD_GX(tick_q8[i]), FP(FD_GY1 - 2 - i), FP(FD_GY1), GREY);
     if (sq > 0)                                                    /* sweep: from its depth (48 st = top) */
-        fd_curve(r, (fd_log2_q8((uint32_t)sq) - 3734) * 1541, fd_db_blk[1][fd_pos(k[5]) >> 7], BLUE);
+        fd_curve(r, (fd_log2_q8((uint32_t)sq) - 3734) * 1541, fd_db_blk[1][fd_pos(k[FD_SWDEC]) >> 7], GREEN);
     if (ipk > 0)                                                   /* FM index: from its depth (16 rad = top) */
-        fd_curve(r, (fd_log2_q8((uint32_t)ipk) - 3072) * 1541, fd_db_blk[2][fd_pos(k[7]) >> 7], WHITE);
-    fd_curve(r, 0, fd_db_blk[0][fd_pos(k[3]) >> 7], ORANGE);
+        fd_curve(r, (fd_log2_q8((uint32_t)ipk) - 3072) * 1541, fd_db_blk[2][fd_pos(k[FD_FMDEC]) >> 7], WHITE);
+    fd_curve(r, 0, fd_db_blk[0][fd_pos(k[FD_DECAY]) >> 7], ORANGE);
     if (live)
         vline_fast(r, FD_GX(fd_log2_q8(age) << 2), FP(FD_GY0), FP(FD_GY1), GREY);
 
-    /* ---- values: the four knobs, and SHIFT's four below ---- */
-    uint32_t hz = fd_hz(k[0]), kh = 0;
-    if (hz < 1000)
-        put_str(put_dec(buf, hz), "HZ");
-    else {
-        while (hz >= 1000) {                    /* at most 3 steps (3.6 kHz): no division */
-            hz -= 1000;
-            kh++;
-        }
-        put_str(put_dec(put_str(put_dec(buf, kh), "."), (hz * 655) >> 16), "K");
+    /* ---- values under grey labels: the plain knobs, then SHIFT's (dimmer) ---- */
+    static const uint16_t col_x[4] = { 172, 210, 242, 280 };
+    for (int i = 0; i < 4; i++) {
+        text_fast(r, fd_knob_name[i], FP(col_x[i]), FP(73), FP(3) >> 2, GREY);
+        fd_value(buf, i, k, 0);
+        text_fast(r, buf, FP(col_x[i]), FP(80), FP(1), fd_knob_colour[i]);
+        text_fast(r, fd_knob_name[4 + i], FP(col_x[i]), FP(97), FP(3) >> 2, DARKBLUE);
+        fd_value(buf, 4 + i, k, 0);
+        text_fast(r, buf, FP(col_x[i]), FP(104), FP(1), fd_shift_colour[i]);
     }
-    text_fast(r, buf, FP(172), FP(96), FP(1), BLUE);
-    uint32_t fr = fd_ratio_x100[ri], ip = 0, tens = 0;
-    while (fr >= 100) {
-        fr -= 100;
-        ip++;
-    }
-    while (fr >= 10) {
-        fr -= 10;
-        tens++;
-    }
-    p = put_str(put_dec(buf, ip), ".");
-    put_dec(put_dec(p, tens), fr);
-    text_fast(r, buf, FP(212), FP(96), FP(1), GREEN);
-    put_dec(put_str(put_dec(buf, (uint32_t)ipk >> 8), "."), (((uint32_t)ipk & 255) * 10) >> 8);
-    text_fast(r, buf, FP(246), FP(96), FP(1), WHITE);
-    fd_put_time(buf, fd_time_10us[0][fd_pos(k[3]) >> 7]);
-    text_fast(r, buf, FP(280), FP(96), FP(1), ORANGE);
-    put_str(put_dec(put_str(buf, "+"), ((uint32_t)sq + 256) >> 9), " ST");
-    text_fast(r, buf, FP(172), FP(107), FP(1), LIGHTBLUE);
-    fd_put_time(buf, fd_time_10us[1][fd_pos(k[5]) >> 7]);
-    text_fast(r, buf, FP(212), FP(107), FP(1), LIGHTGREEN);
-    text_fast(r, fd_noise_zone[zone], FP(246), FP(107), FP(1), GREY);
-    fd_put_time(buf, fd_time_10us[2][fd_pos(k[7]) >> 7]);
-    text_fast(r, buf, FP(280), FP(107), FP(1), LIGHTORANGE);
+    text_fast(r, "SHIFT", FP(172), FP(91), FP(3) >> 2, DARKBLUE);
+    line_fast(r, FP(198), FP(93), FP(312), FP(93), DARKBLUE);
 
     /* ---- the keys ---- */
     fd_keys(r, kit, edit, lit);

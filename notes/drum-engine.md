@@ -211,33 +211,50 @@ above 0.77 fs fold back under 20 kHz). DC: 8 Hz one-pole high-pass (a 1:1 ratio 
 State: `fmdrum_voice[12]` in the slot block, indexed by TE's voice index; note-on (TE's caller thread) only writes key,
 velocity and a trigger count that render picks up.
 
-### Knobs (per key, dbox's row 9: K0 -24320..24832, K1-K7 0..32767)
+### Knobs (per key, dbox's row 9: K0 -24320..24832, K1-K7 0..32767; UX review 2026-10-14: an amount on each plain knob, its time or partner on SHIFT)
 | knob | name | range and curve |
 |---|---|---|
 | K0 blue | PITCH | 512 per semitone (dbox's own convention), 0 = A3 220 Hz: 14 Hz .. 3.6 kHz |
-| K1 green | RATIO | modulator : carrier, 32 steps rising 0.5 .. 15.5, harmonic (n/2) and inharmonic (sqrt 2, 2.76, pi, 5.19, ...) mixed |
+| K1 green | SWEEP | pitch starts 0 .. +48 semitones above, quadratic (half = +12) |
 | K2 white | FM | peak index 0 .. 16 rad, quadratic (half knob = 4 rad); velocity scales it 0.5 .. 1 |
-| K3 orange | DECAY | amplitude T60 15 ms .. 4 s, exponential |
-| K4 SHIFT+blue | SWEEP | pitch starts 0 .. +48 semitones above, quadratic (half = +12) |
-| K5 SHIFT+green | SNAP | sweep time constant 1 .. 300 ms, exponential |
-| K6 SHIFT+white | NOISE | 0..1023 OFF; AIR to 8191 (dark lp->bp 300 Hz..1.5 kHz, level to 0.55, under the tone); SNARE to 16383 (band 1.5..5 kHz, level to 1, tone kept); HAT to 24575 (bright bp->hp 5..9 kHz, the tone fades out); CLAP to 32767 (noise only, the band falls back to 1.2 kHz and narrows, three bursts 8.7 ms apart fade in) |
-| K7 SHIFT+orange | MOD | the FM index's own decay, T60 3 ms .. 3 s, exponential |
-TE's LFO reaches K0-K3 only (knob-hook.md), so pitch, ratio, FM and decay are LFO targets.
+| K3 orange | DECAY | amplitude (tone and noise) T60 15 ms .. 4 s, exponential |
+| K4 SHIFT+blue | RATIO | modulator : carrier, 32 steps (1024 each): the 15 harmonic ratios (n/2: 0.5 .. 15.5, TONE) rising, then the 17 inharmonic ones (0.71 .. 9.42: sqrt 2, 2.76, pi, 5.19, ...; METAL) rising |
+| K5 SHIFT+green | SWDEC | sweep time constant 1 .. 300 ms, exponential |
+| K6 SHIFT+white | FMDEC | the FM index's own decay, T60 3 ms .. 3 s, exponential |
+| K7 SHIFT+orange | NOISE | 0..1023 OFF; AIR to 8191 (dark lp->bp 300 Hz..1.5 kHz, level to 0.55, under the tone); SNARE to 16383 (band 1.5..5 kHz, level to 1, tone kept); HAT to 24575 (bright bp->hp 5..9 kHz, the tone fades out); CLAP above (noise only, the band falls back to 1.2 kHz and narrows, three bursts 8.7 ms apart fade in). Stock dbox values stop at 32255: still CLAP |
+TE's LFO reaches K0-K3 only (knob-hook.md): PITCH, SWEEP, FM, DECAY. Noise shares DECAY (one amplitude envelope):
+snares may sound flat where a real snare's rattle outlasts its body (device question in LOG 65).
+
+### Hi-hat choke
+Keys 10..13 are a choke group: a note-on there on a key whose NOISE is in the HAT zone sets `choke` on every other
+sounding voice of the group in the HAT zone (the same key too: one hi-hat); render then decays it with a 5 ms T60
+(ramped per block, no click). Keys outside 10..13 and group keys without HAT noise are never choked. note-on reads the
+other keys' values through its `key_params` pointer (TE's [slot][key][8] row, so the same slot).
 
 ### Kits (folder dbox, 24 keys each; gen_fmdrum.py)
-`fm 808` (template dem drums): sine kicks, toms, snare, clap, metallic hats and cowbell, congas, maracas, cymbal, ping.
-`fm 909` (lo-fi, punch FX on): click kicks, bright snares, hats, crash, ride, shaker. `fm metal` (cuckoos nest, delay on):
-gong, plates, bells on a scale, chimes, glock, anvil, sizzle. `fm zaps` (dem drums): zaps, lasers, blips, dives, glitch.
+Shared key roles in all four: 0-2 kicks, 3/5/7 toms, 4/6 snares, 8 rim, 9 clap, 10-13 hats (the choke group, all in
+the HAT zone), 14-15 cymbals, 16-23 free (percussion, effects). `fm 808` (template dem drums): its fifth kick is now a
+ride; clave, cowbell, congas, maracas, floor tom, sub boom, ping on 16-23. `fm 909` (lo-fi, punch FX on). `fm metal`
+(cuckoos nest, delay on): metal kick, gong, spring hit; metal and anvil snares; tin rim; clap; metal hats; shimmer and
+crash; bells on a scale, chime, glock, triangle on 16-23. `fm zaps` (dem drums): zap kicks, zap snares, tick rim, clap
+zap, swept hats, zap crash, metal zap; lasers and blips on 16-23.
 
 ### Screen (ui_fmdrum.h)
-The selected key's class as the title (KICK, TOM, SNARE, CLAP, HAT, METAL, BELL, ZAP, PERC, from its values), an
-oblique drum (size = pitch, shell depth = DECAY, an FM rosette of 2 x RATIO petals with depth = FM on the head, the
-sweep as a blue curve falling onto it, noise as speckle or clap marks; it hops, ripples and follows the live index
-while the key plays), an envelope graph on log time (DECAY orange, FM index white, sweep blue, playhead), the eight
-values, and the 24 keys with class marks, lit while they sound. No division; ~60 AA segments, the rest 1-px lines.
+Title in white: the selected key's class (KICK, TOM, SNARE, CLAP, HAT, METAL, BELL, ZAP, PERC, from its values) and
+number; after a knob turn, for ~1.5 s (45 frames), the knob's name and value in its colour instead (as harm: the 8
+values compared every frame, a change of key is not a turn), e.g. DECAY 450MS, NOISE HAT, RATIO 1.41 METAL. An oblique
+drum in grey and white (size = pitch, shell depth = DECAY, an FM rosette of 2 x RATIO petals with depth = FM on the head,
+SWEEP as a green curve falling onto it, noise as white/grey speckle told apart by height and density, clap marks for
+CLAP); it hops, ripples and follows the live index while the key plays. An envelope graph on log time, 40 units tall,
+ticks without labels (DECAY orange, FM index white, sweep green, playhead). Grey labels over the values (PITCH SWEEP FM
+DECAY), a dimmer SHIFT row (RATIO with TONE/METAL in the readout, SWDEC, FMDEC, NOISE); times as nnnMS below 1 s and
+n.nSEC above. Knob colours only on knob values; class colours only as marks in the 24-key strip (CLAP lavender, ZAP
+red). The stroke font's S is now chamfered (gen_font.py), so it no longer reads as 5 (1.2SEC, 35MS) on every screen.
 
 ### Checks (sim, before DRUMFM1)
 fmdrum_check: pitch within 0.2 cents; sweep follows f0 2^(S e^(-t/tau)/12); FM sidebands = Bessel J_k(I) within
 0.5 dB; MOD decay; aliasing at the extremes <= -48 dB (energy off the true sidebands below 20 kHz); DC <= 1.1 %;
-decay T60s; noise zones; clap bursts; velocity; no clicks on knob changes or retrigger; all 96 kit keys -11..-0.3 dBFS,
-no clipping; no libgcc calls; worst render 22,000 cycles per call (172 per sample; tone-only keys ~85); ABI.
+decay T60s; noise zones; clap bursts; velocity; no clicks on knob changes or retrigger; all 96 kit keys -11..-0.1 dBFS,
+one sample >= 32000 in 6.1 M; the hi-hat choke (6 ms after the closing hit; not across key 14, a SNARE-zone hit or a
+group key without HAT noise); RATIO's order; NOISE's stock maximum still CLAP; no libgcc calls; worst render 21,000
+cycles per call (164 per sample; tone-only keys ~85); ABI.

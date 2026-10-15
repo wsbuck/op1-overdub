@@ -11,8 +11,10 @@ bfin-elf-run at 88.2 kHz. The knob curves come from src/slot/gen_fmdrum.py (the 
   aliasing at the extremes (index limiter, modulator fade near fs/2): energy folded into 0..20 kHz; DC (a 1:1 ratio puts
   a sideband at 0 Hz); amplitude decay times (K3) and the voice's end (active() 0, then silence); the noise zones (K6:
   colour rising AIR < SNARE < HAT, tone gone in CLAP, clap bursts); velocity; knob changes and retriggers without
-  clicks; every factory kit key: level (peaks, near-clip samples, audible); CYCLES per render call against the engines'
-  budget; output guard; no runtime division or other libgcc calls; slot init; the ABI. Exits non-zero on a failure.
+  clicks; every factory kit key: level (peaks, near-clip samples, audible); the hi-hat choke (keys 10..13, HAT zone);
+  the RATIO table's order, NOISE's stock maximum still CLAP, the kits' shared hat keys; CYCLES per render call against
+  the engines' budget; output guard; no runtime division or other libgcc calls; slot init; the ABI. Exits non-zero on
+  a failure.
 """
 import argparse
 import math
@@ -32,28 +34,29 @@ import gen_fmdrum as G  # noqa: E402
 from simrun import CPU_BUDGET  # noqa: E402
 
 FS = 88200
-DRY = [0, G.k1_of(1.0), 0, 32767, 0, 0, 0, 32767]          # A3 sine, longest decay, no FM/sweep/noise
+PITCH, SWEEP, FM, DECAY, RATIO, SWDEC, FMDEC, NOISE = range(8)     # fmdrum.h FD_*
+DRY = [0, 0, 0, 32767, G.k1_of(1.0), 0, 32767, 0]           # A3 sine, longest decay, no FM/sweep/noise
 
 
 def P(**kw):
     """per-key values from physical settings (gen_fmdrum's inverse curves); missing ones from DRY"""
     k = list(DRY)
     if "hz" in kw:
-        k[0] = G.k0_of(kw["hz"])
+        k[PITCH] = G.k0_of(kw["hz"])
     if "ratio" in kw:
-        k[1] = G.k1_of(kw["ratio"])
+        k[RATIO] = G.k1_of(kw["ratio"])
     if "fm" in kw:
-        k[2] = G.k2_of(kw["fm"])
+        k[FM] = G.k2_of(kw["fm"])
     if "decay" in kw:
-        k[3] = G.k_expo(kw["decay"], *G.DECAY)
+        k[DECAY] = G.k_expo(kw["decay"], *G.DECAY)
     if "sweep" in kw:
-        k[4] = G.k4_of(kw["sweep"])
+        k[SWEEP] = G.k4_of(kw["sweep"])
     if "snap" in kw:
-        k[5] = G.k_expo(kw["snap"], *G.SNAP)
+        k[SWDEC] = G.k_expo(kw["snap"], *G.SNAP)
     if "noise" in kw:
-        k[6] = kw["noise"]
+        k[NOISE] = kw["noise"]
     if "mod" in kw:
-        k[7] = G.k_expo(kw["mod"], *G.MODDEC)
+        k[FMDEC] = G.k_expo(kw["mod"], *G.MODDEC)
     for j, v in kw.get("raw", {}).items():
         k[j] = v
     return k
@@ -77,22 +80,34 @@ def cases():
     for i, (k0, r) in enumerate(alias):
         c[f"alias{i}"] = (0, 127, 200, P(ratio=r, fm=16.0, mod=3.0, raw={0: k0}))
     c["dc"] = (0, 127, 400, P(hz=110, ratio=1.0, fm=2.4, mod=3.0))
-    c["decay_min"] = (0, 127, 60, P(raw={3: 0}))
+    c["decay_min"] = (0, 127, 60, P(raw={DECAY: 0}))
     c["decay_mid"] = (0, 127, 300, P(decay=0.25))
-    c["decay_max"] = (0, 127, 3400, P(raw={3: 32767}))
+    c["decay_max"] = (0, 127, 3400, P(raw={DECAY: 32767}))
     for z, k6 in (("off", 0), ("air", 6000), ("snare", 14000), ("hat", 22000), ("hat_top", 24400), ("clap", 32767)):
         c[f"noise_{z}"] = (1, 127, 160, P(hz=50, decay=0.5, noise=k6))
+    c["noise_stockmax"] = (1, 127, 160, P(hz=50, decay=0.5, noise=G.STOCK_HI[NOISE]))
     c["vel64"] = (0, 64, 60, P(hz=220, decay=0.5))
     c["vel127"] = (0, 127, 60, P(hz=220, decay=0.5))
-    c["chg_pitch"] = (0, 127, 80, P(hz=220, decay=2.0) + ["chg", 40, 0, 12 * 512])
-    c["chg_fm"] = (0, 127, 80, P(hz=220, ratio=2.0, fm=1.0, decay=2.0, mod=3.0) + ["chg", 40, 2, G.k2_of(4.0)])
-    c["chg_noise"] = (0, 127, 80, P(hz=220, decay=2.0, noise=6000) + ["chg", 40, 6, 22000])
+    c["chg_pitch"] = (0, 127, 80, P(hz=220, decay=2.0) + ["chg", 40, PITCH, 12 * 512])
+    c["chg_fm"] = (0, 127, 80, P(hz=220, ratio=2.0, fm=1.0, decay=2.0, mod=3.0) + ["chg", 40, FM, G.k2_of(4.0)])
+    c["chg_noise"] = (0, 127, 80, P(hz=220, decay=2.0, noise=6000) + ["chg", 40, NOISE, 22000])
     c["retrig"] = (0, 127, 80, P(hz=60, decay=1.0, sweep=12, snap=0.02, fm=1.0, mod=0.03) + ["retrig", 30])
-    c["worst"] = (23, 127, 30, [G.STOCK_HI[0], 31 * 1024, 32767, 32767, 32767, 32767, 20000, 32767])
+    c["worst"] = (23, 127, 30, [G.STOCK_HI[0], 32767, 32767, 32767, 31 * 1024, 32767, 32767, 20000])
     for name, kit in G.KITS.items():
         for k, row in enumerate(kit[1]):
             c[f"kit_{name.replace(' ', '_')}_{k}"] = (k, 127, 500, list(row))
     return c
+
+
+OPEN_HAT = P(hz=3000, ratio=1.4142, fm=7.0, decay=0.7, mod=0.6, noise=G.STOCK_HI[NOISE] - 12000)   # HAT zone
+CLOSED_HAT = P(hz=3000, ratio=1.4142, fm=7.0, decay=0.07, mod=0.08, noise=20480)
+CHOKE = {                                   # (open key, hit key, open values, hit values): voice 3 rings, voice 4 hits
+    "choke_hat": (13, 10, OPEN_HAT, CLOSED_HAT),            # open hat cut by a closed hat
+    "choke_same": (13, 13, OPEN_HAT, OPEN_HAT),             # one hi-hat: the same key cuts its last hit
+    "choke_outside": (13, 14, OPEN_HAT, CLOSED_HAT),        # key 14 is not in the group
+    "choke_notzone": (13, 10, OPEN_HAT, P(hz=3000, decay=0.07, noise=12000)),   # hit key in the group, SNARE zone
+    "choke_victim": (12, 10, P(hz=300, decay=0.7, noise=0), CLOSED_HAT),       # a group key without HAT noise rings on
+}
 
 
 def spectrum(x, f0=None):
@@ -120,6 +135,14 @@ def bessel(k, x, terms=40):
     return sum((-1) ** m / (math.factorial(m) * math.factorial(m + k)) * (x / 2) ** (2 * m + k) for m in range(terms))
 
 
+def peak_groups(x):
+    """bursts in the first 35 ms: RMS peaks above 0.3 of the largest, more than 3.4 ms apart"""
+    x = x[:int(0.035 * FS)].astype(float)
+    e = np.sqrt(np.convolve(x ** 2, np.ones(88) / 88, "same"))
+    peaks = [i for i in range(1, len(e) - 1) if e[i] >= e[i - 1] and e[i] > e[i + 1] and e[i] > 0.3 * e.max()]
+    return len([p for j, p in enumerate(peaks) if j == 0 or p - peaks[j - 1] > 300])
+
+
 def t60_index(x, start=0):
     """samples from the peak until the 2 ms RMS last falls below peak RMS - 60 dB"""
     e = np.sqrt(np.convolve(x.astype(float) ** 2, np.ones(176) / 176, "same"))
@@ -138,6 +161,9 @@ def main():
     cmds = [f"bfin-elf-run /tmp/m {k} {v} {b} {' '.join(map(str, p))} > /w/{n}.bin 2> /w/{n}.err; echo $? > /w/{n}.rc"
             for n, (k, v, b, p) in cs.items()]
     cmds.append("bfin-elf-run /tmp/m init > /w/init.txt 2> /w/init.err; echo $? > /w/init.rc")
+    for n, (k1, k2, p1, p2) in CHOKE.items():
+        cmds.append(f"bfin-elf-run /tmp/m choke {k1} {k2} 20 200 {' '.join(map(str, p1 + p2))} > /w/{n}.bin "
+                    f"2> /w/{n}.err; echo $? > /w/{n}.rc")
     open(os.path.join(w, "cmds"), "w").write("\n".join(cmds) + "\n")
     open(os.path.join(w, "run.sh"), "w").write(
         "set -e; cd /tmp\n"
@@ -197,7 +223,7 @@ def main():
         return (len(z) - 1) / 2 / ((z[-1] - z[0]) / FS) if len(z) > 2 else 0.0
     x = res["sweep"]["x"]
     k = cs["sweep"][3]
-    tau, semis, f0 = G.expo(k[5], *G.SNAP), G.sweep_semis(k[4]), G.pitch_hz(k[0])
+    tau, semis, f0 = G.expo(k[SWDEC], *G.SNAP), G.sweep_semis(k[SWEEP]), G.pitch_hz(k[PITCH])
 
     def model(a, b):                # mean frequency of f0 x 2^(semis e^(-t / tau) / 12) over samples a..b
         t = np.arange(a, b) / FS
@@ -215,13 +241,13 @@ def main():
     worst_db = 0.0
     for r, fm in ((3.5, 1.0), (3.5, 2.4), (2.7565, 4.0), (1.4142, 6.0)):
         k = P(hz=220, ratio=r, fm=fm, mod=3.0)
-        fc = G.pitch_hz(k[0])
-        fmod = fc * G.ratio_of(k[1])
+        fc = G.pitch_hz(k[PITCH])
+        fmod = fc * G.ratio_of(k[RATIO])
         x = res[f"fm_{r}_{fm}"]["x"]
         a0, n = 441, 4096                                    # 5 ms .. 51 ms
         mid = (a0 + n / 2) / FS
-        menv = 10 ** (-3 * mid / G.expo(k[7], *G.MODDEC))   # the modulator envelope at the window's centre
-        I = G.fm_rad(k[2]) * (16384 + (32512 >> 1)) / 32768 * menv
+        menv = 10 ** (-3 * mid / G.expo(k[FMDEC], *G.MODDEC))   # the modulator envelope at the window's centre
+        I = G.fm_rad(k[FM]) * (16384 + (32512 >> 1)) / 32768 * menv
         fr, m = spectrum(x[a0:a0 + n])
         got, want = [], []
         for j in range(-3, 4):
@@ -252,8 +278,8 @@ def main():
     for i in range(8):
         k = cs[f"alias{i}"][3]
         x = res[f"alias{i}"]["x"][4410:4410 + 16384]
-        fc = G.pitch_hz(k[0])
-        fmod = fc * G.ratio_of(k[1])
+        fc = G.pitch_hz(k[PITCH])
+        fmod = fc * G.ratio_of(k[RATIO])
         win = np.blackman(len(x))                           # low sidelobes: many strong sidebands
         m = np.abs(np.fft.rfft(x.astype(float) * win, 1 << 16))
         fr = np.fft.rfftfreq(1 << 16, 1 / FS)
@@ -312,10 +338,7 @@ def main():
     t_off, t_top, t_clap = tone50("noise_off"), tone50("noise_hat_top"), tone50("noise_clap")
     check(t_top < 0.1 * t_off and t_clap < 0.02 * t_off, f"K6: the tone fades through HAT ({t_top / t_off:.3f}) and is "
           f"gone in CLAP ({t_clap / t_off:.4f})")
-    x = res["noise_clap"]["x"][:int(0.035 * FS)].astype(float)
-    e = np.sqrt(np.convolve(x ** 2, np.ones(88) / 88, "same"))
-    peaks = [i for i in range(1, len(e) - 1) if e[i] >= e[i - 1] and e[i] > e[i + 1] and e[i] > 0.3 * e.max()]
-    groups = len([p for j, p in enumerate(peaks) if j == 0 or p - peaks[j - 1] > 300])
+    groups = peak_groups(res["noise_clap"]["x"])
     check(groups >= 4, f"CLAP: {groups} bursts in the first 35 ms (want 4: three short, then the tail)")
 
     # ---- velocity ----
@@ -350,6 +373,28 @@ def main():
         if n.startswith("kit_"):
             x = res[n]["x"][-128 * 20:]
             assert x.size
+    # ---- hi-hat choke (keys 10..13, HAT zone) ----
+    ends = {n: int(open(os.path.join(w, n + ".err")).read().split()[1]) for n in CHOKE}
+    ok_rc = all(open(os.path.join(w, n + ".rc")).read().strip() == "0" for n in CHOKE)
+    x = np.fromfile(os.path.join(w, "choke_hat.bin"), dtype="<i2").astype(np.int64)
+    d = np.abs(np.diff(x[20 * 128 - 4:22 * 128]))
+    check(ok_rc and 20 <= ends["choke_hat"] <= 25 and 20 <= ends["choke_same"] <= 25
+          and ends["choke_outside"] < 0 and ends["choke_notzone"] < 0 and ends["choke_victim"] < 0
+          and d.max() < 2 * np.abs(np.diff(x[18 * 128:20 * 128])).max(),
+          f"hi-hat choke: open hat ends {ends['choke_hat'] - 20} blocks ({(ends['choke_hat'] - 19) * 1.45:.0f} ms) after a "
+          f"closed hit (same key {ends['choke_same'] - 20}), no click; not choked by key 14, by a SNARE-zone hit, or "
+          f"without HAT noise (ends {ends['choke_outside']}, {ends['choke_notzone']}, {ends['choke_victim']})")
+
+    # ---- knob layout and tables ----
+    rs = G.RATIOS
+    check(rs[:15] == sorted(rs[:15]) and rs[15:] == sorted(rs[15:]) and all(r in G.HARMONIC for r in rs[:15])
+          and not any(r in G.HARMONIC for r in rs[15:]) and len(rs) == 32,
+          "RATIO: 15 harmonic ratios rising, then 17 inharmonic rising, one per 1024")
+    check(G.noise_zone(G.STOCK_HI[NOISE]) == 4 and peak_groups(res["noise_stockmax"]["x"]) >= 4,
+          f"NOISE at the stock maximum {G.STOCK_HI[NOISE]} is CLAP (bursts)")
+    roles_ok = all(G.noise_zone(kit[1][k][NOISE]) == 3 for kit in G.KITS.values() for k in range(10, 14))
+    check(roles_ok, "every kit's keys 10..13 are hats in the HAT zone (the choke group)")
+
     r = open(os.path.join(w, "init.txt")).read().split()
     check(open(os.path.join(w, "init.rc")).read().strip() == "0" and r == ["kept", "1", "row", "1", "norow", "1"],
           f"slot init: loaded per-key values never rewritten, row 9 copied only when sane ({' '.join(r)})")

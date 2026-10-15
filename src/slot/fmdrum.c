@@ -14,11 +14,14 @@
  *            colour, level, tone level and clap bursts along one knob (OFF, AIR, SNARE, HAT, CLAP)
  *   amp      one exponential decay (DECAY) for tone and noise; velocity (MIDI; the OP-1's keys send 127) scales the
  *            level and the index (0.5 .. 1)
- * Knobs (per key, TE's dbox path, range row 9), read every block, so turning one changes a sounding note smoothly:
- *   [0] blue   PITCH  14 Hz .. 3.6 kHz (512 per semitone, 0 = A3)   [4] SHIFT+blue    SWEEP 0 .. +48 semitones
- *   [1] green  RATIO  0.5 .. 15.5 (32 steps)                        [5] SHIFT+green   SNAP  1 .. 300 ms
- *   [2] white  FM     index 0 .. 16 rad                             [6] SHIFT+white   NOISE OFF/AIR/SNARE/HAT/CLAP
- *   [3] orange DECAY  15 ms .. 4 s (to -60 dB)                      [7] SHIFT+orange  MOD   index decay 3 ms .. 3 s
+ * Knobs (per key, TE's dbox path, range row 9; fmdrum.h FD_*), read every block, so turning one changes a sounding note
+ * smoothly; an amount on each plain knob, its time (or partner) on SHIFT:
+ *   [0] blue   PITCH  14 Hz .. 3.6 kHz (512 per semitone, 0 = A3)   [4] SHIFT+blue    RATIO 15 harmonic, 17 inharmonic
+ *   [1] green  SWEEP  0 .. +48 semitones                            [5] SHIFT+green   SWDEC sweep time 1 .. 300 ms
+ *   [2] white  FM     index 0 .. 16 rad                             [6] SHIFT+white   FMDEC index decay 3 ms .. 3 s
+ *   [3] orange DECAY  15 ms .. 4 s (to -60 dB)                      [7] SHIFT+orange  NOISE OFF/AIR/SNARE/HAT/CLAP
+ * Hi-hat choke: a note-on on keys 10..13 whose NOISE is in the HAT zone releases the other sounding voices of the group
+ * that are in the HAT zone too, in ~5 ms (open hat cut by the closed one).
  * Per block (128 samples at 88.2 kHz): the three envelopes step once (per-block factors from the tables), and every
  * gain, the index and both phase increments ramp linearly across the block, so knob changes and envelopes never
  * zipper. A note starts with a 32-sample (0.36 ms) attack ramp to its start values (index and sweep at full: the FM
@@ -50,6 +53,7 @@
 #define O13_MAX 94168                       /* 0.45 fs above 13.75 Hz, octaves Q13 */
 #define DC_R 2146259790                     /* 1 - 2 pi 8 / 88200, Q31 */
 #define ATTACK 32                           /* samples */
+#define CHOKE_DEC 144594432                 /* per block, Q30: T60 5 ms (a choked hat) */
 
 struct tobj {                               /* TE's dbox object, 0x48 B: only the vptr and the index are used */
     const void *vptr;
@@ -211,6 +215,7 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     if (fresh) {                            /* from silence: phase 0, gains from 0; a sounding voice (retrigger,
                                              * steal) keeps its phases and gains and ramps from them: no click */
         v->seen = v->trig;
+        v->choke = 0;
         if (!v->age) {
             v->cph = v->mph = 0;
             v->gt = v->gn = v->gm = 0;
@@ -228,16 +233,16 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     }
 
     /* envelopes at the end of this block */
-    int32_t a1 = env_step(v->aenv, fd_amp_dec[fd_pos(p[3]) >> 7]);
-    int32_t m1 = env_step(v->menv, fd_mod_dec[fd_pos(p[7]) >> 7]);
-    int32_t s1 = env_step(v->senv, fd_swp_dec[fd_pos(p[5]) >> 7]);
+    int32_t a1 = env_step(v->aenv, v->choke ? CHOKE_DEC : fd_amp_dec[fd_pos(p[FD_DECAY]) >> 7]);
+    int32_t m1 = env_step(v->menv, fd_mod_dec[fd_pos(p[FD_FMDEC]) >> 7]);
+    int32_t s1 = env_step(v->senv, fd_swp_dec[fd_pos(p[FD_SWDEC]) >> 7]);
 
     /* pitch: K0 plus the sweep; carrier and modulator increments at the block's end (and start, for a new note) */
-    int32_t sw = fd_sweep_q(p[4]);
-    uint32_t r = fd_ratio[fd_pos(p[1]) >> 10];
-    uint32_t ci1 = inc_of(p[0] + ((sw * (s1 >> 15)) >> 15)), mi1 = mul_ratio(ci1, r);
+    int32_t sw = fd_sweep_q(p[FD_SWEEP]);
+    uint32_t r = fd_ratio[fd_pos(p[FD_RATIO]) >> 10];
+    uint32_t ci1 = inc_of(p[FD_PITCH] + ((sw * (s1 >> 15)) >> 15)), mi1 = mul_ratio(ci1, r);
     if (fresh) {
-        v->cinc = inc_of(p[0] + sw);
+        v->cinc = inc_of(p[FD_PITCH] + sw);
         v->minc = mul_ratio(v->cinc, r);
     }
     uint32_t fc = (v->cinc > ci1 ? v->cinc : ci1) >> 12;             /* the block's highest carrier, Q20 of fs */
@@ -245,14 +250,14 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     int32_t mute = fm >= M_MUTE ? 0 : fm <= M_FADE ? 32767 : (int32_t)((M_MUTE - fm) >> 1);
 
     /* index: FM x velocity (0.5 .. 1) x the modulator envelope, then the limits */
-    int32_t ipk = (fd_index_q8(p[2]) * (16384 + (v->vel >> 1))) >> 15;
+    int32_t ipk = (fd_index_q8(p[FD_FM]) * (16384 + (v->vel >> 1))) >> 15;
     int32_t i1 = limit_index((ipk * (m1 >> 15)) >> 15, mute, fc, fm);
     int32_t gm1 = (i1 * RAD) >> 8;
     int32_t gm0 = fresh ? (limit_index(ipk, mute, fc, fm) * RAD) >> 8 : 0;
 
-    /* noise: K6's 65 points, interpolated */
-    int32_t k6 = fd_pos(p[6]), nf9 = k6 & 511;
-    const int32_t *n0 = fd_noise + (k6 >> 9) * FD_NOISE_W, *n1 = n0 + FD_NOISE_W;
+    /* noise: NOISE's 65 points, interpolated */
+    int32_t kn = fd_pos(p[FD_NOISE]), nf9 = kn & 511;
+    const int32_t *n0 = fd_noise + (kn >> 9) * FD_NOISE_W, *n1 = n0 + FD_NOISE_W;
 #define LERP(j) (n0[j] + (((n1[j] - n0[j]) * nf9) >> 9))
     int32_t tone = LERP(0), nlev = LERP(1), clap = LERP(7);
     struct flt nf = { LERP(2), LERP(3), LERP(4), LERP(5), LERP(6) };
@@ -307,13 +312,26 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     fmdrum_diag.cyc_max = dt > fmdrum_diag.cyc_max ? dt : fmdrum_diag.cyc_max;
 }
 
+static int choke_member(const int16_t *key_params, int32_t key)
+{
+    return key >= FD_CHOKE_LO && key <= FD_CHOKE_HI && fd_noise_zone_of(key_params[FD_NOISE]) == 3;
+}
+
+/* key_params = &params[slot][key][0] (TE's per-key array, 24 x 8 per slot); the key comes from TE's voice array */
 void fmdrum_note_on(struct tobj *o, const int16_t *key_params)
 {
-    (void)key_params;                       /* = &params[slot][key][0]; the key comes from TE's voice array */
     unsigned vi = (unsigned)o->voice < FD_VOICES ? (unsigned)o->voice : 0;
     struct fd_voice *v = &fmdrum_voice[vi];
     int32_t key = te_drum_key[vi], vel = te_drum_vel[vi];
-    v->key = key < 0 ? 0 : key >= FD_KEYS ? FD_KEYS - 1 : key;
+    key = key < 0 ? 0 : key >= FD_KEYS ? FD_KEYS - 1 : key;
+    if (key_params && choke_member(key_params, key))        /* hi-hat choke: release the group's other hats */
+        for (int i = 0; i < FD_VOICES; i++) {
+            struct fd_voice *w = &fmdrum_voice[i];
+            if (i != (int)vi && w->age                     /* every other hat voice, the same key too: one hi-hat */
+                && choke_member(key_params + (w->key - key) * 8, w->key))   /* same slot's row for w's key */
+                w->choke = 1;
+        }
+    v->key = key;
     v->vel = vel < 0 ? 0 : vel;
     v->trig++;                              /* render restarts the voice at its next block */
     fmdrum_diag.noteons++;

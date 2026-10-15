@@ -55,7 +55,8 @@ struct dp_diag drumprobe_diag = { 37, 35, 90000, 12700, 5, 0x7F00, 3, 0x10000, 1
 uint32_t dp_type_hits[2] = { 2, 5 };
 /* Our drum engines in previews: 18 the probe (engine 300), 19 fmdrum (engine 301). fmdrum: FD_PARAMS = the slot's 24 x 8
  * per-key values (comma-separated), FD_KEY = the selected key, FD_PLAY = blocks since the selected key's note-on (a voice
- * playing it), FD_LIT = "key:level,..." other sounding keys (level Q15). */
+ * playing it), FD_LIT = "key:level,..." other sounding keys (level Q15), FD_TURN = "knob:value" a knob turned on the
+ * selected key since the frame before (its readout in the title). */
 const int32_t drum_first = 18, drum_count = 2;
 const uint8_t drum_kind[2] = { 1, 2 };
 struct fd_voice fmdrum_voice[FD_VOICES];
@@ -75,10 +76,10 @@ static void fd_setup(void)
         struct fd_voice *v = &fmdrum_voice[0];
         v->key = key;
         v->age = (uint32_t)n;
-        v->aenv = (int32_t)(1073741824.0 * pow(fd_amp_dec[fd_pos(k[3]) >> 7] / 1073741824.0, n));
-        v->menv = (int32_t)(1073741824.0 * pow(fd_mod_dec[fd_pos(k[7]) >> 7] / 1073741824.0, n));
-        v->senv = (int32_t)(1073741824.0 * pow(fd_swp_dec[fd_pos(k[5]) >> 7] / 1073741824.0, n));
-        v->index_q8 = (int32_t)(fd_index_q8(k[2]) * (v->menv / 1073741824.0));
+        v->aenv = (int32_t)(1073741824.0 * pow(fd_amp_dec[fd_pos(k[FD_DECAY]) >> 7] / 1073741824.0, n));
+        v->menv = (int32_t)(1073741824.0 * pow(fd_mod_dec[fd_pos(k[FD_FMDEC]) >> 7] / 1073741824.0, n));
+        v->senv = (int32_t)(1073741824.0 * pow(fd_swp_dec[fd_pos(k[FD_SWDEC]) >> 7] / 1073741824.0, n));
+        v->index_q8 = (int32_t)(fd_index_q8(k[FD_FM]) * (v->menv / 1073741824.0));
     }
     const char *lit = getenv("FD_LIT");
     for (int j = 1; lit && j < FD_VOICES; j++) {
@@ -350,6 +351,13 @@ int main(int argc, char **argv)
         drum_ui_draw(0, 18);
     else if (e == 301) {
         fd_setup();
+        if (getenv("FD_TURN")) {           /* a frame before the turn, then the turn */
+            const char *t = getenv("FD_TURN");
+            host_drawing = 0;
+            drum_ui_draw(0, 19);
+            te_drum_params[te_drum_edit * 8 + atoi(t)] = (int16_t)atoi(strchr(t, ':') + 1);
+            host_drawing = 1;
+        }
         drum_ui_draw(0, 19);
     }
     else if (e >= 100)

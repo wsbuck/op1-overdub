@@ -4,6 +4,9 @@
  *       one note on voice 3: slot init, note-on, BLOCKS x (render, active); "chg" sets a knob of the key before that
  *       block's render (TE copies the key's params every block), "retrig" sends another note-on before that block
  *   fmdrum_main init                              slot init cases (loaded values kept, range row copy)
+ *   fmdrum_main choke K1 K2 BLOCK BLOCKS P0..P7 Q0..Q7
+ *       voice 3 plays key K1 (values P), voice 4 key K2 (values Q) from BLOCK (hi-hat choke); both render every block;
+ *       stdout: voice 3's samples; stderr: "end <block voice 3 went silent, or -1>"
  * stdout: the samples, int16 little-endian; stderr: "cycles max <n> guard <hex> vptr <hex> end <block> active <a> ..."
  * (active() after each of the first 64 blocks; end = the first block after which active() was 0, or -1). Exit 1 on an
  * ABI mismatch. */
@@ -80,6 +83,34 @@ static void note_on(int v, int key, int vel, int16_t *kp)
     call(fd_note_on_entry, voices[v], kp, 0);
 }
 
+static int choke_case(char **argv)
+{
+    static int16_t out[128], params[8];
+    int k1 = atoi(argv[2]), k2 = atoi(argv[3]), at = atoi(argv[4]), blocks = atoi(argv[5]), end = -1;
+    int16_t *p1 = te_drum_params + k1 * 8, *p2 = te_drum_params + k2 * 8;
+    for (int i = 0; i < 8; i++) {
+        p1[i] = (int16_t)atoi(argv[6 + i]);
+        p2[i] = (int16_t)atoi(argv[14 + i]);
+    }
+    call(fd_slot_init_entry, (void *)0, 0, 0);
+    note_on(3, k1, 127, p1);
+    for (int b = 0; b < blocks; b++) {
+        if (b == at)
+            note_on(4, k2, 127, p2);
+        memcpy(params, p1, sizeof params);
+        call(fd_render_entry, voices[3], out, params);
+        fwrite(out, 2, 128, stdout);
+        if (end < 0 && !fmdrum_active(voices[3]))
+            end = b;
+        if (b >= at) {
+            memcpy(params, p2, sizeof params);
+            call(fd_render_entry, voices[4], out, params);
+        }
+    }
+    fprintf(stderr, "end %d\n", end);
+    return mask ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     static int16_t out[130];
@@ -94,6 +125,8 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && !strcmp(argv[1], "init"))
         return init_cases();
+    if (argc == 22 && !strcmp(argv[1], "choke"))
+        return choke_case(argv);
     if (argc < 12)
         return 2;
     int key = atoi(argv[1]), vel = atoi(argv[2]), blocks = atoi(argv[3]), v = 3;

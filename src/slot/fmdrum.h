@@ -10,6 +10,12 @@
 #define FD_VOICES DP_VOICES
 #define FD_KEYS DP_KEYS
 
+/* the 8 per-key values: an amount on each plain knob, its time (or partner) on SHIFT */
+enum { FD_PITCH, FD_SWEEP, FD_FM, FD_DECAY,         /* blue, green, white, orange */
+       FD_RATIO, FD_SWDEC, FD_FMDEC, FD_NOISE };    /* SHIFT + blue, green, white, orange */
+#define FD_CHOKE_LO 10                       /* hi-hat choke group: keys 10..13, voices whose NOISE is in the HAT zone */
+#define FD_CHOKE_HI 13
+
 /* One voice. The audio thread (render) owns everything except `trig`, `key`, `vel`, which note-on (TE's caller thread)
  * writes before bumping `trig`; render restarts the voice when `trig` moved. The screen only reads. */
 struct fd_voice {
@@ -24,6 +30,7 @@ struct fd_voice {
     int32_t lp, bp;                         /* noise filter */
     int32_t dcx, dcy;                       /* DC blocker, Q23 */
     int32_t index_q8;                       /* index (rad, Q8) at the end of the last block, after the limiter */
+    uint32_t choke;                         /* set by another hat's note-on (choke group): release in ~5 ms */
 };
 
 struct fd_diag {
@@ -40,24 +47,24 @@ static inline int32_t fd_pos(int16_t k)
     return k < 0 ? 0 : k;
 }
 
-/* K2 FM -> peak index, rad Q8: 16 rad x (k / 32767)^2 */
+/* FM -> peak index, rad Q8: 16 rad x (k / 32767)^2 */
 static inline int32_t fd_index_q8(int16_t k2)
 {
     int32_t k = fd_pos(k2);
     return (((k * k) >> 15) * 4096) >> 15;
 }
 
-/* K4 SWEEP -> pitch offset at the start, K0 units (512 per semitone): 48 semitones x (k / 32767)^2 */
+/* SWEEP -> pitch offset at the start, PITCH units (512 per semitone): 48 semitones x (k / 32767)^2 */
 static inline int32_t fd_sweep_q(int16_t k4)
 {
     int32_t k = fd_pos(k4);
     return (((k * k) >> 15) * (48 * 512)) >> 15;
 }
 
-/* K6 NOISE zone: 0 OFF, 1 AIR, 2 SNARE, 3 HAT, 4 CLAP (fd_noise_zone[]) */
-static inline int fd_noise_zone_of(int16_t k6)
+/* NOISE zone: 0 OFF, 1 AIR, 2 SNARE, 3 HAT, 4 CLAP (fd_noise_zone[]) */
+static inline int fd_noise_zone_of(int16_t kn)
 {
-    int32_t k = fd_pos(k6);
+    int32_t k = fd_pos(kn);
     return k < 1024 ? 0 : 1 + (k >> 13 > 3 ? 3 : k >> 13);
 }
 
