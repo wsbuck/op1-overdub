@@ -136,10 +136,9 @@ Static research (decompiles in the session scratchpad `save/`), then DRUMPROBE's
   20760319_2255: error 1": unknown name). A dropped save was impossible anyway: step 3 would have asserted. The saved
   sound carries the `dbox_data` the slot's patch held, i.e. whathump's (the probe preset's), **not the edits**: the
   saver skipped our type. Loading it skipped `dbox_data` too, and DRUMPROBE's marker check then rewrote the defaults.
-- **Why it wasn't listed: not found.** The drum browser (`FUN_019776dc` -> `FUN_01a028ec`) adds every factory and
-  user drum sound by folder and name (`FUN_01a185f4(list, folder, name)`), with no type filter; user sounds are
-  inserted with the folder `FUN_01995bac` sets. Hypothesis: it is listed in a user/snapshot folder rather than with
-  `drum probe` in dbox. SAVEPROBE's test asks where it shows up.
+- **Why it wasn't listed: it was, in the user column.** The drum browser adds every factory and user drum sound by
+  folder (no type filter), and `FUN_01995bac` saves every drum snapshot with folder `"user"` ("Browser columns"
+  below). Device (SAVEPROBE): `20760319_2255` was in the snapshots.
 - **A `dprobe` sound without `dbox_data` does not assert. Confirmed** (jsoncpp 0.5.0 in TE): the validator reads
   `dbox_data[k][i]` with non-const `[]`, which turns a missing member into nested arrays of nulls, and `asInt(null)` =
   0 (`FUN_019be0c0` case 0), which is inside row 9 (K0 -24320..24832, K1-K7 from 0). The loader's const `[]`
@@ -160,6 +159,55 @@ Static research (decompiles in the session scratchpad `save/`), then DRUMPROBE's
   instructions around TE's own compare; `drum` slots don't reach them. Risk: an error in our wrapper would stop the OP-1 at boot with a dbox or
   probe kit in a slot; the wrapper is checked in the simulator against stand-ins for TE's JSON functions, with the
   register-preservation harness (`src/slot/test/knobhook_check.py`).
+
+## Browser columns (2026-10-15, static; decompiles in the session scratchpad `br/`)
+How the drum sound browser (the preset list a drum slot loads from) builds its columns. **Confirmed** unless marked.
+- **Columns = the distinct `folder` values of the drum sounds; label = the folder name; order = sorted.** No fixed
+  list and no table (`drum_types` is not read here).
+  1. `FUN_01a04fe8` (boot and after every save) fills `s_drumPresets` (`0x01DE20F8`, 0x38 bytes per sound, count
+     `0x018B6118`) from `drum_presets`, then `drum_user`, both through `FUN_0196fe8c` = `SELECT id,patch,folder FROM
+     %s` (`0x018D4200`, no WHERE, no ORDER BY: rowid order). Entry: +4 the parsed patch, +0x14 the folder string.
+  2. `FUN_019776dc` (DrumController, opens the browser) -> `FUN_01a028ec`: clears its list (`0x01DDD698`) and, for
+     every sound, `FUN_01a185f4(list, folder, patch["name"])`.
+  3. `FUN_01a185f4`: linear search of the list's columns (0x30 bytes each, name std::string at +0) with
+     `FUN_01a17918` (std::string compare); no match -> `FUN_01a17d44(col, folder, -1)` + push_back (`FUN_01a182ec`),
+     then **`FUN_01a18a58(begin, end, depth)` = std::sort of the columns** (insertion sort under 33 columns), comparator:
+     a column named `"thru"` (`0x018F54FC`) first (`FUN_01a17cde` = equals C string), otherwise `FUN_01a17918` <, i.e.
+     memcmp byte order (case-sensitive). The sound is appended to its column (`FUN_01a18050`). Verified: the CALL at
+     `0x01A1874C` takes R0/R1 = the list's begin/end, only when a column was created.
+  4. `FUN_01a174dc` (PresetBrowserController) -> `FUN_01a172d4` selects the column holding the slot's current sound;
+     the screen (`FUN_01a15f8c`, presetbrowser.svg) shows 6 column labels at a time (scroll arrows above 6), each
+     `snprintf(buf, 14, "%s", column name)`: **the label is the folder name verbatim, at most 13 characters.**
+     Verified (`0x01A1601A`-`0x01A1603C`: R3 = the column's string data, R1 = 0xE, format `0x018F4C24` "%s").
+  Stock: `dbox` (10), `drum` (14), `user` (snapshots). Items within a column are listed alphabetically (device,
+  DRUMPROBE: `drum probe` at row 4 of dbox; the code path `FUN_01a18050` not read).
+- **Snapshots go to folder `"user"`.** `FUN_01995bac` sets the record's folder (+0x1c) to `"user"` (`0x018D9A18`) for
+  every drum snapshot, whatever the type; `FUN_019955ec` inserts `INSERT INTO %s (patch,folder) VALUES('%s','%s')`
+  with that string (`0x01995688`: R7 = record + 0x20). So a saved fmdrum sound lands in `user` with every other
+  snapshot, in any image.
+- **Other readers of the folder** (every code reference to `0x01DE20F8`/`0x01DE20FC` and the count, decompiled):
+  - `FUN_01a025e8` (DrumController `0x01977906`, the drum *type* browser): `drum_types` rows plus only the sounds whose
+    folder == `"drum"` (`0x018F14D0`). Our kits were never in it and still aren't.
+  - `FUN_0193f578` / `FUN_0193f86c` (load a sound into a slot / new sound from a sampler kit): use the folder only in
+    the sample path `content/audio/factory_drum/<folder>/<name>` or `user/audio/preset_drum/<folder>/<name>`, and only
+    when `type == "drum"` (`FUN_019bdea4` against `"drum"` `0x018C78B8`). dbox-type sounds (ours) never take it.
+  - `FUN_01a01dc8` (the slot's current sound -> index), `FUN_01a04dc0` (slot vs preset compare): name only.
+  - `FUN_01995430` (fat_interface.cpp, disk mode) reads `SELECT folder FROM %s WHERE id=%i` for user records.
+  No code compares a folder with `"dbox"`: the DRUM_TYPE_EQ wrappers, the validator, the factory, the dbox_data
+  loader/saver and the 58 count all work on `type` or the count, not the folder. Hypothesis (static coverage): the
+  folder string literals are built from base + offset, which tools/xrefs.py can't pair, so the claim rests on the
+  readers of the preset array above, not a string scan.
+- **The synth browser works the same way** (Hypothesis, from the call sites only): `FUN_01a185f4` is also called from
+  the synth list builders (`0x01A0275A`, `0x01A0283A`), and synth presets have folder = type (LOG: an engine is listed
+  only once it has a `synth_presets` folder).
+- **fmdrum's column (DRUMFM3):** build_slot.py inserts a drum engine's kits with folder = the engine name, so the
+  browser shows `dbox`, `drum`, `fmdrum`, `user`. dprobe keeps replacing `whathump` in dbox (a test probe; moving
+  it would only need the same folder change). Limits unchanged: the 58 count is over all folders (factory 28,
+  user 30); no per-folder limit was found. Edge case (Hypothesis): a sampler kit imported over USB into a disk folder
+  named `fmdrum` would share our column (the browser only groups by name).
+- Rejected: a `drum_types` row (feeds the type browser, not this one, and makes new sounds from `knobs`, not
+  `dbox_data`, in `FUN_0193f86c`); a code hook (not needed: the column is data).
+- Check: `src/slot/test/drum_browser_check.py FACTORY.db --stock STOCK.db` re-implements steps 1-4 on a built DB.
 
 ## DRUMPROBE as built (2026-10-13)
 - `src/slot/drumprobe.c` (+ `drumprobe.h`), in the slot block; engines.json `{"drum": true, "test": true}` entry
@@ -193,7 +241,8 @@ A real drum engine on the DRUMPROBE/SAVEPROBE route: `src/slot/fmdrum.c` (+ `fmd
   0xFF8016D8, `_te_drum_ids` 0xFF801704; same instructions on the device) so the simulator can map them.
 - ui.c `drum_ui_draw(slot, id)` dispatches by `drum_kind[id - drum_first]` (build_slot.py DRUM_KINDS: drumprobe 1,
   fmdrum 2).
-- DB: `"kits"` adds one dbox-folder preset per kit (patch fields from a stock dbox template, type fmdrum); every
+- DB: `"kits"` adds one preset per kit in the engine's own folder (`fmdrum` since DRUMFM3, `dbox` before; "Browser
+  columns"), patch fields from a stock dbox template, type fmdrum; every
   per-key value is checked against the stock dbox presets' column range; factory drum presets are capped at
   MAX_FACTORY_DRUM_PRESETS = 28 (stock 24 + 4 kits), so users keep room for 30 saved drum sounds (was 34).
 - Sim: `src/slot/test/drumhooks_check.py` (factory per id with TE's frame and assert path, validator, screen dispatch,
@@ -231,7 +280,7 @@ sounding voice of the group in the HAT zone (the same key too: one hi-hat); rend
 (ramped per block, no click). Keys outside 10..13 and group keys without HAT noise are never choked. note-on reads the
 other keys' values through its `key_params` pointer (TE's [slot][key][8] row, so the same slot).
 
-### Kits (folder dbox, 24 keys each; gen_fmdrum.py)
+### Kits (folder fmdrum since DRUMFM3, 24 keys each; gen_fmdrum.py)
 Shared key roles in all four: 0-2 kicks, 3/5/7 toms, 4/6 snares, 8 rim, 9 clap, 10-13 hats (the choke group, all in
 the HAT zone), 14-15 cymbals, 16-23 free (percussion, effects). `fm 808` (template dem drums): its fifth kick is now a
 ride; clave, cowbell, congas, maracas, floor tom, sub boom, ping on 16-23. `fm 909` (lo-fi, punch FX on). `fm metal`

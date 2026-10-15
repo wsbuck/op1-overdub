@@ -34,8 +34,9 @@ _note_on, _active, _note_off, _slot_init; <source>_id is defined as the engine's
 drum encoder, patch validator and the dbox screen's update are patched to accept them; the screen is drawn by kind
 (DRUM_KINDS, ui.c). DB: "replace" swaps the dbox preset of that name for ours (same folder and row count) with its
 patch, type and name changed ("preset") and dbox_data = 24 x "dbox_default"; "kits" (a JSON file, src/slot/...:
-{name: {"template": a stock dbox preset, "dbox_data": 24 x 8}}) adds one dbox-folder preset per kit with the template's
-envelope/FX/LFO fields. Every per-key value is checked against the stock dbox presets' per-column range (TE validates
+{name: {"template": a stock dbox preset, "dbox_data": 24 x 8}}) adds one preset per kit with the template's
+envelope/FX/LFO fields, in a folder named after the engine: TE's drum browser makes one column per distinct folder,
+labelled with the folder name (notes/drum-engine.md "Browser columns"). Every per-key value is checked against the stock dbox presets' per-column range (TE validates
 factory presets at boot), and factory drum presets stay <= MAX_FACTORY_DRUM_PRESETS (factory + user drum sounds
 must stay <= 58, patch.cpp:656: the rest is the user's room). TE's per-key loader and saver are patched to treat our
 types like "dbox", so per-key values load and save with the sound.
@@ -98,6 +99,7 @@ KNOB_APPLY_CALL, TE_KNOB_APPLY = 0x01A5063E, 0x01A1DFEC
 MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum presets + drum_user rows
 STOCK_DRUM_PRESETS = 24
 MAX_FACTORY_DRUM_PRESETS = 28              # stock 24 + 4 kits: leaves the user room for 30 saved drum sounds (stock 34)
+MAX_FOLDER_LABEL = 13                      # the preset browser prints a column label with snprintf(buf, 14, "%s")
 FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3}   # by source; must match ui.c's FX_* enum
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
@@ -529,7 +531,11 @@ def main():
                     patch["dbox_data"] = dbox_data(f"drum engine {e['name']}", [e["dbox_default"]] * 24)
                 con.execute("UPDATE drum_presets SET patch=? WHERE id=?", (json.dumps(patch, separators=(",", ":")), rid))
                 print(f"drum engine {did} {e['name']}: drum preset {rid} {e['replace']!r} -> {e['preset']!r}")
-            if "kits" in e:             # add one dbox-folder preset per kit, fields from a stock template
+            if "kits" in e:             # one preset per kit in the engine's own folder (= browser column), fields from a stock template
+                folder = e["name"]
+                if len(folder) > MAX_FOLDER_LABEL or folder in ("drum", "dbox", "user", "thru"):
+                    sys.exit(f"drum engine {folder!r}: kit folder must be a new name of at most {MAX_FOLDER_LABEL} characters "
+                             "(the browser shows it as the column label; drum/dbox/user are TE's columns)")
                 kits = json.load(open(os.path.join(ROOT, e["kits"])))
                 for name, kit in kits.items():
                     if kit["template"] not in dbox or any(name == json.loads(p)["name"] for (p,) in
@@ -537,9 +543,9 @@ def main():
                         sys.exit(f"drum kit {name!r}: unknown template {kit['template']!r} or name taken")
                     patch = dict(dbox[kit["template"]][1], type=e["name"], name=name,
                                  dbox_data=dbox_data(f"drum kit {name!r}", kit["dbox_data"]))
-                    con.execute("INSERT INTO drum_presets (patch, folder) VALUES (?, 'dbox')",
-                                (json.dumps(patch, separators=(",", ":")),))
-                print(f"drum engine {did} {e['name']}: kits {', '.join(kits)}")
+                    con.execute("INSERT INTO drum_presets (patch, folder) VALUES (?, ?)",
+                                (json.dumps(patch, separators=(",", ":")), folder))
+                print(f"drum engine {did} {e['name']}: kits {', '.join(kits)} (folder {folder!r})")
         drum_presets = con.execute("SELECT count(*) FROM drum_presets").fetchone()[0]
         if drum_presets > MAX_FACTORY_DRUM_PRESETS:
             sys.exit(f"{drum_presets} drum presets: more than {MAX_FACTORY_DRUM_PRESETS} would leave users fewer than "
