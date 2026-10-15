@@ -908,4 +908,6 @@
   7. Turn blue and green slowly while playing: no zipper or level steps.
 - Report: clean / crunch / lead / fuzz at the tone extremes (too dark, bright, quiet, loud?), bends and high notes
   (any aliasing whistle?), chords, crackle or dropouts, any crash or assert text (photo).
-- Result: _pending user flash_.
+- Result (2026-10-15): booted; "everything sounds really good". fmdrum: a closed hat cuts off an open one (choke
+  works); snares sound good (shared noise decay is fine, no separate noise envelope needed). PITCH detent size not
+  reported.
