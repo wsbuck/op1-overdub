@@ -3,10 +3,11 @@
 
   python3 src/slot/test/fx_abi_check.py
 
-For each FX (ensemble, pingpong, distortion), on bfin-elf-run:
+For each FX (ensemble, pingpong, distortion, crush), on bfin-elf-run:
   - every call through FX_MONO_ENTRY / FX_STEREO_ENTRY preserves R4-R7, P3-P5, FP, SP, both hardware loops and
     L0-L3 (sentinel check in fx_abi.S), with knobs changing every block;
-  - the stereo entry's 4th argument (params at [SP + 12]) arrives: mix 0 gives the dry input, bit exact;
+  - the stereo entry's 4th argument (params at [SP + 12]) arrives: mix 0 (crush: every knob 0) gives the dry input, bit
+    exact;
   - mono and stereo instances are independent: interleaving them (synth FX + master FX in one callback) gives
     exactly the outputs of running each alone (catches shared scratch carrying state between calls).
 """
@@ -17,14 +18,14 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SLOT = os.path.dirname(HERE)
-FX = ["ensemble", "pingpong", "distortion"]
+FX = ["ensemble", "pingpong", "distortion", "crush"]
 BLOCKS = 300
 
 
 def main():
     w = tempfile.mkdtemp(prefix="fx_abi_")
     cflags = "-std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror"
-    runs = [(i, m) for i in range(3) for m in "msid"]
+    runs = [(i, m) for i in range(len(FX)) for m in "msid"]
     script = ["set -e; cd /tmp"] + [f"bfin-elf-gcc {cflags} -c -o {f}.o /src/{f}.c" for f in FX] + [
         "bfin-elf-as -I /src -o abi.o /src/test/fx_abi.S",
         "bfin-elf-gcc -std=gnu99 -msim -O1 -Wall -o t /src/test/fx_abi_main.c abi.o "

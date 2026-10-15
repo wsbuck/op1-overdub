@@ -16,6 +16,8 @@
     FX_STEREO_ENTRY _pingpong_stereo_entry, _pingpong_stereo
     FX_MONO_ENTRY _distortion_mono_entry, _distortion_mono
     FX_STEREO_ENTRY _distortion_stereo_entry, _distortion_stereo
+    FX_MONO_ENTRY _crush_mono_entry, _crush_mono
+    FX_STEREO_ENTRY _crush_stereo_entry, _crush_stereo
     .endif
 
     .macro CHECK reg, hi, lo, bit

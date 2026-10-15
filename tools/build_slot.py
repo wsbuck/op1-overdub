@@ -100,7 +100,7 @@ MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum pre
 STOCK_DRUM_PRESETS = 24
 MAX_FACTORY_DRUM_PRESETS = 28              # stock 24 + 4 kits: leaves the user room for 30 saved drum sounds (stock 34)
 MAX_FOLDER_LABEL = 13                      # the preset browser prints a column label with snprintf(buf, 14, "%s")
-FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3}   # by source; must match ui.c's FX_* enum
+FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4}   # by source; must match ui.c's FX_* enum
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
          "_te_note_off": 0x01A85840, "_te_note_on": 0x01A85750, "_te_make_note": 0x01A85014, "_te_synth_shiftkey": 0x01A50904,

@@ -163,3 +163,5 @@ Confidence: **Confirmed** = read in code, **Verified** = re-checked in disassemb
 - Sim: `src/slot/test/fxsim.py` (runner + helpers) and `fx_main.c -DFX=<source>`; one `<source>_check.py` per FX.
 - Big buffers (delays) cannot live in `.data` (it is in the image). Use a FREE SDRAM range (not loaded, contents undefined at boot: never assume zeros). Assigned: region 1 `0x01E80000`–`0x01F10000` (576 KB, after the slot block) for the ping-pong delay.
 - Renamed `ens` → `ensemble` (alias `ens` keeps saved patches loading).
+- 2026-10-15: four FX: ensemble 8, pingpong 9, distortion 10, crush 11 (notes/fx-crush.md). Screen kinds by source in
+  build_slot.py `FX_UI_KINDS` (crush 4); name loops 14, factory/ScreenId bounds 12.

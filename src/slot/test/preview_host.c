@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pingpong.h"
+#include "crush.h"
 #include "drumprobe.h"
 #include "fmdrum.h"
 #include "fmdrum_tables.h"
@@ -139,9 +140,12 @@ void te_line(void *raster, const int32_t *a, const int32_t *b, int32_t width, co
     printf("%d %d %d %d %d %d\n", a[0], a[1], b[0], b[1], width, (int)((rgba - host_palette) / 4));
 }
 
-/* Our FX for previews: ids 8 ensemble, 9 pingpong, 10 distortion (fx.json order). */
-const uint8_t fx_kind[3] = { 1, 2, 3 };
-const int32_t fx_count = 3;
+/* Our FX for previews: ids 8 ensemble, 9 pingpong, 10 distortion, 11 crush (fx.json order). */
+const uint8_t fx_kind[4] = { 1, 2, 3, 4 };
+const int32_t fx_count = 4;
+/* crush: what crush.c would publish mid-pump: 12 dB of gain reduction, 11 kHz, 9 bits, mostly mu-law */
+struct crush crush_state[2] = { { .gr = 13107, .rate_hz = 11025, .bits_q12 = 9 << 12, .mu = 20000 },
+                                { .gr = 13107, .rate_hz = 11025, .bits_q12 = 9 << 12, .mu = 20000 } };
 struct ens { uint32_t lfo, vib; int32_t depth, vdepth, ens, mix; int32_t d[2][3]; };
 struct ens ensemble_state[2] = { { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } }, { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } } };
 

@@ -31,6 +31,7 @@
 #include "grain_source.h"
 #include "ensemble.h"
 #include "pingpong.h"
+#include "crush.h"
 #include "inprobe.h"
 #include "drumprobe.h"
 #include "sprobe.h"
@@ -72,11 +73,12 @@ extern const int16_t grain_data[] __attribute__((weak));        /* granular engi
 /* Our FX (fx.json; build_slot.py generates fx_kind/fx_count). Weak: an image without one of them still links. */
 extern const uint8_t fx_kind[];           /* screen kind per FX id 8.. */
 extern const int32_t fx_count;
-enum { FX_ENSEMBLE = 1, FX_PINGPONG = 2, FX_DISTORTION = 3 };   /* = FX_UI_KINDS in build_slot.py */
+enum { FX_ENSEMBLE = 1, FX_PINGPONG = 2, FX_DISTORTION = 3, FX_CRUSH = 4 };   /* = FX_UI_KINDS in build_slot.py */
 extern int32_t distortion_curve(const int16_t *p, int32_t x) __attribute__((weak));
 extern const char *distortion_mode_name(const int16_t *p) __attribute__((weak));
 extern struct ens ensemble_state[2] __attribute__((weak));
 extern struct pp pingpong_state[2] __attribute__((weak));
+extern struct crush crush_state[2] __attribute__((weak));   /* crush.c: gain reduction and smoothed knobs */
 extern struct dp_diag drumprobe_diag __attribute__((weak));     /* drumprobe.c, only in builds with the drum probe */
 /* Our drum engines (build_slot.py): ids drum_first .. + drum_count, screen kind per id (DRUM_KINDS) */
 extern const int32_t drum_first, drum_count;
@@ -1845,6 +1847,37 @@ static void draw_pedals(void *r, const int16_t *k)
     svg_cost(r);
 }
 
+/* crush: placeholder until its SVG screen (design/fx/crush.svg, being designed) is wired up. Four bars in the knob
+ * colours (RATE, BITS, SQUASH, GRIT) and the compressor's gain reduction as a white meter on the right; the hold rate
+ * and bit depth below the title. The DSP's view (smoothed knobs, rate, bits, gain reduction, flips) is crush_state
+ * (crush.h, notes/fx-crush.md "Screen"). */
+static void draw_crush(void *r, const int16_t *k, int stereo)
+{
+    const struct crush *st = crush_state ? &crush_state[stereo] : 0;
+    char buf[24], *p = buf;
+    title(r, "CRUSH", WHITE);
+    if (st) {
+        p = put_dec(p, (uint32_t)st->rate_hz);
+        p = put_str(p, "HZ ");
+        p = put_dec(p, (uint32_t)st->bits_q12 >> 12);
+        p = put_str(p, st->mu > 16384 ? "B MU" : "B");
+        text(r, buf, FP(8), FP(30), FP(1), GREY);
+    }
+    for (int i = 0; i < 4; i++) {
+        fp32 y = FP(56 + 20 * i);
+        int32_t v = knob_pos(k[i]);
+        line_fast(r, FP(16), y, FP(256), y, DARKBLUE);
+        fp32 w = (fp32)((v * 240) >> 5);                     /* 240 units at 32768 */
+        if (w > FP(1))
+            line_fp(r, FP(16), y, FP(16) + w, y, FP(3), i == 0 ? BLUE : i == 1 ? GREEN : i == 2 ? WHITE : ORANGE);
+    }
+    vline_fast(r, FP(290), FP(40), FP(130), DARKBLUE);
+    int32_t g = st ? st->gr : 0;                             /* 0 .. 32767 = 0 .. 30 dB */
+    fp32 top = FP(40) + (fp32)((g * 90) >> 5);               /* reduction grows down from the top */
+    if (top > FP(41))
+        line_fp(r, FP(290), FP(40), FP(290), top, FP(4), WHITE);
+}
+
 /* FX screen: id = our FX id (8..), mode = edit mode (0 synth, 1 drum, 3 master), slot = sound slot. */
 void fx_ui_draw(int id, int mode, int slot)
 {
@@ -1869,6 +1902,8 @@ void fx_ui_draw(int id, int mode, int slot)
         else
             draw_distortion(r, k);
     }
+    else if (kind == FX_CRUSH)
+        draw_crush(r, k, mode == 3);
 }
 
 /* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the
