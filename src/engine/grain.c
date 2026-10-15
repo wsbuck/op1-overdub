@@ -9,9 +9,10 @@
  *   [2] white  density: 2 .. 80 grains per second (exponential)
  *   [3] orange spray: random position (+-0.3 s), pitch (+-50 cents) and onset jitter; above 60 %, some
  *              grains an octave up (shimmer)
- * Pitch follows the key: grains play at inc / C4. Grains are scheduled once per block (2.9 ms; at
+ * Pitch follows the key: grains play at inc / C4. Grains are scheduled once per block (1.45 ms; at
  * most 80 per second, so at most one per block) and rendered grain-outer with their state in registers.
- * Level: grain sum * 1 / sqrt(overlap) / 2, so density does not change loudness much. With the sampler as the
+ * Level: grain sum * 1 / sqrt(overlap, at most GRAINS) / 2, then the soft knee, so density does not change loudness
+ * much. With the sampler as the
  * source, the sampler's own gain applies too: TE's sampler render uses (knob 8 / 8192)^2 (square in Q15,
  * then << 4 at 0x01a51c3c), so 8192 = unity and the maximum = x16.
  * Per-voice state in a voice_ram slot (grain_state.h); note-on (TE's 0x80000000 at state bytes 0..3)
@@ -188,17 +189,20 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
             v->rng = 0x2545F491u ^ (uint32_t)st;
     }
 
-    /* Block parameters. Lengths in samples: size 441 * 50^k (10 .. 500 ms), interval 22050 / 40^k. */
-    uint32_t len = (441u * exp2_q16((size * 11559) >> 10)) >> 16;      /* 2^(5.644 k): log2(50) */
-    uint32_t ival = udiv(22050u << 16, exp2_q16((dens * 10900) >> 10)); /* 2^(5.322 k): log2(40) */
+    /* Block parameters. Lengths in output samples (88.2 kHz): size 882 * 50^k (10 .. 500 ms), interval 44100 / 40^k
+     * (2 .. 80 grains per second). */
+    uint32_t len = (882u * exp2_q16((size * 11559) >> 10)) >> 16;      /* 2^(5.644 k): log2(50) */
+    uint32_t ival = udiv(44100u << 16, exp2_q16((dens * 10900) >> 10)); /* 2^(5.322 k): log2(40) */
     if (len < 64)
         len = 64;
     /* Pitch: rate = inc / inc(C4), Q15, from a fixed reciprocal 2^47 / GRAIN_ROOT_INC. */
     int32_t rate = qmul((int32_t)((uint32_t)pitch[0] >> 1), 5523329);
-    /* Level: 1 / sqrt(overlap), overlap = len / interval. */
+    /* Level: 1 / sqrt(overlap), overlap = len / interval, at most GRAINS (the slots: a grain is skipped when all are
+     * busy, so the overlap that sounds is capped). */
     int32_t gain = 32767;
-    if (len > ival)
-        gain = (int32_t)isqrt32(udiv(ival << 15, len) << 15);           /* sqrt(ratio), Q15 */
+    uint32_t l_eff = len < GRAINS * ival ? len : GRAINS * ival;
+    if (l_eff > ival)
+        gain = (int32_t)isqrt32(udiv(ival << 15, l_eff) << 15);         /* sqrt(ratio), Q15 */
 
     /* Schedule: at most one new grain per block. */
     v->next -= ENGINE_BLOCK;
@@ -270,7 +274,7 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     for (int i = 0; i < ENGINE_BLOCK; i++) {
         int32_t x = ((sum[i] >> 1) * (gain >> 1)) >> 14;              /* sum * gain / 2 (-6 dB) */
         x = ((x >> 2) * (sgain >> 2)) >> 8;                            /* * sgain / 4096 */
-        int16_t o = soft_clip(x);
+        int16_t o = soft_knee(x);
         out[i] = o;
         int32_t a = o < 0 ? -o : o;
         if (a > peak)

@@ -10,7 +10,7 @@ import sys
 
 import numpy as np
 
-FS = 44100
+FS = 44100        # the engines run at 88.2 kHz; checks tuned at this rate keep it (grain_check sets 88200)
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE = os.path.dirname(HERE)
 # Cycles per render call. CPULOAD (LOG.md) measured overload at ~0.96 M cycles/block for all render calls

@@ -16,7 +16,12 @@ import tempfile
 
 import numpy as np
 
-from simrun import CPU_BUDGET, FS, level_at, load, run_cases, spectrum
+import simrun
+from simrun import CPU_BUDGET, level_at, load, run_cases, spectrum
+
+# The engine runs at 88.2 kHz (grain lengths and intervals are counted in output samples): note increments and spectra
+# here use that rate. simrun's default is still 44.1 kHz for the other checks, whose expectations were tuned to it.
+FS = simrun.FS = 88200
 
 NAMES = ["choir", "strings", "bells", "glass", "air", "plucks"]
 SRC = [round((i + 0.5) / 6 * 32767) for i in range(6)]       # position knob at the middle of each source
