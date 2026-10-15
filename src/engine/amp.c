@@ -5,16 +5,18 @@
  * Knobs (engine page, 0..0x7FFF, slewed 1024 per block):
  *   [0] blue    drive: pre-gain 0 .. +44 dB into a two-stage tube curve (clean -> crunch -> lead); also tightens the
  *               lows (high-pass 30 -> 160 Hz) and pushes the upper mids (+6 dB pre-emphasis); loudness compensated
- *   [1] green   tone: tilt, dark (+5 dB lows, -10 dB highs) .. flat (centre) .. bright
+ *   [1] green   tone: tilt, dark (+5 dB lows, -10 dB highs) .. flat (centre) .. bright, in a blackface-style stack
+ *               before stage 2 (it changes what clips) with a fixed mid scoop (-8 dB at 450 Hz)
  *   [2] white   gate threshold: off at 0, then -84 .. -30 dBFS (opens above it, closes 6 dB below, 50 ms hold)
  *   [3] orange  cab: direct (no cab) -> 1x12 open back -> 2x12 -> 4x12 closed back
  *
  * Chain per block: TE IN (64 at 44.1 kHz) -> gate detector -> 2x half-band upsampler (24 taps, 88.2 kHz) -> tight
- * high-pass -> pre-emphasis -> drive x gate gain -> tube (biased, ADAA) -> 7 kHz interstage low-pass -> stage 2 (ADAA) ->
- * low and high shelf (tone) -> high-pass, mid bell, presence bell, two low-passes (cab) -> loudness -> limiter (-3 dBFS,
- * gain from the previous block's peak, 93 ms release) -> soft knee. Run as passes over the block (amp_dsp): gate (C),
- * then hand-written loops: upsampler, drive, stage 1, interstage, stage 2, the SVFs; both shapers are distortion.c's
- * tube kernel with first-order antiderivative anti-aliasing (stage 2 = the tube at 1.5x its input).
+ * high-pass -> pre-emphasis -> drive x gate gain -> tube (biased, ADAA) -> interstage low-pass (two poles at 7 kHz) ->
+ * tone stack (low and high shelf, mid scoop; scaled to a peak gain of 0 dB like a passive stack) -> stage 2 (ADAA) ->
+ * high-pass, mid bell, presence bell, two low-passes (cab) -> loudness and the stack's make-up -> limiter (-3 dBFS, gain
+ * from the previous block's peak, 93 ms release) -> soft knee. Run as passes over the block (amp_dsp): the gate (C),
+ * then hand-written loops: upsampler, drive, stage 1, interstage, the SVFs, stage 2. Both shapers are distortion.c's
+ * tube kernel with first-order antiderivative anti-aliasing (stage 2 is the tube at 1.5x its input).
  *
  * One voice only plays the input (else a chord would stack copies of the guitar). Every voice calls render; the
  * shared state is amp_ram (amp.h). Per call:
@@ -93,8 +95,9 @@ static inline int32_t fmul(int32_t a, int32_t b)
  * truncation per sum), coefficients reloaded each sample in parallel slots (I1, rewound by M1), the next input
  * loaded and the output stored in parallel. Outputs (Q29 mix: products << 2): SHELF v0 + m1 v1 + m2 v2 (both
  * shelves: the high shelf's m0 = A^2 is divided out here and multiplied in elsewhere), HP v0 + m1 v1 - v2, BELL
- * v0 + m1 v1, LOW v2: 25 / 24 / 23 / 17 instructions per sample. Reads in[AMP_OUT] (one past the end). */
-enum { SHELF, HP, BELL, LOW };
+ * v0 + m1 v1, BELL20 the same >> 4 (Q24 in, Q20 out), LOW v2: 25 / 24 / 23 / 24 / 17 instructions per sample.
+ * Reads in[AMP_OUT] (one past the end). */
+enum { SHELF, HP, BELL, BELL20, LOW };
 #define SVF_IN                                                                                                       \
     "I0 = %[in];\n\tI2 = %[out];\n\tI1 = %[co];\n\tM1 = %[rw];\n\t"                                                   \
     "R6 = [%[st]];\n\tR7 = [%[st] + 4];\n\tR2 = %[n];\n\tLC0 = R2;\n\tR0 = [I0++];\n\t"
@@ -148,6 +151,11 @@ static __attribute__((noinline)) void svf_block(struct amp_svf *f, const int32_t
             SVF_CHAINS(M1R3, "")
             SVF_M1("A1 = A1 >>> 15 || R5 = [I1++] || NOP;\n\t", "R2 = (A0 += A1) || R3 = [I1++] || NOP;\n\t")
             SVF_END SVF_LOOP_END SVF_ARGS);
+    else if (kind == BELL20)
+        __asm__ volatile(SVF_IN SVF_START
+            SVF_CHAINS(M1R3, "")
+            SVF_M1("A1 = A1 >>> 15 || R5 = [I1++] || NOP;\n\t", "R2 = (A0 += A1) || R3 = [I1++] || NOP;\n\t")
+            SVF_END "R2 >>>= 4;\n" SVF_LOOP_END SVF_ARGS);
     else    /* LOW: a1..a3 stay in R3..R5; v0 R0, v3 R1, v1 R0, c2 R2 */
         __asm__ volatile(SVF_IN
             "R3 = [I1++];\n\tR4 = [I1++];\n\tR5 = [I1++];\n\tR1 = R0 - R7;\n\tLSETUP (1f, 2f) LC0;\n1:\t"
@@ -173,13 +181,14 @@ static __attribute__((noinline)) void svf_block(struct amp_svf *f, const int32_t
 /* ---- the drive section (passes over the block) ----
  * hb_pass: 2x up into z: the even sample is the input delayed by AMP_HB_K, the odd one the half-band interpolation
  *   (dual 16-bit MACs, taps in R2-R7); Q24.
- * drive_pass: z -> v[1..128]: tight high-pass, pre-emphasis, x gate x drive gain (gd, per input sample), saturated
- *   to +-32, + bias (Q20). v[0] gets the last block's last v (stored through the pipelined store).
- * adaa: the tube's first-order antiderivative anti-aliasing, v -> y (Q24, 1.0 = clip), from distortion.c: per pair
+ * drive_pass: z -> in1[1..128]: tight high-pass, pre-emphasis, x gate x drive gain (gd, per input sample), saturated
+ *   to +-32, + bias (Q20). in1[0] gets the last block's last value (stored through the pipelined store).
+ * adaa: the tube's first-order antiderivative anti-aliasing, in -> y (Q24, 1.0 = clip), from distortion.c: per pair
  *   (a, b) of consecutive inputs the mean of the curve over [a, b]; within the knee the closed form
  *   (a + b) / 2 - (a + b) (a^2 + b^2) / 27 (no division); pairs straddling the knee go on a list and take
  *   (F(b) - F(a)) / (b - a) (at most FIXMAX per call: the rest keep the closed form of the clamped pair).
- * inter_pass: z (stage 1) -> w[1..128]: the interstage low-pass, minus stage 1's DC, x the stage-2 gain. */
+ * inter_pass: z (stage 1) -> in2[1..128]: the interstage low-pass without stage 1's DC, x the stage-2 gain (Q24);
+ *   the tone stack's SVFs then run in place there, the last (the scoop) returning Q20 for stage 2. */
 #define HB_B(C, X) "A0 += R0.L * " C ".H, A1 += R0.H * " C ".L (IS)" X ";\n\t"   /* c[-k] hb[k] + c[-k-1] hb[k+1] */
 #define HB_F(C, X) "A0 += R1.L * " C ".L, A1 += R1.H * " C ".H (IS)" X ";\n\t"   /* c[1+k] hb[k] + c[2+k] hb[k+1] */
 #define HB_ONE(IB, IF)                                                                                               \
@@ -372,12 +381,17 @@ static __attribute__((noinline)) void adaa(struct amp_ram *g, const int32_t *v, 
         FIX(F_TUBE, AMP_KNEE);
 }
 
-/* Interstage: il += a (y1 - dc - il) on stage 1's output z without its DC (silence stays exactly 0), then il x gain
- * (Q22) -> in2[1 ..] (Q20); in2[0] gets the last block's last value through the pipelined store. */
-static __attribute__((noinline)) void inter_pass(struct amp_ram *g, int32_t dc, int32_t gain)
+/* Interstage: two one-pole low-passes, il1 += a (y1 - dc - il1), il2 += a (il1 - il2), on stage 1's output z without
+ * its DC (silence stays exactly 0), then il2 x gain (Q26, ramped by its step per sample) -> in2[1 ..] (Q24, into the
+ * tone stack); in2[0] gets the last block's last value (stage 2's input, Q20) through the pipelined store. */
+static __attribute__((noinline)) void inter_pass(struct amp_ram *g, int32_t dc, int32_t gain, int32_t dgain)
 {
+    g->ic[0] = dc;
+    g->ic[1] = gain;
+    g->ic[2] = dgain;
     __asm__ volatile(
-        "I0 = %[z];\n\tI2 = %[w];\n\tR4 = %[a];\n\tR5 = %[dc];\n\tR6 = [%[st]];\n\tR7 = %[gain];\n\t"
+        "I0 = %[z];\n\tI2 = %[w];\n\tR4 = %[a];\n\tR5 = [%[ic]];\n\tR6 = [%[ic] + 4];\n\tI3 = R6;\n\t"
+        "R6 = [%[ic] + 8];\n\tM3 = R6;\n\tR6 = [%[st]];\n\tR7 = [%[st] + 4];\n\t"
         "R3 = [%[w] + 4 * %[n]];\n\tR0 = [I0++];\n\t"
         "R1 = %[n];\n\tLC0 = R1;\n\t"
         "LSETUP (1f, 2f) LC0;\n"
@@ -387,18 +401,25 @@ static __attribute__((noinline)) void inter_pass(struct amp_ram *g, int32_t dc, 
         "A1 += R1.H * R4.L (M);\n\t"
         "A1 = A1 >>> 15;\n\t"
         "R2 = (A0 += A1);\n\t"
-        "R6 = R6 + R2;\n\t"
-        "R1 = R6 << 5;\n\t"
-        "A1 = R7.H * R1.L (M), A0 = R7.H * R1.H;\n\t"
-        "A1 += R1.H * R7.L (M);\n\t"
+        "R6 = R6 + R2;\n\t"                    /* il1 */
+        "R1 = R6 - R7;\n\t"
+        "A1 = R4.H * R1.L (M), A0 = R4.H * R1.H;\n\t"
+        "A1 += R1.H * R4.L (M);\n\t"
+        "A1 = A1 >>> 15;\n\t"
+        "R2 = (A0 += A1);\n\t"
+        "R7 = R7 + R2;\n\t"                    /* il2 */
+        "R1 = R7 << 5;\n\t"
+        "R2 = I3;\n\t"
+        "A1 = R2.H * R1.L (M), A0 = R2.H * R1.H || I3 += M3 || NOP;\n\t"
+        "A1 += R1.H * R2.L (M);\n\t"
         "A1 = A1 >>> 15;\n"
         "2:\tR3 = (A0 += A1);\n\t"
         "[I2++] = R3;\n\t"
-        "[%[st]] = R6;\n"
+        "[%[st]] = R6;\n\t[%[st] + 4] = R7;\n"
         :
-        : [z] "a"(g->z), [w] "a"(g->in2), [a] "a"(AMP_INTER_A), [dc] "a"(dc), [gain] "a"(gain), [st] "a"(&g->inter),
-          [n] "i"(AMP_OUT)
-        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "A0", "A1", "I0", "I2", "cc", "LC0", "LT0", "LB0", "memory");
+        : [z] "a"(g->z), [w] "a"(g->in2), [a] "a"(AMP_INTER_A), [ic] "a"(g->ic), [st] "a"(&g->inter), [n] "i"(AMP_OUT)
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "A0", "A1", "I0", "I2", "I3", "M3", "cc", "LC0", "LT0", "LB0",
+          "memory");
 }
 
 /* tube_fast's mean for the constant input bias (Q24): stage 1's DC, removed after the interstage low-pass. */
@@ -434,7 +455,9 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
     knob_row(amp_green, AMP_GREEN_W, g->knob[1], row);
     set_svf(&f[F_LOW], row);
     set_svf(&f[F_HIGH], row + 5);                                   /* m1, m2 already divided by m0 = A^2 */
-    const int32_t hs_a2 = row[7];                                   /* the high shelf's A^2, Q29 */
+    /* the high shelf's A^2 x P (stage 2 sees the stack at a peak gain of 0 dB) and 1 / P - 1 (the make-up), Q29 */
+    const int32_t a2p = row[10], mk1 = row[11];
+    set_svf(&f[F_SCOOP], amp_scoop);
     knob_row(amp_orange, AMP_ORANGE_W, g->knob[3], row);
     for (int j = 0; j < 5; j++)
         set_svf(&f[F_HP + j], row + 5 * j);
@@ -442,13 +465,18 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
         knob_row(amp_gate_thr, 1, g->knob[2], &thr);
     knob_row(amp_blue, AMP_BLUE_W, g->knob[0], row);
     const int32_t gain = row[0], tight_a = row[1], emph = row[2] << 15, bias = row[3], k2 = row[4];
-    /* loudness x the high shelf's A^2, Q27 (<= 4.3 x 3.2); row[5] (Q12, up to 17675) << 16 so it can't wrap */
-    const int32_t comp = fmul(row[5] << 16, hs_a2) << 1;
-    /* drive gain (per input sample) and make-up (per output sample) ramp linearly from the last block's values, so a
-     * knob step isn't a level step at the block edge */
+    /* loudness x the make-up 1 + (1 / P - 1) c (c: all of it on the dark side, the bright side's share at this drive),
+     * Q27 (<= 4.3 x 3.2) */
+    const int32_t mkc = g->knob[1] < 16384 ? 32768 : row[6];
+    const int32_t comp = fmul(row[5] << 16, (1 << 29) + (mk1 >> 15) * mkc) << 1;
+    /* stage-2 gain 1.5 k2 x A^2 P (the high shelf runs normalised, as v0 + .. / A^2), Q26 (<= 6.3) */
+    const int32_t g2 = fmul((k2 + (k2 >> 1)) << 14, a2p) << 2;
+    /* drive gain (per input sample), stage-2 gain and make-up (per output sample) ramp linearly from the last block's
+     * values, so a knob step isn't a level step at the block edge */
     if (!g->dsp_blocks) {
         g->gain_prev = gain;
         g->comp_prev = comp;
+        g->g2_prev = g2;
     }
     const int32_t dgain = (gain - g->gain_prev) >> 6, dcomp = (comp - g->comp_prev) >> 7;
     int32_t gk = g->gain_prev, ck = g->comp_prev;
@@ -501,12 +529,14 @@ static void amp_dsp(struct amp_ram *g, const int16_t *params)
     if (!g->dsp_blocks)
         g->in1[AMP_OUT] = bias;                                     /* stage 1's previous input: at rest */
     hb_pass(g, zb);                                                 /* 2x up */
-    drive_pass(g, bias);                                            /* tight, pre-emphasis, drive -> v */
-    adaa(g, g->in1, zb);                                              /* stage 1 */
-    inter_pass(g, tube_dc(bias), (k2 + (k2 >> 1)) << 10);           /* interstage, x 1.5 k2 (Q22) -> w */
-    adaa(g, g->in2, zb);                                              /* stage 2, Q24 */
-    svf_block(&f[F_LOW], zb, zb, SHELF);                            /* tone */
-    svf_block(&f[F_HIGH], zb, zb, SHELF);
+    drive_pass(g, bias);                                            /* tight, pre-emphasis, drive -> in1 */
+    adaa(g, g->in1, zb);                                            /* stage 1, Q24 */
+    inter_pass(g, tube_dc(bias), g->g2_prev, (g2 - g->g2_prev) >> 7);  /* interstage, x stage-2 gain -> in2 */
+    g->g2_prev += ((g2 - g->g2_prev) >> 7) << 7;
+    svf_block(&f[F_LOW], g->in2 + 1, g->in2 + 1, SHELF);            /* tone stack, Q24 */
+    svf_block(&f[F_HIGH], g->in2 + 1, g->in2 + 1, SHELF);
+    svf_block(&f[F_SCOOP], g->in2 + 1, g->in2 + 1, BELL20);         /* -> Q20 */
+    adaa(g, g->in2, zb);                                            /* stage 2, Q24 */
     svf_block(&f[F_HP], zb, zb, HP);                                /* cab */
     svf_block(&f[F_MID], zb, zb, BELL);
     svf_block(&f[F_PRES], zb, zb, BELL);

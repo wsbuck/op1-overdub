@@ -10,9 +10,11 @@ here) and runs every case under bfin-elf-run in one Docker container. Checks:
   gate           opens above the threshold, stays closed between the thresholds (hysteresis), stays open there once
                  open, closes after the hold below the close threshold, and is always open at white 0
   drive          harmonic distortion rises with blue; clean is clean
-  aliasing       at maximum drive (DI), -15 dBFS sines at 997 and 2489 Hz: the power off the harmonics (aliases and
-                 noise, 20 Hz..20 kHz) against the harmonics' power (both shapers have first-order ADAA)
-  cab and tone   the measured response (white noise, clean drive) against gen_amp_tables.py's design
+  aliasing       at maximum drive (DI; tone dark, centre, bright), -15 dBFS sines at 997 and 2489 Hz: the power off
+                 the harmonics (aliases and noise, 20 Hz..20 kHz) against the harmonics' power (both shapers have
+                 first-order ADAA)
+  cab and tone   the measured response (white noise, clean drive) against gen_amp_tables.py's design; the tone
+                 stack's fixed mid scoop (depth at its centre frequency)
   ownership      one voice plays the input whatever the chord; handovers (new note, release, stop, steal) crossfade
                  without a step; the mix equals the single-voice reference within the crossfade's rounding;
                  TE calling render twice per block and a te_rx_sel that never toggles change nothing
@@ -83,6 +85,7 @@ PRESETS = {                                 # engines.json "amp" presets (knobs)
 }
 DRIVES = [0, 8192, 16384, 24576, 32767]
 ALIAS_F = {997: -46.0, 2489: -40.0}         # Hz: limit (dB re the harmonics) at maximum drive
+ALIAS_TONE = (0, 16384, 32767)
 
 
 def cases(workdir):
@@ -106,10 +109,11 @@ def cases(workdir):
         c[f"drive_{b}"] = (b, 16384, 0, 0, nb(1.0), "sine", "0n0", "")
         c[f"loud_{b}"] = (b, 16384, 0, 0, nb(3.0), "gtr", "0n0", "")
     for f0 in ALIAS_F:
-        c[f"alias_{f0}"] = (32767, 16384, 0, 0, nb(1.0), f"sine{f0}", "0n0", "")
+        for t in ALIAS_TONE:
+            c[f"alias_{f0}_{t}"] = (32767, t, 0, 0, nb(1.0), f"sine{f0}", "0n0", "")
     for o in (0, 11264, 22528, 32767):
         c[f"cab_{o}"] = (0, 16384, 0, o, nb(1.5), "noise", "0n0", "")
-    for t in (0, 32767):
+    for t in (0, 16384, 32767):
         c[f"tone_{t}"] = (0, t, 0, 0, nb(1.5), "noise", "0n0", "")
     c["gate"] = (16384, 16384, GATE_WHITE, 16384, nb(len(g) / FI), "gate", "0n0", "")
     c["gate_off"] = (16384, 16384, 0, 16384, nb(len(g) / FI), "gate", "0n0", "")
@@ -274,14 +278,16 @@ def main():
           "THD rises with blue: " + " ".join(f"{v:.1f}" for v in th) + " dB")
 
     for f0, lim in ALIAS_F.items():
-        al = alias_db(load(workdir, f"alias_{f0}")[0], f0)
-        check(al < lim, f"aliasing at maximum drive, {f0} Hz: {al:.1f} dB re the harmonics (limit {lim:.0f})")
+        al = [alias_db(load(workdir, f"alias_{f0}_{t}")[0], f0) for t in ALIAS_TONE]
+        check(max(al) < lim, f"aliasing at maximum drive, {f0} Hz, tone dark / centre / bright: "
+              + " / ".join(f"{v:.1f}" for v in al) + f" dB re the harmonics (limit {lim:.0f})")
 
     # ---- cab and tone ----
     f = gat.RESP_F
     sel = (f >= 60) & (f <= 10000)
     # the shapers' ADAA averages each pair of samples: (1 + z^-1) / 2 per stage where the curve is linear
-    base = onepole_hp(f, gat.TIGHT[0]) * onepole_lp(f, gat.INTER_FC) * np.cos(np.pi * f / FO) ** 2
+    base = (onepole_hp(f, gat.TIGHT[0]) * onepole_lp(f, gat.INTER_FC) ** gat.INTER_POLES * np.cos(np.pi * f / FO) ** 2
+            * gat.response(gat.tone_stack(16), f))          # the tone stack at the centre: flat shelves, the scoop
     i1k = np.argmin(np.abs(f - 1000))
     for o in (0, 11264, 22528, 32767):
         h = response(workdir, f"cab_{o}", "noise")
@@ -289,12 +295,19 @@ def main():
         err = (h - h[i1k]) - (want - want[i1k])
         check(np.abs(err[sel]).max() < 1.0, f"cab {o}: response vs design, 60 Hz..10 kHz, max error {np.abs(err[sel]).max():.2f} dB "
               f"(at 100 Hz {want[np.argmin(np.abs(f-100))]-want[i1k]:+.1f}, 5 kHz {want[np.argmin(np.abs(f-5000))]-want[i1k]:+.1f} dB re 1 kHz)")
-    for t in (0, 32767):
+    for t in (0, 16384, 32767):
         h = response(workdir, f"tone_{t}", "noise")
-        want = 20 * np.log10(gat.response(gat.tone_filters(round(t / 1024)), f) * base
-                             * gat.response(gat.cab_filters(0), f))
+        want = 20 * np.log10(gat.response(gat.tone_stack(round(t / 1024)), f) / gat.response(gat.tone_stack(16), f)
+                             * base * gat.response(gat.cab_filters(0), f))
         err = (h - h[i1k]) - (want - want[i1k])
         check(np.abs(err[sel]).max() < 1.0, f"tone {t}: response vs design, max error {np.abs(err[sel]).max():.2f} dB")
+        if t == 16384:
+            # the scoop: its centre frequency against the mean of 100 Hz and 3 kHz, measured and designed
+            at = lambda v, fr: np.interp(np.log(fr), np.log(f), v)
+            depth = lambda v: at(v, gat.SCOOP[0]) - (at(v, 100) + at(v, 3000)) / 2
+            check(abs(depth(h) - depth(want)) < 1.0 and depth(want) < -5,
+                  f"tone stack mid scoop (tone centre, DI, clean): {depth(h):+.1f} dB at {gat.SCOOP[0]:.0f} Hz re 100 Hz / "
+                  f"3 kHz (design {depth(want):+.1f})")
 
     # ---- gate ----
     _, bounds = gate_signal()

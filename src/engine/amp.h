@@ -22,7 +22,7 @@ struct amp_svf {
     int32_t m1, m2, m0;                    /* output mix, Q29 (in the order svf_block loads them) */
 };
 
-enum { F_LOW, F_HIGH, F_HP, F_MID, F_PRES, F_LP1, F_LP2, AMP_FILTERS };
+enum { F_LOW, F_HIGH, F_SCOOP, F_HP, F_MID, F_PRES, F_LP1, F_LP2, AMP_FILTERS };
 
 struct amp_ram {
     uint32_t magic;
@@ -49,8 +49,9 @@ struct amp_ram {
     int32_t knob[4];                       /* slewed knobs */
     int32_t env;                           /* gate detector, Q15 */
     int32_t hold;                          /* gate hold, samples */
-    int32_t tight, emph, inter;            /* one-pole states (Q24) */
-    int32_t gain_prev, comp_prev;          /* last block's drive gain and make-up (ramped across the block; amp.c) */
+    int32_t tight, emph, inter, inter2;    /* one-pole states (Q24) */
+    int32_t gain_prev, comp_prev, g2_prev; /* last block's drive gain, make-up and stage-2 gain (ramped across the
+                                            * block; amp.c) */
     struct amp_svf f[AMP_FILTERS];
     int16_t buf[AMP_HIST + AMP_IN];        /* upsampler history (the last processed block's end), then this block's
                                             * TE IN (compared to detect a new block) */
@@ -58,8 +59,9 @@ struct amp_ram {
                                             * loads are aligned in one of the two */
     int32_t gd[AMP_IN];                    /* per input sample: gate gain x drive gain (Q23) */
     int32_t pc[3];                         /* drive pass coefficients: tight a, pre-emphasis a, e (1 - a) (Q31) */
+    int32_t ic[4];                         /* interstage pass: stage 1's DC, stage-2 gain, its step (amp.c) */
     int32_t in1[AMP_OUT + 1];              /* stage-1 input (Q20, biased): [0] the last block's last, then the block */
-    int32_t in2[AMP_OUT + 1];              /* stage-2 input (Q20), the same layout */
+    int32_t in2[AMP_OUT + 1];              /* stage-2 input (Q20; [1..] Q24 inside the tone stack), the same layout */
     int32_t *list[AMP_OUT + 1];            /* ADAA: the pairs straddling the knee (amp.c adaa) */
     int32_t z[AMP_OUT];                    /* DSP scratch (Q24) */
     int16_t y[AMP_OUT];                    /* this block's output (before the voice gains) */
