@@ -13,7 +13,9 @@
  * oversampled levels. No filter: that is the FX slot's job (the hidden filter FX is enabled in the DB).
  * A ~10 Hz DC blocker follows the oscillators: warp makes the halves of the cycle unequal, which shifts
  * the wave's mean.
- * State: phases at bytes 0/8 and the DC blocker at 16/20, all reset by TE's note-on (engine.h).
+ * Blue's position is smoothed per sample (see POS_SH below): the knob arrives once per block.
+ * State: phases at bytes 0/8 and the DC blocker at 16/20, all reset by TE's note-on (engine.h); the smoothed
+ * position at 4/24, valid once 12 holds POS_TAG.
  */
 #include "engine.h"
 #include "dsp.h"
@@ -26,12 +28,13 @@ extern const int16_t engine_data[];
 
 struct state {
     uint32_t phase1;    /*  0: reset to 0x80000000 on note-on */
-    uint32_t spare1;
+    int32_t pos;        /*  4: frame position where the next block starts, Q22 frames */
     uint32_t phase2;    /*  8: reset to 0x80000000 on note-on */
-    uint32_t spare3;
+    uint32_t pos_tag;   /* 12: POS_TAG once pos is valid (voice RAM starts dirty) */
     int32_t dc_x;       /* 16: DC blocker input history, cleared on note-on */
     int32_t dc_y;       /* 20: DC blocker output history, cleared on note-on */
-    uint32_t spare6, spare7;
+    int32_t pos_mid;    /* 24: the position smoother's first pole, Q22 frames */
+    uint32_t spare7;
 };
 
 /* One level of one frame: table, shift = 32 - log2(size), mask = size - 1. */
@@ -100,22 +103,105 @@ static inline int32_t osc(const struct look *lk, int32_t ff, int32_t w, uint32_t
     return s;
 }
 
+/* Blue's position, smoothed: TE hands render the knob once per block (encoder detents of 1024 raw = 0.34 frame, or
+ * TE's LFO, which modulates the voice's knob copy), and stepping the frame blend there clicks: bell's frames differ by
+ * up to ~2000 LSB per detent. Two cascaded one-pole smoothers per block (each 1/4 of the way, ~3.5 blocks = 5 ms at
+ * 88.2 kHz; 50 % of a step after 5-6 blocks, 90 % after ~15), the second ramped linearly across the block, so the
+ * position moves every sample and its slope has no steps. Bell, one detent (wt_check): splatter above 3 kHz -27 dB re
+ * the frame change for a hard step, -52 dB for a one-block ramp, -67 dB smoothed (notes/LOG.md WTPOS).
+ * P: Q22 frames (frame index above bit 22, its Q15 weight in bits 7..21), so a per-sample increment dP lands exactly
+ * on P + 128 dP. */
+#define POS_TAG 0x57A9E001u
+#define POS_SH 2                                          /* each pole moves 1 / 4 of the way per block */
+
+/* d / 2^sh rounded towards 0 (an arithmetic shift alone would round -1 >> 2 to -1 and never settle) */
+static inline int32_t shr0(int32_t d, int sh)
+{
+    return (d < 0 ? d + (1 << sh) - 1 : d) >> sh;
+}
+
+/* Samples k = 0 .. n - 1 with k * a <= x (a > 0, x >= 0, n <= 128): min(n, x / a + 1), without a division. */
+static inline int samples_within(int32_t x, int32_t a, int n)
+{
+    if ((n - 1) * a <= x)
+        return n;
+    int k = 0;                                            /* largest k < n with k a <= x, bit by bit */
+    for (int b = 64; b; b >>= 1)
+        if (k + b < n && (k + b) * a <= x)
+            k += b;
+    return k + 1;
+}
+
+struct osc_run {
+    struct look lk[4];                                    /* frames fr, fr + 1 at levels lvl, lvl2 */
+    int32_t w, g2, det12, norm, warp_knob;
+    const struct warp *wp;
+    uint32_t p1, p2;                                      /* oscillator phases */
+    int32_t dc_x, dc_y;                                   /* DC blocker */
+};
+
+static inline void frame_pair(struct look *lk, const int16_t *base, int fr, int lvl, int lvl2)
+{
+    lk[0] = look_at(base, fr, lvl);
+    lk[1] = look_at(base, fr + 1, lvl);
+    lk[2] = look_at(base, fr, lvl2);
+    lk[3] = look_at(base, fr + 1, lvl2);
+}
+
+/* n samples from frame pair r->lk, frame weight F (Q22) moving by dP per sample when ramp (else fixed). */
+static inline __attribute__((always_inline)) void run(struct osc_run *r, int16_t *out, const int32_t *pitch, int n,
+                                                       int32_t F, int32_t dP, int ramp)
+{
+    const struct look *lk = r->lk;
+    const int32_t w = r->w, g2 = r->g2, det12 = r->det12, norm = r->norm, warp_knob = r->warp_knob;
+    uint32_t p1 = r->p1, p2 = r->p2;
+    int32_t dc_x = r->dc_x, dc_y = r->dc_y;
+    int32_t ff = F >> 7;
+    for (int i = 0; i < n; i++) {
+        uint32_t inc = (uint32_t)pitch[i];
+        if (ramp) {
+            ff = F >> 7;
+            F += dP;
+        }
+        int32_t v = osc(lk, ff, w, warp_knob ? warp_phase(r->wp, p1) : p1);
+        if (g2) {
+            v += (osc(lk, ff, w, warp_knob ? warp_phase(r->wp, p2) : p2) * g2) >> 15;
+            p2 += inc + ((inc >> 10) * (uint32_t)det12 >> 2);
+        }
+        int32_t x = qmul(norm, v << 9);                   /* Q15 → Q24, unison-normalized */
+        dc_y = x - dc_x + qmul(2144424002, dc_y);         /* y = x - x1 + R y1, R = 1 - 2 pi 10 / 44100 */
+        dc_x = x;
+        out[i] = soft_knee(dc_y >> 10);                   /* Q24 → Q15 at -6 dB; linear below 0.75 FS */
+        p1 += inc;
+    }
+    r->p1 = p1;
+    r->p2 = p2;
+    r->dc_x = dc_x;
+    r->dc_y = dc_y;
+}
+
 void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t *pitch)
 {
     struct state *s = st;
-    int32_t pos = clamp_knob(params[0]);
     const int16_t *base = wt_bank_base(engine_data, wt_bank_of(params[1]));   /* SAMPLE: read once per block */
     int32_t warp_knob = clamp_knob(params[2]);
     int32_t uni = clamp_knob(params[3]);
 
-    /* Frame position: frames fr, fr + 1 with weight ff (Q15). */
-    int32_t fpos = pos * (FRAMES - 1);
-    int fr = fpos >> 15;
-    int32_t ff = fpos & 0x7FFF;
-    if (fr >= FRAMES - 1) {
-        fr = FRAMES - 2;
-        ff = 0x7FFF;
-    }
+    /* Position: the knob is the target; pos_mid follows it, P follows pos_mid with a ramp across the block. A note-on
+     * (TE's reset of phase1 and the DC blocker) starts at the target. The knob tops out at 32767 x 11 < 11 << 15, so
+     * frame + 1 <= 11 always. */
+    int32_t target = clamp_knob(params[0]) * (FRAMES - 1) << 7;
+    int32_t P = s->pos, mid = s->pos_mid;
+    if (s->pos_tag != POS_TAG || (s->phase1 == 0x80000000u && !s->dc_x && !s->dc_y))
+        P = mid = target;
+    int32_t dm = shr0(target - mid, POS_SH);
+    mid = dm ? mid + dm : target;                         /* settles within 2^-20 frame */
+    int32_t dP = shr0(mid - P, 7 + POS_SH);               /* per sample: 1/4 of the way over the block */
+    if (!dP)
+        P = mid;                                          /* within 2^-13 frame: <= 3 LSB on the sharpest bank */
+    s->pos = P + dP * ENGINE_BLOCK;
+    s->pos_mid = mid;
+    s->pos_tag = POS_TAG;
 
     /* Unison: osc 2 gain g2 (Q15) fades in over the first quarter, detune up to +30 cents (Q12). */
     int32_t g2 = uni >= 8192 ? 32767 : uni << 2;
@@ -127,29 +213,26 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     int32_t w;
     int lvl = pick_level((uint32_t)pitch[0], warp_knob ? wp.level_q8 : 0, &w);
     int lvl2 = lvl + 1 < LEVELS ? lvl + 1 : lvl;
-    struct look lk[4] = {
-        look_at(base, fr, lvl), look_at(base, fr + 1, lvl),
-        look_at(base, fr, lvl2), look_at(base, fr + 1, lvl2),
-    };
 
-    uint32_t p1 = s->phase1, p2 = s->phase2;
-    int32_t dc_x = s->dc_x, dc_y = s->dc_y;
-
-    for (int i = 0; i < ENGINE_BLOCK; i++) {
-        uint32_t inc = (uint32_t)pitch[i];
-        int32_t v = osc(lk, ff, w, warp_knob ? warp_phase(&wp, p1) : p1);
-        if (g2) {
-            v += (osc(lk, ff, w, warp_knob ? warp_phase(&wp, p2) : p2) * g2) >> 15;
-            p2 += inc + ((inc >> 10) * (uint32_t)det12 >> 2);
+    struct osc_run r = { { { 0, 0, 0 } }, w, g2, det12, norm, warp_knob, &wp, s->phase1, s->phase2, s->dc_x, s->dc_y };
+    if (!dP) {                                            /* steady: the block with one frame pair, as before */
+        frame_pair(r.lk, base, P >> 22, lvl, lvl2);
+        run(&r, out, pitch, ENGINE_BLOCK, P & 0x3FFFFF, 0, 0);
+    } else {
+        /* Ramping: the block in segments of one frame pair, split where P crosses a frame (at most 11 times), so
+         * the pair stays fixed inside the loop and the ramp costs one add per sample. */
+        for (int i = 0; i < ENGINE_BLOCK;) {
+            int32_t F = P & 0x3FFFFF;                     /* Q22 weight of frame (P >> 22) + 1 */
+            int n = dP > 0 ? samples_within(0x3FFFFF - F, dP, ENGINE_BLOCK - i)   /* while P < next frame */
+                           : samples_within(F, -dP, ENGINE_BLOCK - i);            /* while P >= this frame */
+            frame_pair(r.lk, base, P >> 22, lvl, lvl2);
+            run(&r, out + i, pitch + i, n, F, dP, 1);
+            P += dP * n;
+            i += n;
         }
-        int32_t x = qmul(norm, v << 9);                   /* Q15 → Q24, unison-normalized */
-        dc_y = x - dc_x + qmul(2144424002, dc_y);         /* y = x - x1 + R y1, R = 1 - 2 pi 10 / 44100 */
-        dc_x = x;
-        out[i] = soft_knee(dc_y >> 10);                   /* Q24 → Q15 at -6 dB; linear below 0.75 FS */
-        p1 += inc;
     }
-    s->phase1 = p1;
-    s->phase2 = p2;
-    s->dc_x = dc_x;
-    s->dc_y = dc_y;
+    s->phase1 = r.p1;
+    s->phase2 = r.p2;
+    s->dc_x = r.dc_x;
+    s->dc_y = r.dc_y;
 }

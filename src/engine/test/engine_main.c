@@ -1,5 +1,9 @@
 /* Simulator driver for any engine: calls _render (trampoline) like TE's voice loop.
- *   engine_main p0 p1 p2 p3 inc calls [inc_end|0] [sampler[:gain knob] | k4:p4,p5,p6,p7]
+ *   engine_main p0 p1 p2 p3 inc calls [inc_end|0] [sampler[:gain knob] | k4:p4,p5,p6,p7 | turn:k,step,every,first |
+ *               lfo:k,period]
+ * turn: knob k moves by step (raw, clamped to 0..32767) before call first and every `every` calls after it, as the
+ * encoder's detents do (once per block). lfo: knob k follows a triangle 0 -> 32767 -> 0 of `period` calls, set once
+ * per call as TE's LFO modulates the voice's knob copy.
  * Note-on state as TE writes it (state bytes 0..3 and 8..11 = 0x80000000, 16..23 cleared). The pitch increment glides
  * linearly from inc to inc_end (default inc) over the run. Prints one sample per line, then on stderr
  * "cycles max <n> mean <n> guard <hex>": CYCLES per render call and the out[128] overrun guard. */
@@ -102,6 +106,11 @@ int main(int argc, char **argv)
     }
     if (argc > 8 && !strncmp(argv[8], "k4:", 3))              /* SHIFT knobs 4..7 */
         sscanf(argv[8] + 3, "%hd,%hd,%hd,%hd", &params[4], &params[5], &params[6], &params[7]);
+    int turn_k = -1, turn_step = 0, turn_every = 1, turn_first = 0, lfo_k = -1, lfo_period = 1;
+    if (argc > 8 && !strncmp(argv[8], "turn:", 5))
+        sscanf(argv[8] + 5, "%d,%d,%d,%d", &turn_k, &turn_step, &turn_every, &turn_first);
+    if (argc > 8 && !strncmp(argv[8], "lfo:", 4))
+        sscanf(argv[8] + 4, "%d,%d", &lfo_k, &lfo_period);
     int calls = atoi(argv[6]);
     uint32_t cmax = 0;
     double csum = 0;
@@ -116,6 +125,14 @@ int main(int argc, char **argv)
         for (int i = 0; i < 128; i++)
             pitch_buf[i] = (int32_t)(inc0 + (inc1 - inc0) * (c * 128 + i) / (calls * 128.0));
         fill_input(c);
+        if (turn_k >= 0 && c >= turn_first && (c - turn_first) % turn_every == 0) {
+            int v = params[turn_k] + turn_step;
+            params[turn_k] = (int16_t)(v < 0 ? 0 : v > 32767 ? 32767 : v);
+        }
+        if (lfo_k >= 0) {
+            int t = c % lfo_period;
+            params[lfo_k] = (int16_t)(2 * t < lfo_period ? 65534 * t / lfo_period : 65534 * (lfo_period - t) / lfo_period);
+        }
         uint32_t t0 = cycles();
         render(voice, out, params);
         uint32_t dt = cycles() - t0;

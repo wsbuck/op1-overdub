@@ -938,3 +938,30 @@
 - Report: column order and labels, where the cursor starts, the snapshot's column, any crash or assert text (photo).
 - **Cleanup before an image without fmdrum**: as DRUMFM1.
 - Result: _pending user flash_.
+
+## 2026-10-15 — WTPOS: wavetable blue (position) smoothed per sample (no image yet)
+- Cause (Confirmed, sim): blue is params[0] = position, morphing through the bank's 12 frames (green = bank, `k >> 12`;
+  blue never crosses a bank). wt.c read it once per block and used it for the whole block, so each encoder detent
+  (1024 raw = 0.34 frame) stepped the frame blend at a block edge. Bell, one detent at position 12288: the output steps
+  by up to 1,827 LSB at 55 Hz (the frame difference D peaks at 1,949; D's own sample-to-sample slope is 78). TE's LFO on
+  blue modulates the same per-block knob copy (notes/knob-hook.md), so it stepped the same way.
+- Fix (src/engine/wt.c): the knob is a target; two cascaded one-poles per block (each 1/4 of the way: 50 % of a detent
+  after 5-6 blocks = 8 ms at 88.2 kHz, 90 % after ~15 blocks = 22 ms), the second ramped linearly per sample in Q22
+  frames (one add per sample). A ramp that crosses frames splits the block where it crosses (bit-by-bit search, no
+  division), so the frame pair stays fixed inside each segment; mip levels are still chosen once per block from
+  pitch[0], as before. Steady blocks run the old loop. State: pos at byte 4, pos_mid at 24, a tag at 12 (voice RAM
+  starts dirty); a note-on (phase1 = 0x80000000 and the DC blocker cleared) starts at the knob. SAMPLE bank: same base
+  pointer path, unchanged. Presets and knob ranges unchanged.
+- Why not one block: a one-block ramp removes the step but bell still splatters (above 3 kHz, re D: hard step -27 dB,
+  one-block ramp -52 dB, two poles -67 dB at 220 Hz); slow sweep (a detent every 32 blocks) off-harmonic energy
+  -41.6 dB before, -42.2 one-block, -52.4 two poles (static floor -69). An LFO on blue: unchanged by the measure
+  (its sidebands are the modulation itself), but it now moves per sample through the same path.
+- Bank (green): still switches tables at a bank boundary (8 boundaries over the knob); not changed here.
+- Cycles (sim, worst per render call): 46,929 → 45,919 steady (warp + unison, 4186 Hz), 47,635 while ramping
+  (372 per sample, +5 over the old worst); wt_check worst 47,757 → 46,747.
+- Checks: wt_check adds bell detent checks (output step <= D's slope + D/32, splatter above 3 kHz < -58 dB, half way
+  within 10 blocks, settled after 80), a fast turn (a detent every block with unison: lands on the last frame) and the
+  SAMPLE bank while turning; the old wt.c fails the step and splatter checks. engine_main.c: `turn:k,step,every,first`
+  and `lfo:k,period` knob schedules. wt, amp, fm4, fmdrum, grain, harm, inprobe, modal, sprobe, va, wt_import: all pass.
+- Listen: wavetable, bell bank (green), turn blue slowly one detent at a time, low and high notes: no click per detent;
+  turn fast: follows without a lag you notice. LFO on blue: no zipper.
