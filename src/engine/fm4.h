@@ -83,12 +83,14 @@ struct fm4_voice {
     uint32_t owner;                         /* OWNER_FM4 */
     uint32_t ph[FM4_OPS];
     int32_t env[FM4_OPS];                   /* Q30 */
-    int32_t g[FM4_OPS];                     /* gains at the end of the last block: phase units (modulators) or Q15 */
-    int32_t fbg;                            /* feedback gain at the end of the last block */
+    int32_t g[FM4_OPS];                     /* gains at the end of the last block: phase units (modulators) or Q15,
+                                             * << 8 (fm4.c GSH) */
+    int32_t fbg;                            /* feedback gain at the end of the last block, << 8 */
     int32_t s1, s2;                         /* D's last two outputs, Q15 */
     int32_t dc_x, dc_y;
     int32_t alg;                            /* algorithm of the last block (+1; 0 = none) */
     uint32_t blocks;                        /* render calls (the screen: did this voice render since its last frame) */
+    uint32_t t_last;                        /* CYCLES at the last render (retrigger: is the voice still sounding) */
 };
 
 static inline int fm4_is_packed(const int16_t *k)

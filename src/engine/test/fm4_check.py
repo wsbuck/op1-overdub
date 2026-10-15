@@ -146,6 +146,11 @@ case("env_short_t1", [0, alg_knob(11), 16384, 0, op(1, 15, 2), OFF, OFF, OFF], c
 case("env_short_t4", [0, alg_knob(11), 32767, 0, op(1, 15, 2), OFF, OFF, OFF], calls=2760)
 case("env_swell", [0, alg_knob(11), 16384, 0, op(1, 15, 7), OFF, OFF, OFF], calls=1380)
 case("env_retrig", [0, alg_knob(11), 16384, 0, op(1, 15, 1), OFF, OFF, OFF], calls=1380, extra="noteon 700")
+# a retrigger while the voice is loud (flat carrier, plucked modulator): the envelopes restart, the gains ramp
+case("env_retrig_loud", [index_knob(0.5), alg_knob(6), 16384, 0, op(1), op(1, 15, 2), OFF, OFF], calls=690,
+     extra="noteon 300")
+# envelope ramps: a 0.8 s decay; the gain ramps must meet exactly at block edges (no block-rate sidebands)
+case("env_med", [0, alg_knob(11), 16384, 0, op(1, 15, 3), OFF, OFF, OFF], calls=690)
 # v0: plain knobs. B ratio 2 (2048), C 3 (3072), D 1 (1024); detune 0 and max
 case("v0_alg1", [index_knob(0.3), alg_knob(1), 0, 0, 2048 + 512, 3072 + 512, 1024 + 512, 0], f0=110, calls=345)
 case("v0_add", [0, alg_knob(11), 32767, 0, 2048 + 512, 3072 + 512, 1024 + 512, 0], f0=110, calls=345)
@@ -287,8 +292,21 @@ def main():
     check(np.abs(x[s0 - 2048:s0]).max() < 500 and np.abs(x[s0:s0 + 2048]).max() > 15000,
           f"note-on restarts the envelopes ({np.abs(x[s0 - 2048:s0]).max():.0f} before, "
           f"{np.abs(x[s0:s0 + 2048]).max():.0f} after)")
-    check(np.abs(np.diff(x[s0 - 4:s0 + 4])).max() < 3000, "note-on: carrier phase restarts at 0 (no step: "
+    check(np.abs(np.diff(x[s0 - 4:s0 + 4])).max() < 3000, "note-on while sounding: gains ramp (no step: "
           f"{np.abs(np.diff(x[s0 - 4:s0 + 4])).max():.0f})")
+    x = data["env_retrig_loud"].astype(float)
+    s0 = 300 * 128
+    d_at, d_before = np.abs(np.diff(x[s0 - 4:s0 + 128])).max(), np.abs(np.diff(x[s0 - 6000:s0 - 8])).max()
+    check(d_at < 2 * d_before, f"retrigger while loud: largest sample step {d_at:.0f} at the note-on, {d_before:.0f} "
+          "before (no click)")
+    x = data["env_med"].astype(float)
+    y = x[len(x) // 10:len(x) * 4 // 10]
+    w = np.hanning(len(y))
+    m = np.abs(np.fft.rfft(y * w))
+    fr = np.fft.rfftfreq(len(y), 1 / FS)
+    pk = lambda f: m[np.abs(fr - f) <= 3].max()
+    sb = max(pk(F0 + k * FS / 128) for k in (1, 2, 3))
+    check(db(sb, pk(F0)) < -90, f"envelope ramps: block-rate sidebands {db(sb, pk(F0)):.0f} dBc (decay 0.8 s)")
 
     # v0 plain knobs
     err, lvl = vs_model("v0_alg1", 110, tol=0.5)

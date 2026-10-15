@@ -8,11 +8,13 @@
  * Per block (128 samples):
  *   - operator increments from pitch[0] and pitch[127], ramped linearly (exact ratios at a steady pitch);
  *   - one envelope per operator, exponential towards its shape's target, time constant x TIME; the gains are ramped
- *     linearly across the block, so depth changes never zipper. Note-on (TE's 0x80000000 at state bytes 0..3)
- *     restarts phases, envelopes and feedback. Amp attack/release stay TE's (T2).
+ *     linearly across the block (8 extra fractional bits, so a ramp ends exactly where the next starts), so depth
+ *     changes never zipper. Note-on (TE's 0x80000000 at state bytes 0..3) restarts phases, envelopes and feedback;
+ *     on a voice that is still sounding (a retrigger) only the envelopes, and the gains ramp. Amp attack/release stay
+ *     TE's (T2).
  *   - the "Tone" limiter (aliasing): bandwidth per operator, bottom-up through the algorithm: f_op + the sum over
- *     its modulators of (I + 3) x their bandwidth (Carson's I + 1 plus two more sidebands, which still reach -26 dB at
- *     small I; 4 I below 1 rad), D's own 1 + 6 x feedback rad. If a carrier's would pass 0.68 fs (60 kHz), every
+ *     its modulators of (1.5 I + 4) x their bandwidth (Carson's I + 1 plus more sidebands, which still reach -26 dB;
+ *     easing to 4.5 I + 1 below 1 rad), D's own 1 + 6 x feedback rad. If a carrier's would pass 0.68 fs (60 kHz), every
  *     index and the feedback are scaled down (bisection, 8 steps) until it doesn't: what folds over then lands above
  *     28 kHz, which TE's 2:1 decimation removes. An operator above 0.5 fs (its own sine would alias) fades out from
  *     0.4375 fs.
@@ -32,6 +34,8 @@ extern uint8_t voice_ram[];
 #define IMAX (8 * RAD)                      /* level 15 x INDEX 2x: 8 rad */
 #define FBMAX 14603                         /* 1.4 rad, per (s1 + s2): 1.4 x RAD / 2 */
 #define LIMIT 713032                        /* 0.68 fs in Q20 */
+#define GSH 8                               /* the ramped gains carry 8 more fractional bits (exact ramps) */
+#define RETRIG_CYC (16u << 20)              /* a voice that rendered less than ~16 M cycles ago (~40 ms) is sounding */
 #define E_BASE 1413703                      /* log2(2^31 x 128 / 88200), Q16 */
 
 struct state {                              /* TE voice object +4 .. +0x23 */
@@ -58,6 +62,17 @@ static struct fm4_voice *voice_of(void *st)
 #else
 #define mul16(d, f) (((int32_t)(short)(d) * (f)) >> 15)
 #endif
+
+static inline uint32_t cycles_now(void)
+{
+#ifdef __bfin__
+    uint32_t c;
+    __asm__ volatile("%0 = CYCLES;" : "=d"(c));
+    return c;
+#else
+    return 0;
+#endif
+}
 
 /* sin(2 pi ph / 2^32), Q15: sine256 interpolated (~ -82 dB) */
 static inline int32_t fsin(uint32_t ph)
@@ -97,24 +112,24 @@ static inline __attribute__((always_inline)) void run(const int ALG, struct fm4_
     int32_t s1 = v->s1, s2 = v->s2, dc_x = v->dc_x, dc_y = v->dc_y;
     for (int i = 0; i < ENGINE_BLOCK; i++) {
         int32_t acc = 0;
-        int32_t sd = fsin(pd + (uint32_t)((s1 + s2) * fbg));
+        int32_t sd = fsin(pd + (uint32_t)((s1 + s2) * (fbg >> GSH)));
         s2 = s1;
         s1 = sd;
-        uint32_t yd = (uint32_t)sd * (uint32_t)gd;
+        uint32_t yd = (uint32_t)sd * (uint32_t)(gd >> GSH);
         if (car & 8)
-            acc += sd * gd;
+            acc += sd * (gd >> GSH);
         uint32_t m = (mC & 8 ? yd : 0);
         int32_t sc = fsin(pc + m);
-        uint32_t yc = (uint32_t)sc * (uint32_t)gc;
+        uint32_t yc = (uint32_t)sc * (uint32_t)(gc >> GSH);
         if (car & 4)
-            acc += sc * gc;
+            acc += sc * (gc >> GSH);
         m = (mB & 4 ? yc : 0) + (mB & 8 ? yd : 0);
         int32_t sb = fsin(pb + m);
-        uint32_t yb = (uint32_t)sb * (uint32_t)gb;
+        uint32_t yb = (uint32_t)sb * (uint32_t)(gb >> GSH);
         if (car & 2)
-            acc += sb * gb;
+            acc += sb * (gb >> GSH);
         m = (mA & 2 ? yb : 0) + (mA & 4 ? yc : 0) + (mA & 8 ? yd : 0);
-        acc += fsin(pa + m) * ga;
+        acc += fsin(pa + m) * (ga >> GSH);
         int32_t x = acc >> 6;                       /* Q30 -> Q24 */
         dc_y = x - dc_x + qmul(DC_R, dc_y);
         dc_x = x;
@@ -154,8 +169,8 @@ static int32_t bandwidth(int alg, const int32_t *f, const int32_t *iq8, int32_t 
         unsigned mods = fm4_mods[alg][op];
         for (int j = op + 1; j < FM4_OPS; j++)
             if (mods >> j & 1) {
-                int32_t is = (iq8[j] * sc) >> 8;    /* (I + 3) f_m, easing to 4 I f_m below 1 rad: sidebands */
-                int32_t ex = 3 * is < 768 ? 3 * is : 768;   /* past Carson's I + 1 still reach -26 dB at small I */
+                int32_t is = (iq8[j] * sc) >> 8;    /* (1.5 I + 4) f_m, easing to (4.5 I + 1) f_m below 1 rad: */
+                int32_t ex = (3 * is < 768 ? 3 * is : 768) + 256 + (is >> 1);   /* sidebands past Carson's I + 1 */
                 w += (int32_t)((uint32_t)(is + ex) * (uint32_t)(bw[j] >> 4) >> 4);
             }
         bw[op] = w > (1 << 23) ? 1 << 23 : w;
@@ -172,7 +187,10 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     struct fm4_patch p;
     fm4_decode(params, &p);
     const int alg = p.alg;
-    int fresh = s->note_on == 0x80000000u || !v->alg;
+    uint32_t t = cycles_now();
+    int note = s->note_on == 0x80000000u, sounding = v->alg && t - v->t_last < RETRIG_CYC;
+    int fresh = !v->alg || (note && !sounding), retrig = note && sounding;
+    v->t_last = t;
     s->note_on = 0;
     v->blocks++;                                    /* the screen: this voice rendered since its last frame */
 
@@ -184,9 +202,9 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     if (fkey > 1 << 17)
         fkey = 1 << 17;
     for (int op = 0; op < FM4_OPS; op++) {
-        uint32_t r = p.ratio[op], r6 = r >> 6;
-        uint32_t a = (i0 >> 16) * r + (((i0 & 0xFFFF) * r6) >> 10);
-        uint32_t e = (i1 >> 16) * r + (((i1 & 0xFFFF) * r6) >> 10);
+        uint32_t r = p.ratio[op], r7 = r >> 7;     /* r < 2^23 (ratio < 128): 0xFFFF x r7 < 2^32 */
+        uint32_t a = (i0 >> 16) * r + (((i0 & 0xFFFF) * r7) >> 9);
+        uint32_t e = (i1 >> 16) * r + (((i1 & 0xFFFF) * r7) >> 9);
         b.inc[op] = a;
         b.dinc[op] = (uint32_t)((int32_t)(e - a) >> 7);
         fq[op] = (int32_t)((fkey * (r >> 8)) >> 8);
@@ -195,12 +213,15 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
             fq[op] = 0;                             /* silent: no bandwidth */
     }
 
-    /* envelopes: start on note-on, then one exponential step per block towards the target */
-    if (fresh) {
-        for (int op = 0; op < FM4_OPS; op++) {
-            v->ph[op] = 0;
+    /* envelopes: start on note-on, then one exponential step per block towards the target. A note-on on a voice that
+     * is still sounding (it rendered within RETRIG_CYC) restarts only the envelopes: phases and filters run on and the
+     * gains ramp from where they are, so a retrigger doesn't step. */
+    if (fresh || retrig)
+        for (int op = 0; op < FM4_OPS; op++)
             v->env[op] = fm4_env_start[p.env[op]] << 15;
-        }
+    if (fresh) {
+        for (int op = 0; op < FM4_OPS; op++)
+            v->ph[op] = 0;
         v->s1 = v->s2 = 0;
         v->dc_x = v->dc_y = 0;
     }
@@ -262,11 +283,14 @@ void engine_render(void *st, int16_t *out, const int16_t *params, const int32_t 
     /* ramps; a note-on or an algorithm change starts from the new values (an operator may have changed role) */
     if (fresh || v->alg != alg + 1) {
         for (int op = 0; op < FM4_OPS; op++)
-            v->g[op] = car >> op & 1 ? gnow[op] : (int32_t)((gnow[op] >> 1) * sc >> 7);
-        v->fbg = fbend;
+            v->g[op] = (car >> op & 1 ? gnow[op] : (int32_t)((gnow[op] >> 1) * sc >> 7)) << GSH;
+        v->fbg = fbend << GSH;
     }
-    for (int op = 0; op < FM4_OPS; op++)
+    for (int op = 0; op < FM4_OPS; op++) {
+        gend[op] <<= GSH;
         b.dg[op] = (gend[op] - v->g[op]) >> 7;
+    }
+    fbend <<= GSH;
     b.dfbg = (fbend - v->fbg) >> 7;
 
     switch (alg) {
