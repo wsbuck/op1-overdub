@@ -1168,3 +1168,22 @@
      `dist/`): SHIFT+T2 does nothing, SHIFT+notes play plain notes; everything else as PICK1.
 - Report: anything listed that shouldn't be (or missing), the saved amp/crush sounds, any assert text (photo).
 - Result: _pending user flash_.
+
+## 2026-10-15 — Test image 73: CRUSH5.OP1 (crush screen inside the AGG cell limit)
+- CRUSH4 asserted `agg.cpp:339 alloc failed, too many blocks` on opening the crush FX screen. Cause (static analysis,
+  notes/screen.md "AGG cell limit"): TE's AGG rasterizer asserts once one fill or one stroke needs more than 15 x 256
+  cells (the block pool never shrinks); the default state's voxel-edge stroke (RATE level 2: one path of every block
+  edge, round caps) was ~4861 cells. The other screens peak at 22 .. 66 % of the limit.
+- Fix (commit 3ebaa46): gen_crush3d.py splits every compound path over 1400 estimated cells into parts under its id
+  (ve1..4, vt1, vl1, vt2, c4, cmu); ui.c recolours the parts and draws the pyramid only if the file has the `cells2`
+  marker (an older crush3d.svg falls back to the line screen). Same picture (C-path gallery). New
+  `design/fx/svg_cells.py` (host cell model); build.py refuses any published SVG above 70 % of the limit (choir 30 %,
+  pingpong 22 %, pedals 38 %, fm4 66 %, crush3d 36 %); crush_screen_check holds crush's worst over 144 states to 50 %
+  (now ~1431 cells, 37 %) and checks every recoloured id is a leaf with that style. DSP unchanged from CRUSH3/4.
+- `firmware/images/CRUSH5.OP1` = CRUSH4's command (`--svg-cost`, all engines and trims, all FX) with `--name CRUSH5`,
+  from commit 3ebaa46 in a clean `git archive`; te-boot identical to stock; it replaces content/display/crush3d.svg on
+  the disk. sha256 a755b2a835da87b502de08119999690e01907a6ae5c7f649be22279cda83b1f7.
+- Checklist: first open the crush FX screen at the default (synth FX, then master FX): it must draw, no assert.
+  Then CRUSH4's checklist (test image 72), including the four `--svg-cost` readings (crush clean, busy, max, pedals)
+  and every RATE detent's voxel level (4 / 10 / 18 / 25) with BITS at 0 and at 25.
+- Result: _pending user flash_.
