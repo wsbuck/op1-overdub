@@ -1224,4 +1224,26 @@
      `--svg-cost` readings (crush clean, busy, max; pedals).
 - Recovery if it asserts: power-cycle; playing works, only opening the crush screen asserts. CRUSH1 (69) is the safe
   fallback (no SVG screen); do not flash CRUSH2..5.
+- Result (2026-10-15, device): no assert; the screen shows the sun, horizon, sand and far pyramids, and the RATE / BITS
+  readouts when the knobs turn, but no pyramid at any setting (STAGE labels not noticed). Cause: the staged code hid
+  `pyr` at stage 0 and never showed it again. So the sky and the readout's lines render; the pyramid was never drawn
+  (the culprit of 72 / 74 is inside `pyr`). Fixed in CRUSH7 (76).
+
+## 2026-10-15 — Test image 76: CRUSH7.OP1 (crush: staged bring-up fixed)
+- CRUSH6's staged code hid the whole pyramid for good (above). CRUSH7 sets `pyr`'s visibility every frame and runs
+  each stage 3 s (was 2 s); otherwise as CRUSH6 (sun as SQUASH, paths split at 900 cells, inputs clamped, commit
+  4693519 + c6878b9). Matrix layout checked against `te_node_matrix` (0x019EAD58): the same as the host's (the host
+  stub refuses any other). crush_fuzz_check (new staged test, garbage and reachable states) and crush_screen_check
+  pass.
+- `firmware/images/CRUSH7.OP1` = CRUSH6's command (`--svg-cost --staged-screens`, all engines and trims, all FX) with
+  `--name CRUSH7`, from commit c6878b9 in a clean `git archive`; te-boot identical to stock. sha256
+  650ba4ad69ae10f01259c91419e40069acfce74c97cbb7c782843a43a252b024.
+- Test (it may stop the OP-1; this is the diagnosis):
+  1. Power on; select crush as synth FX at the default; open the FX screen and **watch the top-left white labels for
+     ~15 s**: STAGE 0 SKY, STAGE 1 PYRAMID, STAGE 2 RATE, STAGE 3 BITS, STAGE 4 GRIT (3 s each), then the normal screen.
+     Report the last label before an assert (photo of the assert), or that the pyramid appeared and stayed.
+  2. If it survives: power-cycle (the stages run once per boot), repeat with RATE at detents 4 / 10 / 18 / 25, BITS
+     at 25 / 32, GRIT at max while playing.
+  3. If all is fine: CRUSH4's checklist (72) with the sun pumping for SQUASH, and the `--svg-cost` readings.
+- Recovery: power-cycle; only opening the crush screen asserts. CRUSH1 (69) is the safe fallback.
 - Result: _pending user flash_.
