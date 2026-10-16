@@ -1246,4 +1246,35 @@
      at 25 / 32, GRIT at max while playing.
   3. If all is fine: CRUSH4's checklist (72) with the sun pumping for SQUASH, and the `--svg-cost` readings.
 - Recovery: power-cycle; only opening the crush screen asserts. CRUSH1 (69) is the safe fallback.
+- Result (2026-10-15, device): no assert; the pyramid draws but broken: separate subpaths joined by stray lines (sand
+  segments linked by diagonals, voxel edges and course lines too, spikes on the faces). Cause: TE's path parser
+  (notes/svg-route.md "Path quirks"): open subpaths are closed at the next M (chords) and open H / V subpaths are
+  joined to the next M. The same extra edges were behind 72 / 74's asserts. Fixed in CRUSH8 (77).
+
+## 2026-10-15 — Test image 77: CRUSH8.OP1 (crush3d.svg inside TE's path parser quirks)
+- Cause of every crush screen failure so far (notes/svg-route.md "Path quirks", parser `0x019FCA1C`): every M after the
+  first closes the open subpath before it with a line back to its start (**Verified**: `0x01A0722E`), so stroked
+  polylines followed by M got chords; open H / V subpaths followed by M are joined to the next M on the device
+  (observed, CRUSH7's photo; mechanism Hypothesis). crush3d.svg's voxel edges (`M x y V y2` x ~100), courses and sand
+  had both. Counting them, the cell model matches all results: heaviest stroke ~22.6 k cells (CRUSH4), ~7.2 k (CRUSH5),
+  both asserted; ~3.8 k (CRUSH6/7, just under 3840), drew with stray lines.
+- Fix (commit 5070623): the generators write M / L / Z only and split every stroked polyline in a multi-subpath path
+  into single segments (`te_safe_d`); heaviest element now c4c's stroke ~1676 cells (44 %) with the close counted.
+  check_svg.py (run by build.py on every published SVG) rejects relative commands, open H / V subpaths followed by M,
+  multi-segment open subpaths in stroked multi-subpath paths, and joins other than miter / round / `belvel` (TE's
+  spelling). choir, pingpong, pedals, fm4 pass unchanged (pedals' H / V are in closed shapes, which render right).
+  Same picture as CRUSH7 otherwise (sun as SQUASH); no staged bring-up.
+- `firmware/images/CRUSH8.OP1` = CRUSH7's command without `--staged-screens` (`--svg-cost`, all engines and trims, all
+  FX), `--name CRUSH8`, from commit 5070623 in a clean `git archive`; te-boot identical to stock. sha256
+  be2a63986cab02c2f43cada38e52f995921280a9fb97761e7a4472ea4c3a055e.
+- Checklist:
+  1. Open the crush FX screen at the default: an intact stepped pyramid (RATE 11 kHz), no stray lines: the sand is six
+     separate short dashes, the voxel tiers have clean vertical edges, faces without spikes. Compare with the gallery
+     image `default_first_view` (crush6/7 galleries).
+  2. Turn RATE through detents 0 / 4 / 10 / 18 / 25 / 32 and BITS through 0 / 12 / 16 / 20 / 25 / 32: clean shapes at
+     every step; readouts as in CRUSH4's checklist.
+  3. SQUASH on drums: the white sun shrinks and dims with the hits. GRIT above half while playing: slices, debris.
+  4. `--svg-cost` readings: crush clean, busy, max (everything up while playing); pedals for comparison.
+  5. Other screens (pedals, pingpong, choir, fm4): do any lines or angles look different from their previews? Note
+     which (the parser quirks above may explain them).
 - Result: _pending user flash_.
