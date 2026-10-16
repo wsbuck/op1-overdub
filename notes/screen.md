@@ -85,7 +85,11 @@ Found 2026-10-15 after CRUSH4 stopped on opening the crush FX screen (LOG 72). S
   on first use and keeping it; each has its own block pool. Group visibility is honoured (group render returns at
   `0x019EB82C` when +0x50 is 0; pedals and choir hide groups). So the scope is one element's fill or stroke, not a
   group or the frame.
-- **Open (unresolved):** CRUSH5 split every crush3d.svg path under ~1430 estimated cells and still asserted on opening
+- **Resolved (2026-10-15, CRUSH7's photo): the extra cells came from TE's path parser** (svg-route.md "Path
+  quirks"): open subpaths are closed at the next M (chords) and open H / V subpaths are joined to the next M (long
+  diagonals); crush3d.svg's voxel edges, courses and sand had both. Counting them, the model matches all device
+  results (CRUSH4 ~22.6 k, CRUSH5 ~7.2 k: asserted; CRUSH6/7 ~3.8 k: drew). Earlier note, kept for the record:
+- **Was open:** CRUSH5 split every crush3d.svg path under ~1430 estimated cells and still asserted on opening
   the screen, while pedals (heaviest element ~1465, heaviest group ~15.7 k, whole tree ~24 k) and fm4 (~2530 per
   element) render. No scope (element, group, frame) explains both with the cell model, so the model misses something
   crush3d.svg has (Hypothesis). CRUSH6 brings the crush screen up layer by layer on its first open (build.py

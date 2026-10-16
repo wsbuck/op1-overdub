@@ -111,6 +111,10 @@ def main():
     svgs = [os.path.join(ROOT, "design", "fx", FX_SVGS[f["source"]]) for f in fxs if f["source"] in FX_SVGS]
     svgs += [os.path.join(ROOT, "design", "synth", ENGINE_SVGS[e["source"]]) for e in engines if e["source"] in ENGINE_SVGS]
     if svgs:
+        colors = os.path.join(build, "colors.svg")
+        open(colors, "wb").write(stock["content/display/colors.svg"])
+        for svg in svgs:                                    # TE's subset and its path quirks (notes/svg-route.md)
+            run(sys.executable, os.path.join(ROOT, "design", "fx", "check_svg.py"), svg, colors)
         run(sys.executable, os.path.join(ROOT, "design", "fx", "svg_cells.py"), "--check", *svgs)
 
     image = os.path.join(ROOT, "firmware", "images", f"{a.name}.OP1")

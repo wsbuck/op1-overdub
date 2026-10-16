@@ -9,7 +9,8 @@ fill and every single stroke must stay below 15 x 256 = 3840 cells.
 Model (Hypothesis, calibrated against the screens that render): AGG makes one cell per panel pixel an edge passes
 through, so an edge costs about |dx| + |dy| + 1 cells in panel pixels (1.175 per SVG unit). A fill costs its edges (all
 subpaths together: one rasterization), a stroke its outline: both sides of every segment, plus about one stroke width
-per join and per cap (round caps and joins a little more). Curves are flattened. cells(svg, state) takes a
+per join and per cap (round caps and joins a little more); an open subpath followed by M is closed, as TE's parser
+does (notes/svg-route.md "Path quirks"). Curves are flattened. cells(svg, state) takes a
 gen_crush3d.py runtime_state dict ({id: {"hide", "m"}}): hidden nodes cost nothing, matrices replace the node's
 transform and compose with the parents'.
 """
@@ -122,7 +123,8 @@ def element_cells(el, tag, m):
     if stroke != "none":
         w = float(el.get("stroke-width", "1")) * math.sqrt(abs(m[0] * m[3] - m[1] * m[2])) * PX
         roundish = 1.6 if el.get("stroke-linecap") == "round" else 1.0
-        for pts, closed in sp:
+        for j, (pts, closed) in enumerate(sp):
+            closed = closed or j < len(sp) - 1     # TE closes an open subpath when the next M comes (svg-route.md)
             segs = list(zip(pts, pts[1:] + ([pts[0]] if closed else [])))
             sc += 2 * sum(edge(p, q) for p, q in segs)
             joins = len(segs) - (0 if closed else 1)

@@ -6,7 +6,7 @@ frames: the asset with the runtime's matrices / visibility / recolours applied, 
 
 Knobs (0..1): r = blue RATE, b = green BITS, s = white SQUASH, o = orange GRIT. Live inputs: gr = the compressor's gain
 reduction 0..1 (pumping), t = frame clock (s). runtime_state() is the reference for the C side."""
-import json, math, os, subprocess, sys
+import json, math, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RSVG = "/opt/homebrew/bin/rsvg-convert"
@@ -77,8 +77,57 @@ class N:
         self.a = {k.replace("_", "-"): v for k, v in a.items()}
 
 
+def te_safe_d(d, stroked):
+    """Path data TE's parser draws as written (notes/svg-route.md "Path quirks"): absolute M, L and Z only (H / V become
+    L), and, in a stroked path with several subpaths, every open subpath a single segment: TE closes each open subpath
+    with a line back to its start when the next M comes, which retraces a single segment but chords a polyline."""
+    toks = re.findall(r"[MLHVZmlhvz]|-?\d*\.?\d+", d)
+    subs, cur, x, y, cmd, i = [], None, 0.0, 0.0, "M", 0
+    while i < len(toks):
+        t = toks[i]
+        if t in "MLHVZ":
+            cmd, i = t, i + 1
+            if t == "Z":
+                if cur:
+                    subs.append((cur, True))
+                    x, y = cur[0]
+                cur = None
+            continue
+        if t.isalpha():
+            raise ValueError(f"relative command {t} in {d[:40]}")
+        if cmd == "M":
+            if cur:
+                subs.append((cur, False))
+            x, y = float(toks[i]), float(toks[i + 1])
+            cur, i, cmd = [(x, y)], i + 2, "L"
+        elif cmd == "L":
+            x, y = float(toks[i]), float(toks[i + 1])
+            cur.append((x, y))
+            i += 2
+        elif cmd == "H":
+            x = float(t)
+            cur.append((x, y))
+            i += 1
+        else:
+            y = float(t)
+            cur.append((x, y))
+            i += 1
+    if cur:
+        subs.append((cur, False))
+    if stroked and len(subs) > 1:
+        split = []
+        for pts, closed in subs:
+            if closed or len(pts) <= 2:
+                split.append((pts, closed))
+            else:
+                split += [([p, q], False) for p, q in zip(pts, pts[1:])]
+        subs = split
+    return " ".join("M" + " L".join(f"{f(px)} {f(py)}" for px, py in pts) + (" Z" if closed else "") for pts, closed in subs)
+
+
 def path(id, d, **a):
-    return N("path", id, d=d, **a)
+    stroked = a.get("stroke", "none") != "none"
+    return N("path", id, d=te_safe_d(d, stroked), **a)
 
 
 # ------------------------------------------------------------------ geometry builders

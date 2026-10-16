@@ -62,6 +62,26 @@ def main():
                 bad = set(re.findall(r"[A-Za-z]", v)) - set("MLHVCSZmlhvcsz")
                 if bad:
                     errs.append(f"{where}: path commands {sorted(bad)} not supported")
+                # TE's parser quirks (notes/svg-route.md "Path quirks"): H / V and relative commands are drawn wrongly
+                # (stray joins on the device, CRUSH7); every M after the first closes the open subpath before it with
+                # a line back to its start, so in a stroked path an open subpath of more than one segment gets a chord
+                rel = set(re.findall(r"[hvmlcsz]", v))
+                if rel:
+                    errs.append(f"{where}: relative path commands {sorted(rel)}: use absolute ones")
+                subs = [x for x in re.split(r"(?=M)", v.strip()) if x.strip()]
+                if any(re.search(r"[HV]", sp) and "Z" not in sp for sp in subs[:-1]):
+                    errs.append(f"{where}: an open subpath with H / V followed by M: TE joins it to the next subpath "
+                                "(CRUSH7); use L, or close it (pedals' closed H / V shapes are fine)")
+                if el.get("stroke", "none") != "none":
+                    if len(subs) > 1:
+                        for sp in subs:
+                            if "Z" not in sp and len(re.findall(r"[LC]", sp)) + len(re.findall(r"[HV]", sp)) > 1:
+                                errs.append(f"{where}: stroked open subpath of several segments followed by M (TE "
+                                            f"closes it with a chord): {sp[:40].strip()}..")
+                                break
+            if k == "stroke-linejoin" and v not in ("miter", "round", "belvel"):
+                errs.append(f"{where}: stroke-linejoin {v!r}: TE knows miter, round and 'belvel' (its spelling; "
+                            "'bevel' is not recognised)")
             if k == "transform":
                 for fn, args in re.findall(r"(\w+)\(([^)]*)\)", v):
                     if fn not in ("matrix", "translate", "scale"):

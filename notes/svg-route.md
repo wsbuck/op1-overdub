@@ -104,6 +104,30 @@ Marks: **Verified** = read at the call site or in the disassembly; **Confirmed**
     4. `FUN_01a3b4c8` last.
 - **Delay** (`0x01984F3C`): 4 text nodes, `+0x50` toggles for the tempo and mode marks, one `FUN_019ead58`.
 
+## Path quirks (TE's `d` parser, `0x019FCA1C`; command switch `0x019FCACC`, table `0x018F13A0` by toupper(c) - 'C')
+Found 2026-10-15 from CRUSH7's photo (stray lines) and the parser. **Verified** = read in the disassembly.
+- Path object: `[+0]`/`[+4]` current point, `[+8]`/`[+0xC]` start of the current subpath, `B[+0x14]` closed flag.
+  move_to `0x01A070A4`, line_to `0x01A0712C` (skips a segment shorter than a minimum, `[0x01DE2E48]`, without moving
+  the current point), close `0x01A0722E` (sets the flag, line_to back to the start). **Verified**.
+- **Every M after the first closes the subpath before it** (`[FP - 0x2C]` counts the Ms; M calls `0x01A0722E` when it
+  is not the first). So in a stroked path with several subpaths, an open subpath of several segments gets a chord
+  back to its start; a single segment just retraces itself (pingpong's `bricks`, pedals' `rays` render right).
+  **Verified**. The last subpath is not closed (the parser returns at the string end). **Verified**.
+- Z calls the same close. Fills close every subpath anyway.
+- **H / V in an open subpath followed by M: on the device the subpath's end is joined to the next M's point** (the
+  sand lines and voxel edges of CRUSH7, photo). H takes y from the current point, V takes x from it (the absolute V
+  builds its point in the caller's argument slots `[FP + 8]`). Why the join happens: **Hypothesis** (not pinned in the
+  code); closed H / V shapes render right (pedals' rounded rects and `grooves`).
+- Relative commands: handled through a separate offset path (H / V relative read the other coordinate from a global,
+  `[0x01DDD564]`); avoid.
+- `stroke-linejoin`: TE's keywords are `miter`, `round` and **`belvel`** (sic); `bevel` is not recognised.
+- Rules (`design/fx/check_svg.py`, run by build.py on every published SVG): absolute commands only; no H / V in an
+  open subpath followed by M; in a stroked path with several subpaths every open subpath is one segment; joins as
+  above. The generators (gen_crush.py `te_safe_d`) write M / L / Z only and split stroked polylines into segments.
+- The cell model (svg_cells.py) counts the implicit close. With the observed joins, crush3d.svg's heaviest stroke was
+  ~22.6 k cells in CRUSH4, ~7.2 k in CRUSH5 (both asserted) and ~3.8 k in CRUSH6/7 (just under 3840: drawn, no
+  assert): the device results line up.
+
 ## Cost (Hypothesis; measure before relying on it)
 - **Hard limit, not cost: every fill and every stroke must stay under ~3840 AGG cells** (notes/screen.md "AGG cell
   limit"); over it the OP-1 asserts (agg.cpp:339). `design/fx/svg_cells.py --check` estimates it (build.py runs it).
