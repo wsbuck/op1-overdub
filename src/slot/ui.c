@@ -1606,8 +1606,8 @@ enum { P_TOP, P_LEGL, P_LEGR, P_PADL, P_PADR, P_BATL, P_BATR, P_BALL, P_SHADE, P
 static const char *const pp_ids[P_KINDS] = { "tabletop", "legL", "legR", "padL", "padR", "batL", "batR", "ball",
     "ballshade", "ballglint", "glow", "shadow", "table", "wall" };
 #define PIPS 11
-#define PP_PIVOT_X 24                                               /* the paddles turn about their handle ends: */
-#define PP_PIVOT_Y 109                                              /* (24, 109) and (296, 109) (pingpong.svg) */
+#define PP_PIVOT_X 21                                               /* the paddles turn about their handle ends: */
+#define PP_PIVOT_Y 111                                              /* (21, 111) and (299, 111) (pingpong.svg) */
 static struct svgdoc tennis RAM = { 0, 0 };
 static void *pp_node[P_KINDS] RAM = { 0 };
 static struct recol pp_ball RAM = { 0, { 0 } };

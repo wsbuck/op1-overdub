@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+volatile int32_t te_tempo_spb = 22050 << 14;    /* pingpong.c: TE's tempo word (0x01AADAD8 on the device), 120 BPM */
+
 typedef void (*entry_t)(void);
 int fx_abi_call(entry_t entry, void *self, void *a1, void *a2, void *a3);
 extern void ensemble_mono_entry(void), ensemble_stereo_entry(void), pingpong_mono_entry(void),
