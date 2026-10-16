@@ -1280,3 +1280,32 @@
 - Result (2026-10-16, device): no assert, but still diagonal lines and some black triangles on the crush screen. The
   parser model above is incomplete; CRUSH9 (78) stops relying on path semantics (one subpath per element) and adds a
   test card for ground truth.
+
+## 2026-10-16 — Test image 78: CRUSH9.OP1 (one subpath per element, boot test card)
+- CRUSH8 (77) still showed diagonals and black triangles, so this image stops relying on TE's path semantics and
+  collects ground truth (notes/svg-route.md "Path quirks", notes/fx-crush.md "Screen"):
+  - crush3d.svg has no compound paths: every element is one subpath (`check_svg.py --strict`, required by build.py).
+    Multi-subpath ids became groups of `id_1`, `id_2`, ..; voxel edges simplified (one outline polyline and one front
+    vertical per tier, every second joint). 298 drawable elements, 362 ids, 46 KB; 23 .. 133 drawn per frame (73 at
+    the default); heaviest stroke faceL ~1052 cells (27 %). No node or pool count limit found in TE's parser (TE's
+    lander.svg: 885 elements). Marker `cells4`.
+  - Test card `crushcard.svg` (design/fx/gen_card.py): 18 numbered cases, each with its expected result drawn beside
+    it in thin grey lines by the C (not through TE's parser). Shown for 360 frames (~12 s) on the first open of the
+    crush screen after boot, then the normal screen.
+  - Other SVGs that would fail `--strict` (not converted): pedals 9 elements, pingpong 13, choir 19, fm4 12.
+- `firmware/images/CRUSH9.OP1` = CRUSH8's command (`--svg-cost`, all engines and trims, all FX, no
+  `--staged-screens`), `--name CRUSH9`, from commit 3dd52c2 in a clean `git archive`; te-boot identical to stock.
+  sha256 0125ea0e6dbe61e49275186591ff32b38525457501c8e7116ccb4151431ce32c.
+- **What to photograph**:
+  1. Power on; select crush as synth FX, knobs at the default; open the FX screen. **The test card appears for ~12 s:
+     photograph it straight on, the whole screen sharp (all 18 numbers readable).** In each cell the left shape is
+     TE's rendering and the thin grey outline on the right is what it should look like. Cases: 1 polyline M L L;
+     2 two polylines in one path; 3 three single segments; 4 open H / V; 5 open H, H, V after Ms; 6 closed H / V
+     filled; 7 two closed squares filled; 8 closed triangle then open V; 9 square with a hole; 10 polygon; 11
+     polyline; 12 line and stroked rect; 13 / 14 / 15 acute angle, miter / round / belvel; 16 strokes 0.5 and 0.8;
+     17 group matrix (should be half size); 18 recolour (should be green). Two photos if one is not sharp.
+  2. **Then photograph the normal screen at the default** (after the card goes): the stepped pyramid, RATE 11 kHz.
+  3. Optional: RATE at detents 0 / 18 / 25, BITS at 25 / 32, GRIT at max while playing; the `--svg-cost` number
+     (bottom right) at the default and at the busiest state.
+- Recovery: power-cycle (the card shows once per boot); CRUSH1 (69) is the safe fallback.
+- Result: _pending user flash_.
