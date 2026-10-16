@@ -144,7 +144,9 @@ void te_line(void *raster, const int32_t *a, const int32_t *b, int32_t width, co
 const uint8_t fx_kind[4] = { 1, 2, 3, 4 };
 const int32_t fx_count = 4;
 /* crush: the real crush.c (linked by preview.py) runs on silence until its knob smoothing has settled, so crush_state
- * holds what the device would publish; CRUSH_GR (0 .. 32767) then sets the gain reduction (silence gives none). */
+ * holds what the device would publish; then CRUSH_GR (0 .. 32767) sets the gain reduction and CRUSH_LEVEL the input
+ * level (silence gives none of either), CRUSH_FLIPS adds that many bit flips per frame, CRUSH_TURN=frame:knob:value
+ * turns a raw knob before that frame (the readout). */
 void crush_mono(void *self, int16_t *buf, const int16_t *p);
 void crush_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
 static void crush_settle(void)
@@ -156,8 +158,23 @@ static void crush_settle(void)
         crush_mono(0, l, host_knobs);
         crush_stereo(0, l, r, host_knobs);
     }
-    const char *g = getenv("CRUSH_GR");
+    const char *g = getenv("CRUSH_GR"), *lv = getenv("CRUSH_LEVEL");
     crush_state[0].gr = crush_state[1].gr = g ? atoi(g) : 0;
+    crush_state[0].level = crush_state[1].level = lv ? atoi(lv) : 0;
+}
+
+static void crush_frame(int i)
+{
+    const char *fl = getenv("CRUSH_FLIPS"), *t = getenv("CRUSH_TURN");
+    if (fl)
+        for (int s = 0; s < 2; s++)
+            crush_state[s].flips += (uint32_t)atoi(fl);
+    if (t && atoi(t) == i) {
+        host_knobs[atoi(strchr(t, ':') + 1)] = (int16_t)atoi(strrchr(t, ':') + 1);
+        uint32_t fl = crush_state[0].flips;
+        crush_settle();                    /* the DSP follows the turn (the readout shows the new value) */
+        crush_state[0].flips = crush_state[1].flips = fl;
+    }
 }
 struct ens { uint32_t lfo, vib; int32_t depth, vdepth, ens, mix; int32_t d[2][3]; };
 struct ens ensemble_state[2] = { { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } }, { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } } };
@@ -384,6 +401,8 @@ int main(int argc, char **argv)
             if (i == frames - 1)
                 host_drawing = 1;
             host_tick(i);
+            if (e % 100 == 11)
+                crush_frame(i);
             fx_ui_draw(e % 100, e >= 200 ? 0 : 3, 0);
         }
     }

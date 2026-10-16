@@ -2,5 +2,5 @@
   {"name": "ensemble", "source": "ensemble", "default": [13600, 16000, 0, 16384, 0, 0, 0, 0], "aliases": ["ens"]},
   {"name": "pingpong", "source": "pingpong", "default": [22000, 14000, 12000, 10000, 0, 0, 0, 0], "ram": "0x01E80000", "ram_size": "0x60000"},
   {"name": "distortion", "source": "distortion", "default": [16000, 16384, 7475, 32767, 0, 0, 0, 0], "aliases": ["drive"]},
-  {"name": "crush", "source": "crush", "default": [10000, 12000, 12000, 3000, 0, 0, 0, 0]}
+  {"name": "crush", "source": "crush", "default": [10240, 12288, 10240, 0, 0, 0, 0, 0]}
 ]

@@ -1915,28 +1915,36 @@ static const struct { const char *id; uint8_t stroke, role; } pyr_rc_ids[] = {
 #define CP_DARKBLUE 0x383572
 #define CP_OFFBLUE 0x1D2040
 #define CP_GREEN 0x00ED95
-static const uint32_t pyr_pal[4][RL_N] = {
+static const uint32_t pyr_pal[4][RL_N] = {     /* neutral family; green only as BITS's rim; white only for SQUASH */
     { CP_PURPLEGREY, CP_GREY, CP_GREY, CP_LPG, CP_OFFGREY, CP_DARKBLUE, CP_DARKBLUE, CP_DARKBLUE, CP_OFFBLUE, CP_OFFBLUE,
       CP_GREY, CP_OFFGREY },
-    { CP_LPG, CP_OFFGREY, CP_OFFGREY, CP_WHITE, CP_BLACK, CP_BLACK, CP_DARKBLUE, CP_DARKBLUE, CP_DARKBLUE, CP_BLACK,
-      CP_GREY, CP_GREY },
-    { CP_WHITE, CP_OFFGREY, CP_OFFGREY, CP_WHITE, CP_OFFGREY, CP_BLACK, CP_GREY, CP_OFFGREY, CP_OFFGREY, CP_BLACK,
-      CP_WHITE, CP_BLACK },
-    { CP_WHITE, CP_OFFGREY, CP_GREEN, CP_WHITE, CP_OFFGREY, CP_BLACK, CP_WHITE, CP_WHITE, CP_OFFGREY, CP_BLACK,
-      CP_WHITE, CP_BLACK } };
+    { CP_LPG, CP_OFFGREY, CP_OFFGREY, CP_LPG, CP_BLACK, CP_BLACK, CP_GREY, CP_DARKBLUE, CP_DARKBLUE, CP_BLACK, CP_GREY,
+      CP_GREY },
+    { CP_LPG, CP_BLACK, CP_BLACK, CP_LPG, CP_OFFGREY, CP_BLACK, CP_GREY, CP_OFFGREY, CP_OFFGREY, CP_BLACK, CP_LPG,
+      CP_BLACK },
+    { CP_LPG, CP_BLACK, CP_GREEN, CP_LPG, CP_OFFGREY, CP_BLACK, CP_GREY, CP_OFFGREY, CP_OFFGREY, CP_BLACK, CP_LPG,
+      CP_BLACK } };
 /* Falling debris (header table, Q10): fall DX DY, ground shadow start GX GY and landing LX LY; 1 / period (Q16). */
 static const int32_t pyr_deb[4][6] = {
     { -31406, 43612, 122295, 109568, 90889, 107796 }, { 5734, 41441, 219224, 102400, 224963, 110848 },
     { -31406, 22979, 99215, 111268, 67809, 109496 }, { 5734, 66191, 191539, 104448, 197263, 112896 } };
-static const uint32_t pyr_deb_inv[4] = { 65536, 56014, 48908, 43401 };   /* 1 / (1 + 0.17 i) s */
-static const int16_t pyr_crack[6] = { 2621, 6554, 10486, 14746, 19005, 23593 };   /* o >= .08 .2 .32 .45 .58 .72 */
-static const int16_t pyr_debris_on[4] = { 14746, 19251, 23757, 28262 };            /* nd = ceil((o - .45) / .55 * 4) */
+static const uint32_t pyr_deb_rate[4] = { 2185, 1867, 1630, 1447 };  /* 1 / (30 fps x (1 + 0.17 i) s), Q16 */
+static const int16_t pyr_crack[6] = { 3277, 8192, 16384, 19661, 24576, 29491 };    /* o >= .1 .25 .5 .6 .75 .9 */
+static const int16_t pyr_debris_on[4] = { 16384, 20480, 24576, 28672 };            /* nd = ceil((o - .5) / .5 * 4) */
+static const int16_t pyr_rate_lvl[4] = { 4096, 10240, 18432, 25600 };              /* voxel levels: RATE detents */
 static struct svgdoc pyramid RAM = { 0, 0 };
 static void *pyr_node[P_SINGLE] RAM = { 0 };
 static void *pyr_multi_node[PA_N] RAM = { 0 };
 static struct recol pyr_rc[PYR_RC] RAM = { { 0, { 0 } } };
 static int32_t pyr_look RAM = -1;
 static uint32_t pyr_frame RAM = 0;
+static uint32_t pyr_deb_start[4] RAM = { 0 };     /* frame a debris fall started, 0 = idle */
+/* The value readout: the knob turned last (raw change >= 512), until which frame, per screen context. */
+static int32_t pyr_ctx RAM = -1;
+static int16_t pyr_ref[4] RAM = { 0 };
+static int32_t pyr_shown RAM = 0;
+static uint32_t pyr_until RAM = 0;
+static uint32_t pyr_flips[2] RAM = { 0 };         /* crush_state flips at the last frame, per instance */
 
 static int pyramid_ready(void)
 {
@@ -1953,21 +1961,90 @@ static int pyramid_ready(void)
     return 1;
 }
 
-static void draw_pyramid(void *r, const int16_t *kraw, int stereo)
+/* "RATE 11.0KHZ", "BITS 8 MU-LAW", "SQUASH 4:1", "GRIT FLIP": the knob's value as the DSP has it. */
+static char *put_frac(char *p, uint32_t v, uint32_t div)     /* v / div with log10(div) decimals, v already rounded */
+{
+    uint32_t w = udiv(v, div), f = v - w * div;
+    p = put_dec(p, w);
+    *p++ = '.';
+    if (div == 100 && f < 10)
+        *p++ = '0';
+    return put_dec(p, f);
+}
+
+static void crush_readout(char *p, int knob, const struct crush *st, const int32_t *k)
+{
+    if (knob == 0) {
+        uint32_t hz = st ? (uint32_t)st->rate_hz : 44100;
+        p = put_str(p, "RATE ");
+        if (hz >= 10000)
+            put_str(put_frac(p, udiv(hz + 50, 100), 10), "KHZ");          /* 11.0KHZ */
+        else if (hz >= 1000)
+            put_str(put_frac(p, udiv(hz + 5, 10), 100), "KHZ");           /* 5.51KHZ */
+        else
+            put_str(put_dec(p, hz), "HZ");
+    } else if (knob == 1) {
+        int32_t nb = st ? st->bits_q12 : 16 << 12, w = (nb + 2048) >> 12, f = nb - (w << 12);
+        p = put_str(p, "BITS ");
+        if (f >= -204 && f <= 204)                                         /* on a whole bit (the plateaus) */
+            p = put_dec(p, (uint32_t)w);
+        else
+            p = put_frac(p, (uint32_t)((nb * 10 + 2048) >> 12), 10);
+        if (st && st->mu > 8192)
+            put_str(p, " MU-LAW");
+    } else if (knob == 2) {
+        int32_t sq = k[2], c = (31130 * ((sq * (65536 - sq)) >> 15)) >> 15;   /* crush.c's slope 1 - 1 / ratio */
+        p = put_str(p, "SQUASH ");
+        if (!sq)
+            put_str(p, "OFF");
+        else {
+            uint32_t t = udiv(327680u + (uint32_t)((32768 - c) >> 1), (uint32_t)(32768 - c));   /* ratio x 10 */
+            put_str(t >= 100 ? put_dec(p, udiv(t + 5, 10)) : put_frac(p, t, 10), ":1");
+        }
+    } else
+        put_str(p, k[3] == 0 ? "GRIT OFF" : k[3] <= 16384 ? "GRIT JITTER" : "GRIT FLIP");
+}
+
+static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
 {
     const struct crush *st = crush_state ? &crush_state[stereo] : 0;
     int32_t k[4];
     for (int i = 0; i < 4; i++)
         k[i] = st ? st->k[i] : knob_pos(kraw[i]);
-    int32_t rr = k[0], b = k[1], s = k[2], o = k[3];
-    /* bit depth (Q12) and the mu-law flag as the DSP has them; without the DSP state, the design's own mapping */
-    int32_t nb = st ? st->bits_q12 : 65536 - ((15 * b) >> 3);
-    int mu = st ? st->mu > 16384 : b >= 13107 && b <= 19661;
+    int32_t rr = k[0], s = k[2], o = k[3];
+    /* bit depth (Q12) and mu-law as the DSP has them (without the DSP state: pristine) */
+    int32_t nb = st ? st->bits_q12 : 16 << 12;
+    int mu = st && st->mu > 8192;
     int32_t gr = st ? st->gr : 0;
+    int live = !st || st->level > 33;                            /* something is playing (> -60 dBFS) */
+    uint32_t df = st ? st->flips - pyr_flips[stereo] : 0;        /* flips since the last frame (the DSP counts flip
+                                                                  * events on its clock; they only act on sound) */
+    if (!live)
+        df = 0;
+    if (st)
+        pyr_flips[stereo] = st->flips;
     uint32_t f = ++pyr_frame;
 
-    /* blue RATE: one voxel level replaces the smooth pyramid */
-    int lvl = rr < 3932 ? 0 : rr < 13107 ? 1 : rr < 21299 ? 2 : rr < 27853 ? 3 : 4;
+    /* the readout: a knob moved >= 512 raw shows its value ~1.5 s (not on entering the screen or another sound) */
+    if (ctx != pyr_ctx) {
+        pyr_ctx = ctx;
+        pyr_until = f;
+        for (int i = 0; i < 4; i++)
+            pyr_ref[i] = kraw[i];
+    }
+    for (int i = 0; i < 4; i++) {
+        int32_t d = kraw[i] - pyr_ref[i];
+        if (d >= 512 || d <= -512) {
+            pyr_ref[i] = kraw[i];
+            pyr_shown = i;
+            pyr_until = f + 45;
+        }
+    }
+
+    /* blue RATE: one voxel level replaces the smooth pyramid, from RATE detents 4 / 10 / 18 / 25 */
+    int lvl = 0;
+    for (int i = 0; i < 4; i++)
+        lvl += rr >= pyr_rate_lvl[i];
     show(pyr_node[P_SMOOTH], lvl == 0);
     for (int i = 0; i < 4; i++)
         show(pyr_multi_node[PA_VOX + i], i + 1 == lvl);
@@ -1976,9 +2053,8 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo)
     for (int i = 0; i < 4; i++)
         show(pyr_multi_node[PA_C + i], !mu && i + 1 <= tiers);
     show(pyr_node[P_CMU], mu);
-    static const int32_t hole_at[3] = { 8 << 12, 5 << 12, 3 << 12 };
     for (int i = 0; i < 3; i++) {
-        int on = nb <= hole_at[i];
+        int on = i == 0 ? nb < 8 << 12 : nb <= (i == 1 ? 5 : 3) << 12;
         show(pyr_multi_node[PA_H + i], on);
         show(pyr_multi_node[PA_HW + i], on);
         show(pyr_multi_node[PA_HF + i], on);
@@ -1994,11 +2070,11 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo)
     }
 
     /* white SQUASH: squat (at least 60 % of the height) and widen about the base centre, pumping with the gain
-     * reduction; orange GRIT: the whole pyramid trembles with the clock jitter */
+     * reduction; orange GRIT: the whole pyramid trembles with the clock jitter while something plays */
     int32_t q = (s * (14746 + ((18022 * gr) >> 15))) >> 15;                  /* s (0.45 + 0.55 gr) */
     int32_t sy = 1024 - ((q * 410) >> 15), sx = 1024 + ((q * 184) >> 15);
-    int32_t dx = o > 1638 ? ((512 + ((1536 * o) >> 15)) * jit(f, 1, (10 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
-    int32_t dy = o > 9830 ? (((614 * o) >> 15) * jit(f, 2, (14 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
+    int32_t dx = o > 1638 && live ? ((512 + ((1536 * o) >> 15)) * jit(f, 1, (10 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
+    int32_t dy = o > 9830 && live ? (((614 * o) >> 15) * jit(f, 2, (14 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
     set_matrix(pyr_node[P_PYR], sx, 0, 0, sy, 160 * (1024 - sx) + dx, 104 * (1024 - sy) + dy);
     show(pyr_node[P_PRESS], s >= 655);
     int32_t top = nb <= 6144 ? 44616 : nb <= 3 << 12 ? 34303 : 23989;      /* what is left of the apex (Q10) */
@@ -2006,34 +2082,45 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo)
     show(pyr_node[P_PUFF], s >= 655 && gr > 18022);
     set_matrix(pyr_node[P_PUFF], sx, 0, 0, sy, 160 * (1024 - sx), 104 * (1024 - sy));
 
-    /* orange GRIT: cracks, notches, falling debris (with ground shadows), XOR slices shifted out */
+    /* orange GRIT: cracks and notches show the amount (static); the DSP's bit flips shed debris (a fall starts on a
+     * frame with flips) and shift XOR slices (more flips, more slices) */
     for (int i = 0; i < 6; i++)
         show(pyr_multi_node[PA_K + i], o >= pyr_crack[i]);
-    show(pyr_node[P_CH1], o >= 9830);
-    show(pyr_node[P_CH2], o >= 20316);
-    show(pyr_node[P_CHR], o >= 20316);
-    uint32_t t16 = f * 2185u;                                                /* seconds, Q16 (30 fps) */
+    show(pyr_node[P_CH1], o >= 16384);
+    show(pyr_node[P_CH2], o >= 24576);
+    show(pyr_node[P_CHR], o >= 24576);
+    int spawned = 0;
     for (int i = 0; i < 4; i++) {
-        uint32_t ph = (t16 + 26870u * (uint32_t)i) * pyr_deb_inv[i];        /* frac((t + 0.41 i) / T), Q32 */
-        int32_t u = (int32_t)(((ph >> 16) * 5) >> 2);                        /* x 1.25, Q16 */
-        int on = o > pyr_debris_on[i] && u <= 65536;
+        int slot = o > pyr_debris_on[i];
+        uint32_t u = pyr_deb_start[i] ? (f - pyr_deb_start[i]) * pyr_deb_rate[i] : 0;   /* Q16 */
+        if (pyr_deb_start[i] && (u > 81920 || !slot))
+            pyr_deb_start[i] = 0;                                   /* fell and rested a quarter period: idle */
+        if (!pyr_deb_start[i] && slot && df && !spawned) {
+            pyr_deb_start[i] = f;
+            u = 0;
+            spawned = 1;
+        }
+        int on = pyr_deb_start[i] && u <= 65536;
         show(pyr_multi_node[PA_D + i], on);
         show(pyr_multi_node[PA_DS + i], on);
         if (!on)
             continue;
-        int32_t u10 = u >> 6, u2 = (u10 * u10) >> 10;
+        int32_t u10 = (int32_t)(u >> 6), u2 = (u10 * u10) >> 10;
         const int32_t *d = pyr_deb[i];
         translate(pyr_multi_node[PA_D + i], (d[0] * u10) >> 10, (d[1] * u2) >> 10);
         int32_t sc = 358 + ((666 * u10) >> 10);
         int32_t X = d[2] + (((d[4] - d[2]) * u10) >> 10), Y = d[3] + (((d[5] - d[3]) * u10) >> 10);
         set_matrix(pyr_multi_node[PA_DS + i], sc, 0, 0, sc, X - ((sc * d[2]) >> 10), Y - ((sc * d[3]) >> 10));
     }
-    int32_t pon = o > 19661 ? ((o - 19661) * 5) >> 1 : 0;                   /* (o - 0.6) / 0.4 */
-    int32_t amp = 4096 + ((14336 * o) >> 15);                                /* 4 + 14 o, Q10 */
+    int ns = !df ? 0 : df < 3 ? 1 : df < 7 ? 2 : 3;
+    if (nb <= 3 << 12 && o > 19661 && ns > 2)
+        ns = 2;                                                     /* the busiest state: at most 2 slices */
+    int start = (int)(((jit(f, 10, 7 << 8) + 32768) * 3) >> 16);    /* 0 .. 2 */
+    int32_t amp = 4096 + ((14336 * o) >> 15);                        /* 4 + 14 o, Q10 */
     for (int i = 0; i < 3; i++) {
-        uint32_t rate = (uint32_t)(7 + 9 * i) << 8;
-        show(pyr_multi_node[PA_G + i], (jit(f, 10 + i, rate) + 32768) >> 1 < ((pon * 27853) >> 15));
-        int32_t n = jit(f, 20 + i, rate), an = n < 0 ? -n : n;
+        int j = i - start < 0 ? i - start + 3 : i - start;
+        show(pyr_multi_node[PA_G + i], j < ns);
+        int32_t n = jit(f, 20 + i, (uint32_t)(7 + 9 * i) << 8), an = n < 0 ? -n : n;
         int32_t a = (amp * (13107 + ((19661 * an) >> 15))) >> 15;
         translate(pyr_multi_node[PA_GS + i], n >= 0 ? a : -a, 0);
     }
@@ -2042,6 +2129,12 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo)
     translate(pyr_node[P_FARG], -((3 * w) >> 5), 0);
     translate(pyr_node[P_SUN], -((3 * w) >> 6), 0);
     svg_render(pyramid.doc);
+    if ((int32_t)(pyr_until - f) > 0) {                             /* the value readout, title position */
+        char buf[28];
+        crush_readout(buf, pyr_shown, st, k);
+        text(r, buf, FP(8), FP(7), FP(3) >> 1,                 /* 1.5: ends before SQUASH's press and stem */
+             pyr_shown == 0 ? BLUE : pyr_shown == 1 ? GREEN : pyr_shown == 2 ? WHITE : ORANGE);
+    }
     svg_cost(r);
 }
 
@@ -2071,7 +2164,7 @@ void fx_ui_draw(int id, int mode, int slot)
     }
     else if (kind == FX_CRUSH) {
         if (pyramid_ready())
-            draw_pyramid(r, k, mode == 3);
+            draw_pyramid(r, k, mode == 3, mode << 4 | slot);
         else
             draw_crush(r, k, mode == 3);
     }

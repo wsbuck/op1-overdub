@@ -21,19 +21,41 @@ import numpy as np
 from crushsim import FS, SLOT, rms_db, run, saw, sine
 
 BIG = 32767
+RDET = (0, 4, 5, 10, 15, 20, 25, 32)
+BDET = (0, 1, 2, 3, 4, 8, 12, 16, 18, 20, 25, 32)
 TYPICAL_BUDGET = 18000            # stereo, per call, typical settings (distortion: ~29k typical)
-WORST_BUDGET = 30000              # stereo, any setting (distortion: 44.5k worst)
+WORST_BUDGET = 37000              # stereo, any setting (distortion: 44.5k worst); two-way jitter at RATE 0 is the top
 N = 8820                          # analysis length (0.2 s)
 
 
+# the DSP's knob maps (crush.c rate_raw / rate_oct, bits_raw / bits_k / bits_mu): anchors, +-200 raw plateaus
+RATE_ANCH = [(0, 0.0), (3896, 0.76), (4296, 0.76), (5120, 1.0), (25600, 5.0), (32767, 6.785)]
+BITS_CENTRES = [(0, 16, 0), (1024, 15, 0), (2048, 14, 0), (3072, 13, 0), (4096, 12, 0), (6144, 11, 0), (8192, 10, 0),
+                (10240, 9, 0), (12288, 8, 0), (16384, 8, 1), (18432, 7, 0.5), (20480, 6, 0), (22938, 5, 0),
+                (25600, 4, 0), (27853, 3, 0), (30310, 2, 0), (32767, 1, 0)]
+
+
 def rate_k(hz):
-    """RATE knob for a hold rate in Hz: 44.1 kHz * 2^(-6.785 k)."""
-    return int(round(np.log2(44100 / hz) / 6.785 * 32768))
+    """RATE knob for a hold rate in Hz (inverse of the anchor map; on the 26.04 kHz plateau for 26040)."""
+    e = np.log2(44100 / hz)
+    for (x0, e0), (x1, e1) in zip(RATE_ANCH, RATE_ANCH[1:]):
+        if e <= e1 and e1 > e0:
+            return int(round(x0 + (x1 - x0) * (e - e0) / (e1 - e0)))
+    return BIG
 
 
 def bits_k(b):
-    """BITS knob for b bits: 16 -> 7 over the first half, 7 -> 1 over the second."""
-    return int(round((16 - b) / 18 * 32768)) if b >= 7 else min(BIG, int(round((0.5 + (7 - b) / 12) * 32768)))
+    """BITS knob for b bits (outside the mu-law stretch 12288..20480: there use the knob directly)."""
+    pts = [(x, bb) for x, bb, m in BITS_CENTRES if m == 0 and not 12288 < x < 20480]
+    for (x0, b0), (x1, b1) in zip(pts, pts[1:]):
+        if b1 <= b <= b0:
+            if b == b0:
+                return x0
+            if b == b1:
+                return x1
+            lo, hi = min(BIG, x0 + 200), max(0, x1 - 200)        # between the plateaus
+            return int(round(lo + (hi - lo) * (b0 - b) / (b0 - b1)))
+    return BIG
 
 
 def comp_gain(kb, kr=0):
@@ -101,8 +123,20 @@ def main():
     C["bits_1"] = ("m", (0, BIG, 0, 0), x1k)
     C["bits_1q"] = ("m", (0, BIG, 0, 0), sine(L, 1000, 1500))
     C["mu"] = ("m", (0, 16384, 0, 0), slow)
-    C["mu_q"] = ("m", (0, 16384, 0, 0), quiet)
-    C["lin7_q"] = ("m", (0, bits_k(4), 0, 0), quiet)
+    C["mu_q"] = ("m", (0, 16384, 0, 0), sine(L, 30, 1500))
+    for d in RDET:
+        C[f"rdet_{d}"] = ("m", (min(BIG, 1024 * d), 0, 0, 0), np.zeros(64 * 60))
+    for d in BDET:
+        C[f"bdet_{d}"] = ("m", (0, min(BIG, 1024 * d), 0, 0), np.zeros(64 * 60))
+    for d in (4, 12, 25):
+        C[f"bdeto_{d}"] = ("m", (0, 1024 * d + 180, 0, 0), np.zeros(64 * 60))
+    LM = 64 * 200
+    xml, xq, ramp = sine(LM, 440, 16384), sine(LM, 440, 512), sine(LM, 20, 1500)
+    for d in range(33):
+        k = min(BIG, 1024 * d)
+        C[f"mono_l{d}"] = ("m", (0, k, 0, 0), xml)
+        C[f"mono_q{d}"] = ("m", (0, k, 0, 0), xq)
+        C[f"mono_r{d}"] = ("m", (0, k, 0, 0), ramp)
     # compressor: -6 dBFS for half the run, then -54 dBFS
     burst = sine(L, 1000) * np.where(np.arange(L) < L // 2, 1, 1 / 256)
     C["comp_max"] = ("m", (0, 0, BIG, 0), burst)
@@ -116,6 +150,8 @@ def main():
     C["sizzle_1"] = ("m", (0, 1, 0, 16384), x440)
     for g in (12000, 16384, 24576, BIG):
         C[f"flip_{g}"] = ("m", (0, bits_k(8), 0, g), x1k)
+    C["flip16_half"] = ("m", (0, 0, 0, 16384), x1k)
+    C["flip16_max"] = ("m", (0, 0, 0, BIG), x1k)
     C["flip_silence"] = ("m", (kj, bits_k(6), BIG, BIG), np.zeros(L))
     # level: BITS x RATE grid, two signals
     LV_B = (0, 8192, 16384, 24576, BIG)
@@ -205,14 +241,52 @@ def main():
           f"1 bit: a square at +-{np.abs(v1).max()} (16384 x level compensation = {a1:.0f}), {100 * zero:.0f} % in the "
           f"dead zone (|x| < 1/8 of full scale: 16 % of a -6 dBFS sine); a -27 dBFS sine gates to silence (peak {vq})")
 
-    # ---- mu-law in the middle of BITS ----
+    # ---- mu-law in the middle of BITS: G.711's 8-bit segments on the loud part, the linear 8-bit step below ----
     dq_ = steps(y["mu_q"], 1)
     dm = steps(y["mu"], 16)
-    dl = steps(y["lin7_q"], 1)
-    check(12 <= dq_.min() <= 20 and 1800 <= dm.max() <= 2300,
-          f"mu-law at the centre (7-bit codes, mu 255, G.711 segments): quietest step {dq_.min()} LSB (~"
-          f"{16 - np.log2(dq_.min()):.1f}-bit resolution for quiet signals), largest {dm.max()} (top segment, ~5 bits); "
-          f"linear 4 bits on the same quiet sine: {'silent' if len(dl) == 0 else f'smallest step {dl.min()}'}")
+    check(240 <= dq_.min() <= 270 and 900 <= dm.max() <= 1200 and cyc["mu"][5] == 32768,
+          f"mu-law at the centre (detent 16: 8-bit codes, mu 255): quietest step {dq_.min()} LSB (the linear 8-bit step: "
+          f"turning clockwise never makes quiet tails cleaner), largest {dm.max()} (G.711's top segment, 4x coarser)")
+
+    # ---- detent landings (1 detent = 1024) ----
+    rl = {d: cyc[f"rdet_{d}"][3] for d in RDET}
+    want = {0: 44100, 4: 26040, 5: 22050, 10: 11025, 15: 5512, 20: 2756, 25: 1378, 32: 400}
+    ok = all(abs(rl[d] / want[d] - 1) < (0.03 if d == 32 else 0.01) for d in RDET)
+    check(ok, "RATE detents (5 per octave) 0/4/5/10/15/20/25/32: " + ", ".join(f"{d}:{rl[d]}" for d in RDET)
+          + " Hz (want 44100, 26040 SP-1200 plateau, 22050, 11025, 5512, 2756, 1378, ~400)")
+    bl = {d: (cyc[f"bdet_{d}"][4] / 4096, cyc[f"bdet_{d}"][5] / 32768) for d in BDET}
+    wantb = {0: 16, 1: 15, 2: 14, 3: 13, 4: 12, 8: 10, 12: 8, 16: 8, 18: 7, 20: 6, 25: 4, 32: 1}
+    ok = all(abs(bl[d][0] - wantb[d]) < 0.002 for d in BDET) and bl[16][1] == 1 and bl[12][1] == 0 and bl[20][1] == 0
+    check(ok, "BITS detents: " + ", ".join(f"{d}:{bl[d][0]:.3f}" + ("mu" if bl[d][1] > 0.25 else "") for d in BDET)
+          + " (16..12 one per detent, 10 at 8, 8 at 12, full mu-law at 16, 6 at 20, 4 at 25, 1 at 32; plateaus)")
+    off = {d: cyc[f"bdeto_{d}"][4] / 4096 for d in (4, 12, 25)}
+    check(all(abs(off[d] - wantb[d]) < 0.002 for d in off), "a detent +-180 raw off still lands: " +
+          ", ".join(f"{d}:{v:.3f}" for d, v in off.items()))
+
+    # ---- damage never decreases clockwise along BITS (one point per detent) ----
+    def snr(v, x):
+        t = np.arange(len(x))[-N:]
+        A = np.stack([np.sin(2 * np.pi * 440 * t / FS), np.cos(2 * np.pi * 440 * t / FS)], 1)
+        c, *_ = np.linalg.lstsq(A, v[-N:, 0].astype(float), rcond=None)
+        e = v[-N:, 0] - A @ c
+        r = 10 * np.log10(((A @ c) ** 2).sum() / (e @ e + 1e-9) + 1e-30)
+        return r if r > -50 else -99                                    # gated
+    qs, ls, lq = [], [], []
+    for d in range(33):
+        r_ = y[f"mono_r{d}"][-N:, 0]
+        dd = np.abs(np.diff(r_))
+        dd = dd[dd > 3]
+        qs.append(dd.min() if len(dd) else 1e9)                       # gated: infinitely coarse
+        ls.append(snr(y[f"mono_l{d}"], xml))
+        lq.append(snr(y[f"mono_q{d}"], xq))
+    qok = all(b >= a - 1 for a, b in zip(qs[4:], qs[5:]))           # below 12 bits the 1500-peak ramp shows steps
+    qq = all(b <= a + 0.5 for a, b in zip(lq, lq[1:]))
+    lok = all(b <= a + 2 for a, b in zip(ls[:29], ls[1:29]))       # down to 3 bits (detent 28); below, SNR of a
+    worst = max(b - a for a, b in zip(ls[:29], ls[1:29]))          # near-square says little
+    check(qok and qq and lok, "BITS clockwise = more damage: quietest step per detent " +
+          " ".join("gate" if v >= 1e9 else str(int(v)) for v in qs[4:]) + f" (never finer); quiet -36 dBFS SNR never rises "
+          f"({qq}); loud SNR (-6 dBFS) down to 3 bits never rises by more than 2 dB (largest rise {worst:+.1f} dB, at "
+          "full mu-law)")
 
     # ---- compressor ----
     h = L // 2
@@ -260,6 +334,12 @@ def main():
     dev = np.abs(y[f"flip_{BIG}"][-N:, 0] - y["flip_16384"][-N:, 0]).max()
     check(dev > 4096, f"flips are glitches: largest deviation from GRIT half {dev} LSB")
     check(np.abs(y["flip_silence"]).max() == 0, "silence in, every knob up (flips at max): silence out")
+    def spikes(v):                # samples more than 6000 off the input: a flipped top bit, not jitter
+        return np.mean(np.abs(v[-N:, 0] - np.round(x1k[-N:])) > 6000)
+    sh, sm = spikes(y["flip16_half"]), spikes(y["flip16_max"])
+    check(sh < 0.001 and sm > 0.01 and cyc["flip16_max"][2] > 0, f"flips audible at 16 bits (RATE 0): {100 * sm:.1f} % of "
+          f"samples glitch by > 6000 LSB at GRIT max ({100 * sh:.2f} % with jitter only, GRIT half); "
+          f"{cyc['flip16_max'][2]} flips")
 
     # ---- level ----
     lv = {}

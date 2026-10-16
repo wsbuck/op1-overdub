@@ -18,7 +18,8 @@ struct crush {
     int32_t rate_hz;                    /* sample-and-hold rate, Hz (44100 .. 400) */
     int32_t bits_q12;                   /* bit depth, Q12 (16.0 .. 1.0) */
     int32_t mu;                         /* mu-law share of the quantiser, Q15 (0 .. 32768) */
-    uint32_t flips;                     /* bit flips so far (GRIT upper half), wraps */
+    uint32_t flips;                     /* bit-flip events so far (GRIT upper half; a zero code stays zero), wraps */
+    int32_t level;                      /* input peak per block, smoothed (~12 ms), 0 .. 32767: is anything playing */
     /* ---- DSP state ---- */
     int32_t v1[4], v2[4];               /* knob smoothing: two cascaded one-poles per block */
     int32_t t;                          /* time to the next hold, Q16 samples */

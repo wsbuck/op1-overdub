@@ -3,25 +3,28 @@
  *
  * Chain per channel: compressor -> sample-and-hold -> quantiser (+ bit flips) -> reconstruction low-pass -> DC
  * blocker -> level compensation. Every knob turned fully anticlockwise = clean (the input, bit exact).
- *   blue   RATE: sample-and-hold at 44.1 kHz * 2^(-6.785 k): 44.1 kHz .. 400 Hz, logarithmic. No anti-alias
- *          filter: tones above half the rate fold back and move against the pitch. The clock is a fractional
- *          time counter: each hold samples the input at its exact instant (linear interpolation) and the step lands
- *          between output samples (the edge sample is the box-filtered mix), so the rate sweeps without steps
- *   green  BITS: 16 -> 1 bit, continuous (the step size 2^(16 - b) is scaled, not an integer bit count): 16 -> 7 bits
- *          over the first half, 7 -> 1 over the second. Between 1/4 and 3/4 of the knob the quantiser companding
- *          morphs from linear to mu-law (G.711's segment form, mu 1 -> 256 -> 1; full at the centre: 7-bit codes, the
- *          quietest step 16 LSB, i.e. ~12-bit resolution for quiet signals and ~5 bits at full scale: the companded
- *          early-sampler grain). Mid-tread, no dither: quiet tails gate to zero through stair steps. Below 3 bits the
- *          levels move to mid-rise (1 bit = +-half scale, a square), with a dead zone of 1/8 step so silence stays
- *          silent
+ *   blue   RATE: sample-and-hold 44.1 kHz -> 400 Hz, 5 detents per octave (22.05 k at detent 5, 11.025 k at 10,
+ *          5.5 k at 15, 2.76 k at 20, 1.38 k at 25; the last 7 stretched to 400 Hz) with a plateau on 26.04 kHz
+ *          (SP-1200) at detent 4 (knob maps below). No anti-alias filter: tones above half the rate fold back and move
+ *          against the pitch. The clock is a fractional time counter: each hold samples the input at its exact instant
+ *          (linear interpolation) and the step lands between output samples (the edge sample is the box-filtered mix),
+ *          so the rate sweeps without steps
+ *   green  BITS: 16 -> 1 bit, continuous (the step size 2^(16 - b) is scaled, not an integer bit count), with
+ *          plateaus so the detents land on whole bits: 16 -> 12 at detents 0..4, 12 -> 8 at 4..12, then 8-bit codes
+ *          morphing into mu-law (G.711's segment form, mu 1 -> 256; full at the centre, detent 16: G.711's coarse steps
+ *          on loud parts), back out to linear 6 bits by detent 20, 6 -> 1 at 20..32 (4 bits on detent 25). Quiet
+ *          signals always keep the linear step, so clockwise never makes a quiet tail cleaner. Mid-tread, no dither:
+ *          quiet tails gate to zero through stair steps. Below 3 bits the levels move to mid-rise (1 bit = +-half
+ *          scale, a square), the dead zone staying at 1/8 of full scale so silence stays silent
  *   white  SQUASH: a compressor before the crusher: threshold -6 -> -36 dBFS, ratio 1 -> 20 (slope 0.95 s (2 - s)),
  *          make-up so a -6 dBFS peak keeps its level (up to +28.6 dB for quiet parts: tails are held up into the
  *          low bits, where they crackle), peak detector with instant attack and a release of 150 -> 37 ms that
  *          pumps; stereo linked. Its smoothed gain reduction is crush_state[].gr for the screen
- *   orange GRIT: lower half: jitter on the sample-and-hold clock, up to +-75 % of the period, a smoothed random
- *          walk whose rate goes from ~3 Hz (wobble) to every sample (sizzle). Upper half: jitter stays at full and
- *          XOR bit flips on the held code (sign-magnitude, so no DC): up to 1 in 4 holds, on bits that reach from
- *          the lowest to the top of the code as the knob goes up
+ *   orange GRIT: lower half: jitter on the sample-and-hold clock, the period x (1 +- 0.75), both ways (holds may come
+ *          twice as fast, so it is audible at RATE 0 too), a smoothed random walk from ~3 Hz (wobble) to every sample
+ *          (sizzle). Upper half: jitter stays at full and XOR bit flips on the held code (sign-magnitude, so no DC):
+ *          up to 1 in 4 holds, one bit counted down from the code's top bit, the span growing with the knob (weighted
+ *          to the top), so flips are audible at any bit depth
  * Reconstruction: one-pole low-pass at about half the hold rate (bypassed from 44.1 kHz down to 22 kHz, faded in
  * below), so low rates come out warm. Output level: per-knob compensation tables (BITS and RATE, measured in the
  * simulator), ramped per sample. DC blocker 3.4 Hz (not in the clean path).
@@ -43,17 +46,17 @@
 void crush_mono(void *self, int16_t *buf, const int16_t *p);
 void crush_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
 
-#define CRUSH0 {0, {0, 0, 0, 0}, 44100, 16 << 12, 0, 0, {0, 0, 0, 0}, {0, 0, 0, 0}, ONE, 0, 0, 0, 0x2545F491u, 0, \
+#define CRUSH0 {0, {0, 0, 0, 0}, 44100, 16 << 12, 0, 0, 0, {0, 0, 0, 0}, {0, 0, 0, 0}, ONE, 0, 0, 0, 0x2545F491u, 0, \
                 32768, 8192, 1, {{0, 0, 0, 0}, {0, 0, 0, 0}}}
 struct crush crush_state[2] RAM = {CRUSH0, CRUSH0};
 
 /* Output level compensation per knob (Q12) at k = 0, 2048, .. 32767, linearly interpolated: the inverse of the mean
  * level change measured in the simulator (sines at 1 kHz -6 / -12 dBFS and 440 Hz, saws at 220 / 110 Hz), smoothed;
- * RATE's last point capped at +3 dB (notes/fx-crush.md "Level"). */
+ * RATE capped at +2 dB (notes/fx-crush.md "Level"). */
 static const int16_t comp_bits[17] = {4096, 4096, 4096, 4096, 4096, 4096, 4096, 4096, 4096, 4096, 4096, 4096,
-                                      3976, 3976, 4490, 4096, 2330};
-static const int16_t comp_rate[17] = {4096, 4115, 4129, 4143, 4158, 4187, 4240, 4339, 4491, 4703, 4868, 5039,
-                                      5157, 5277, 5400, 5525, 5786};
+                                      4096, 4049, 3736, 4868, 2330};
+static const int16_t comp_rate[17] = {4096, 4115, 4120, 4134, 4148, 4182, 4216, 4294, 4414, 4596, 4868, 5039,
+                                      5098, 5098, 5157, 5157, 5157};
 
 static inline int32_t kn(int16_t k)
 {
@@ -145,21 +148,77 @@ static inline int32_t smooth(int32_t v, int32_t t)
     return d ? v + d : t;
 }
 
+/* num / den in Q15 (0 < num <= den < 2^30), bitwise: no division instruction (per block only). */
+static int32_t ratio15(int32_t num, int32_t den)
+{
+    int32_t r = 0;
+    for (int i = 0; i < 15; i++) {
+        num <<= 1;
+        r <<= 1;
+        if (num >= den)
+            num -= den, r |= 1;
+    }
+    return r;
+}
+
+/* Knob maps: piecewise linear through anchors (raw knob -> value), with flat plateaus of +-200 raw around the values
+ * a detent should land on exactly (1 detent = 1024 raw).
+ * BITS: 16 -> 12 bits at detents 0..4 (1 per detent), 12 -> 8 at 4..12, 8-bit codes with mu-law morphing in at
+ *       12..16 (full at the centre), 8 -> 6 bits while it morphs out at 16..20, 6 -> 1 at 20..32 (4 bits on detent 25).
+ *       Plateaus on every whole bit and on full mu-law. Values: k = 16 - b (Q15 bits), mu-law amount m (Q15).
+ * RATE: 5 detents per octave from 44.1 kHz (22.05 k at 5, 11.025 k at 10, 5.5 k at 15, 2.76 k at 20, 1.38 k at 25),
+ *       the last 7 detents stretched down to 400 Hz; a plateau on 26.04 kHz (SP-1200) at detent 4. Value: octaves
+ *       below 44.1 kHz (Q15). */
+#define BITS_N 34
+static const int32_t bits_raw[BITS_N] = {
+    0, 200, 824, 1224, 1848, 2248, 2872, 3272, 3896, 4296, 5944, 6344, 7992, 8392, 10040, 10440, 12088, 12488,
+    16184, 16584, 18232, 18632, 20280, 20680, 22738, 23138, 25400, 25800, 27653, 28053, 30110, 30510, 32567, 32767 };
+static const int32_t bits_k[BITS_N] = {
+    0, 0, 32768, 32768, 65536, 65536, 98304, 98304, 131072, 131072, 163840, 163840, 196608, 196608, 229376, 229376,
+    262144, 262144, 262144, 262144, 294912, 294912, 327680, 327680, 360448, 360448, 393216, 393216, 425984, 425984,
+    458752, 458752, 491520, 491520 };
+static const int32_t bits_mu[BITS_N] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32768, 32768, 16384, 16384, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0 };
+#define RATE_N 6
+static const int32_t rate_raw[RATE_N] = { 0, 3896, 4296, 5120, 25600, 32767 };
+static const int32_t rate_oct[RATE_N] = { 0, 24904, 24904, 32768, 163840, 222331 };   /* 0.760 = log2(44100 / 26040) */
+
+/* Value at raw knob k of the map through (raw[i], v[i]); also the segment index (for a second value table). */
+static int32_t knob_map(const int32_t *raw, const int32_t *v, int n, int32_t k, int32_t *seg, int32_t *frac)
+{
+    int i = 0;
+    while (i < n - 2 && k >= raw[i + 1])
+        i++;
+    int32_t w = raw[i + 1] - raw[i], f = k - raw[i];
+    f = f < 0 ? 0 : f > w ? w : f;
+    int32_t fr = f == w ? 32768 : ratio15(f, w);       /* Q15 */
+    *seg = i, *frac = fr;
+    return v[i] + ((((v[i + 1] - v[i]) >> 3) * fr) >> 12);
+}
+
 /* Per-block quantiser: step 2^sh * mant (mant Q14 = 2^frac; s1 = 14 + sh, s2 = 14 - sh), its inverse mant_inv
  * (Q14), the rounding offsets (hterm linear: 1/2 - the mid-rise offset; hmu mu-law: 1/2), the mid-rise level offset
- * and its dead zone; mu-law: K (Q7), Z = log2(1 + K) (Q15 bits), 1 / Z (r14, Q14 of 2^15), 1 / K (rk, Q15). Codes are
+ * and its dead zone; mu-law: K (Q7), Z = log2(1 + K) (Q15 bits), 1 / Z (r14, Q14 of 2^15), 1 / K (rk, Q15), and tmu:
+ * below it mu-law's steps would be finer than the linear step (Q15 input). Codes are
  * sign-magnitude: rounding and bit flips are symmetric (no DC). */
 struct quant {
-    int32_t s1, s2, mant, mant_inv, hterm, hmu, offs, dz, kq7, zq, r14, rk;
+    int32_t s1, s2, mant, mant_inv, hterm, hmu, offs, dz, kq7, zq, r14, rk, tmu;
 };
 
 #define M16(a, b) ((int32_t)(int16_t)(a) * (int16_t)(b))    /* 16 x 16 -> 32 (one MAC) */
 
-/* Code n of c (0 .. 32767) for the step: floor(c / step + h), flipped unless 0 (silence stays silent). */
+/* Code n of c (0 .. 32767) for the step: floor(c / step + h); a flip (fm = 1 + a Q16 fraction) XORs one bit chosen
+ * down from the code's top bit (the fraction of its bits below the top), so a flip is audible at any bit depth. Zero
+ * stays zero (silence stays silent). */
 static inline __attribute__((always_inline)) int32_t code(const struct quant *q, int32_t c, int32_t h, int32_t fm)
 {
     int32_t n = (M16(c, q->mant_inv) + h) >> q->s1;
-    return n ? n ^ fm : 0;
+    if (fm && n) {
+        int32_t tb = 30 - norm(n);                              /* top bit of n */
+        n ^= 1 << (tb - (((fm - 1) * (tb + 1)) >> 16));
+    }
+    return n;
 }
 
 static inline __attribute__((always_inline)) int32_t level(const struct quant *q, int32_t n)
@@ -181,7 +240,8 @@ static inline __attribute__((always_inline)) int32_t qlin(const struct quant *q,
     return level(q, code(q, u, q->hterm, fm));
 }
 
-/* Linear with the mid-rise offset (below 3 bits): level (n + o) step, dead zone o step / 4. */
+/* Linear with the mid-rise offset (below 3 bits): level (n + o) step; dead zone (1/2 - 3 o / 4) step, from mid-tread's
+ * half step at 3 bits to 1/8 step at 1 bit: 1/8 of full scale all the way, so quiet tails never come back. */
 static inline __attribute__((always_inline)) int32_t qoff(const struct quant *q, int32_t u, int32_t fm)
 {
     int32_t n = code(q, u, q->hterm, fm);
@@ -191,9 +251,12 @@ static inline __attribute__((always_inline)) int32_t qoff(const struct quant *q,
 
 /* mu-law in G.711's segment form with a variable mu (K = 2^(8 m), 1 .. 256): z = plog2(1 + K u) / plog2(1 + K)
  * (0 .. 1), quantised mid-tread with the step, back through the exact inverse. K = 1 is the linear quantiser; at
- * K = 256, 8 bits it is G.711 mu-law (8 segments, 16 steps each). */
+ * K = 256, 8 bits it is G.711 mu-law (8 segments, 16 steps each) on the loud part. Quiet signals keep the linear step
+ * (below tmu, where mu-law's steps would be finer): turning BITS clockwise never makes a quiet tail cleaner. */
 static inline __attribute__((always_inline)) int32_t qmu(const struct quant *q, int32_t u, int32_t fm)
 {
+    if (u < q->tmu)
+        return qlin(q, u, fm);
     int32_t z = plog2(32768 + ((q->kq7 * u) >> 7));            /* Q15 bits, 0 .. 8 */
     int32_t c = mul16(z, q->r14) << 1;                          /* z / Z, Q15 */
     c = c > 32767 ? 32767 : c;
@@ -299,19 +362,6 @@ static __attribute__((noinline)) void chan_pass(const struct blk *b, struct crus
     h->z = z, h->dq = dq;
 }
 
-/* num / den in Q15 (0 < num <= den < 2^30), bitwise: no division instruction (per block only). */
-static int32_t ratio15(int32_t num, int32_t den)
-{
-    int32_t r = 0;
-    for (int i = 0; i < 15; i++) {
-        num <<= 1;
-        r <<= 1;
-        if (num >= den)
-            num -= den, r |= 1;
-    }
-    return r;
-}
-
 /* One block for nch channels; the compressor and the clock are shared (stereo linked). */
 static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
 {
@@ -323,6 +373,17 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
         clean &= s->v1[k] == 0 && s->v2[k] == 0;
     }
     int32_t kr = s->v2[0], kb = s->v2[1], ks = s->v2[2], kg = s->v2[3];
+    {                                                               /* input level, for the screen */
+        int32_t pk = 0;
+        for (int c = 0; c < nch; c++)
+            for (int i = 0; i < BLOCK; i += 4) {                    /* every 4th sample is enough to see a signal */
+                int32_t x = io[c][i];
+                x = x < 0 ? -x : x;
+                pk = x > pk ? x : pk;
+            }
+        pk = pk > 32767 ? 32767 : pk;
+        s->level += (pk - s->level) >> 3;
+    }
 
     if (clean) {
         /* exactly the input; keep the states where processing would continue from */
@@ -342,9 +403,10 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
     }
     s->bypass = 0;
 
-    /* RATE: period 2^e samples, e = 6.785 k; reconstruction low-pass a = 1 - exp(-pi / period), faded to 1 (through)
+    /* RATE: period 2^e samples (knob map above); reconstruction low-pass a = 1 - exp(-pi / period), faded to 1 (through)
      * between 22 and 44.1 kHz */
-    int32_t e = (kr * 27791) >> 12;                                 /* Q15 */
+    int32_t seg, fr;
+    int32_t e = knob_map(rate_raw, rate_oct, RATE_N, kr, &seg, &fr);       /* octaves below 44.1 kHz, Q15 */
     int32_t period = (int32_t)exp2_q16(e);                          /* Q16 samples, 1 .. 110 */
     int32_t inc = (int32_t)(exp2_q16(8 * 32768 - e) >> 9);          /* 1 / period, Q15 */
     int32_t a = 32768 - (int32_t)(exp2_q16(13 * 32768 - ((inc * 37126) >> 13)) >> 14);  /* 2^(-4.532 inc) */
@@ -357,7 +419,8 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
     /* BITS: k = 16 - b in Q15 bits (0 .. 15 - 2^-15); mu-law amount m (K = 2^(8 m)); mid-rise offset below 3 bits */
     struct blk bk;
     struct quant *q = &bk.q;                                        /* filled in place (no struct copy: no memcpy) */
-    int32_t kq = kb <= 16384 ? kb * 18 : 9 * 32768 + (kb - 16384) * 12;
+    int32_t kq = knob_map(bits_raw, bits_k, BITS_N, kb, &seg, &fr);
+    int32_t mu = bits_mu[seg] + ((((bits_mu[seg + 1] - bits_mu[seg]) >> 3) * fr) >> 12);
     kq = kq > 15 * 32768 - 1 ? 15 * 32768 - 1 : kq;
     int32_t sh = kq >> 15, kf = kq & 32767;
     q->s1 = 14 + sh;
@@ -368,14 +431,17 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
     q->hterm = (8192 - o) << sh;
     q->hmu = 8192 << sh;
     q->offs = M16(o, q->mant) >> (28 - sh);
-    q->dz = q->offs >> 2;
-    int32_t mu = clamp(32768 - (kb > 16384 ? kb - 16384 : 16384 - kb) * 4, 0, 32768);
+    q->dz = M16(8192 - ((3 * o) >> 2), q->mant) >> (28 - sh);       /* (1/2 - 3 o / 4) step: 1/8 of full scale */
     q->kq7 = clamp((int32_t)(exp2_q16(mu << 3) >> 9), 128, 32767);    /* K, Q7 */
     q->zq = plog2(32768 + ((q->kq7 * 32767) >> 7));                   /* Z = log2(1 + K), Q15 bits */
     q->r14 = ratio15(32768, q->zq) >> 1;                              /* 1 / Z, Q14 */
     q->rk = clamp((int32_t)(exp2_q16((8 << 15) - (mu << 3)) >> 9), 0, 32767);   /* 1 / K, Q15 */
+    {                                                               /* tmu = (2^e - 1) / K, e = ceil(log2(K / Z)) */
+        int32_t eq = (mu << 3) - log2_q12(q->zq, 15) * 8;           /* Q15 bits */
+        int32_t en = eq <= 0 ? 0 : (eq + 32767) >> 15;
+        q->tmu = en ? clamp(((1 << en) - 1) * q->rk, 0, 32767) : 0;
+    }
     int kind = mu ? Q_MU : q->offs ? Q_OFF : Q_LIN;
-    int32_t nb = 15 - sh;                                           /* magnitude bits of the code */
     s->bits_q12 = 65536 - (kq >> 3);
     s->mu = mu;
 
@@ -384,7 +450,6 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
     int32_t ja = (J * 24576) >> 15;                                 /* +-0.75 of the period at most, Q15 */
     int32_t jl = 14 - ((14 * J + 16384) >> 15);                     /* log2 samples between random targets */
     int32_t pth = F >> 1;                                           /* flip if rand16 < pth: <= 1 in 4 */
-    int32_t jr = 256 + (((nb - 1) * F) >> 7);                       /* bit range, Q8 */
 
     /* output level compensation, Q13 */
     int32_t g1 = (tab(comp_bits, kb) * tab(comp_rate, kr)) >> 11, g0 = s->gout;
@@ -437,7 +502,7 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
     /* clock: the block's holds (t = time to the next one, Q16 from the block start) and their flip masks, shared by
      * the channels. The jitter is a random walk: segments of 2^jl samples ramping to random targets (segments
      * passed over between two holds only leave their target), advanced to each hold. */
-    int ne = 0, full = period == ONE && !ja;
+    int ne = 0, full = period == ONE && !ja && !pth;
     if (full)
         s->t = ONE;                                                 /* back on the sample grid */
     else {
@@ -447,6 +512,8 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
             int32_t i = (t - 1) >> 16;
             if (i >= BLOCK)
                 break;
+            if (ne && sc.ei[ne - 1] == i)                           /* two holds in one sample: the later one wins */
+                ne--;
             sc.ei[ne] = i;
             sc.ef[ne] = (((i + 1) << 16) - t) >> 1;                 /* Q15, 0 .. 32767 */
             int32_t pe = period;
@@ -472,12 +539,14 @@ static void crush(struct crush *s, int16_t **io, int nch, const int16_t *p)
             }
             if (ja)
                 pe += mul16(period, (ja * jv) >> 15);
-            t += pe < ONE ? ONE : pe;
+            t += pe < ONE / 2 ? ONE / 2 : pe;                      /* jitter both ways, even at RATE 0 */
             int32_t fm = 0;
             if (pth) {
                 uint32_t r = xorshift(&rnd);
                 if ((int32_t)(r & 0xFFFF) < pth) {
-                    fm = 1 << (((r >> 16) * (uint32_t)jr) >> 24);
+                    uint32_t u = r >> 16;
+                    fm = 1 + (int32_t)((((u * u) >> 16) * (uint32_t)F) >> 15);   /* 1 + share of the bits below the
+                                                                                  * top (Q16), weighted to the top */
                     s->flips++;
                 }
             }

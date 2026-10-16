@@ -2,7 +2,7 @@
 
 run(cases) builds src/slot/crush.c with the device flags and test/crush_main.c for the Blackfin simulator, runs every
 case under bfin-elf-run in one Docker container, 8 at a time, and returns ({name: (out int64 [frames, channels],
-gr int64 [frames])}, {name: (max cycles, mean cycles per 64-frame call, bit flips over the run)}). A case is
+gr int64 [frames])}, {name: (max cycles, mean cycles per 64-frame call, bit flips over the run, then rate_hz, bits_q12, mu at the end)}). A case is
 (mode "m"/"s", (k0, k1, k2, k3), input int array [frames] or [frames, 2], [schedule strings for crush_main.c]).
 """
 import os
@@ -41,11 +41,11 @@ def run(cases):
     out, cyc = {}, {}
     for name in cases:
         e = open(os.path.join(w, name + ".err")).read().split()
-        if len(e) < 7:
+        if len(e) < 13:
             raise RuntimeError(f"case {name} failed: {' '.join(e)}")
         y = np.loadtxt(os.path.join(w, name + ".txt"), dtype=np.int64)
         out[name] = (y[:, :-1], y[:, -1])
-        cyc[name] = (int(e[2]), int(e[4]), int(e[6]))
+        cyc[name] = (int(e[2]), int(e[4]), int(e[6]), int(e[8]), int(e[10]), int(e[12]))
     shutil.rmtree(w)
     return out, cyc
 

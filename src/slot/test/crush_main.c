@@ -5,8 +5,8 @@
  * SCHED (knob changes at block starts, applied in order):
  *   j:B:J0:J1:J2:J3          from block B the knobs are J0..J3
  *   t:K:STEP:EVERY:FIRST:N   knob K moves by STEP every EVERY blocks from block FIRST, N times (encoder detents)
- * stdout per frame: "L [R] GR" (GR = crush_state[].gr after that block); stderr: "cycles max <n> mean <n> flips <n>"
- * (bit flips over the run). */
+ * stdout per frame: "L [R] GR" (GR = crush_state[].gr after that block); stderr: "cycles max <n> mean <n> flips <n> rate <hz>
+ * bits <q12> mu <q15>" (bit flips over the run; the state after the last block). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -68,7 +68,8 @@ int main(int argc, char **argv)
             else
                 printf("%d %d\n", l[i], gr);
     }
-    fprintf(stderr, "cycles max %u mean %u flips %u\n", (unsigned)maxc, (unsigned)(sum / blocks),
-            (unsigned)crush_state[stereo].flips);
+    const struct crush *st = &crush_state[stereo];
+    fprintf(stderr, "cycles max %u mean %u flips %u rate %d bits %d mu %d\n", (unsigned)maxc, (unsigned)(sum / blocks),
+            (unsigned)st->flips, (int)st->rate_hz, (int)st->bits_q12, (int)st->mu);
     return 0;
 }

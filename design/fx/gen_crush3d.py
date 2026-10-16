@@ -120,7 +120,8 @@ def box(x0, x1, y0, y1, z0, z1):
 
 
 # ------------------------------------------------------------------ layers
-RATE_N = [12, 8, 5, 3]           # voxel tiers per RATE level (block = 1/N of the half base)
+RATE_N = [8, 6, 4, 3]            # voxel tiers per RATE level (block = 1/N of the half base); level 1 without the
+                                 # fine vertical edges (they moire on the OLED)
 
 
 def voxel(i, n):
@@ -137,7 +138,7 @@ def voxel(i, n):
         vert = lambda X, Z: "M{} {} V{}".format(f1(P(X, y0, Z)[0]), f1(P(X, y0, Z)[1]), f1(P(X, y1, Z)[1]))   # world verticals stay vertical
         lines.append(" ".join([vert(-r, -r), vert(r, -r), vert(r, r)]))
         nb = 2 * n - 2 * k - 1
-        for j in range(1, nb):
+        for j in range(1, nb if i > 1 else 1):
             c = -r + j * 2 * r / nb
             lines.append(vert(c, -r) + " " + vert(r, c))
     return N("g", f"vox{i}", [
@@ -377,7 +378,40 @@ def asset():
 
 
 # ------------------------------------------------------------------ runtime (reference for the C side)
-def runtime_state(k, t=0.0, gr=0.0, parallax=True):
+# The DSP's knob maps (src/slot/crush.c: bits_raw / bits_k / bits_mu, rate_raw / rate_oct), raw knob 0..32767.
+BITS_ANCH = [(0, 16, 0), (1024, 15, 0), (2048, 14, 0), (3072, 13, 0), (4096, 12, 0), (6144, 11, 0), (8192, 10, 0),
+             (10240, 9, 0), (12288, 8, 0), (16384, 8, 1), (18432, 7, 0.5), (20480, 6, 0), (22938, 5, 0), (25600, 4, 0),
+             (27853, 3, 0), (30310, 2, 0), (32767, 1, 0)]
+PLAT = 200
+
+
+def _anchors(points):
+    out = []
+    for p, *v in points:
+        for q in (p - PLAT, p + PLAT):
+            q = min(32767, max(0, q))
+            if not out or out[-1][0] != q:
+                out.append((q, *v))
+    return out
+
+
+def bits_dsp(b):
+    """(bit depth, mu-law amount) the DSP uses at BITS knob b (0..1)."""
+    a, k = _anchors(BITS_ANCH), min(32767, b * 32768)
+    for (x0, b0, m0), (x1, b1, m1) in zip(a, a[1:]):
+        if k <= x1:
+            f = 0 if x1 == x0 else (k - x0) / (x1 - x0)
+            return b0 + (b1 - b0) * f, m0 + (m1 - m0) * f
+    return 1.0, 0.0
+
+
+RATE_DETENTS = (4, 10, 18, 25)    # voxel levels 1..4 start on these RATE detents (26 kHz, 11 kHz, ~3.6 kHz, 1.4 kHz)
+CRACK_AT = (0.1, 0.25, 0.5, 0.6, 0.75, 0.9)   # GRIT: jitter is audible from ~0.1, flips start at 0.5
+
+
+def runtime_state(k, t=0.0, gr=0.0, parallax=True, level=1.0, flips=None):
+    """k = raw knobs 0..1 (r b s o); gr = gain reduction 0..1; level = input peak 0..1 (the shake needs a signal);
+    flips = bit flips since the last frame (None: the design preview's stand-in, a steady stream while GRIT > 1/2)."""
     r, b, s, o = k
     St = {}
     def st(i):
@@ -385,37 +419,37 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True):
     def hide(i, c=True):
         st(i)["hide"] = bool(c)
     # RATE: one voxel level replaces the smooth pyramid
-    lvl = 0 if r < 0.12 else 1 if r < 0.4 else 2 if r < 0.65 else 3 if r < 0.85 else 4
+    d = r * 32
+    lvl = sum(d >= x for x in RATE_DETENTS)
     hide("smooth", lvl != 0)
     for i in range(1, 5):
         hide(f"vox{i}", i != lvl)
-    # BITS
-    nb = g2.bits_of(b)
-    mu = g2.mu_law(b)
+    # BITS: the DSP's bit depth and mu-law amount
+    nb, m = bits_dsp(b)
+    mu = m > 0.25
     tiers = 4 if nb >= 12 else 3 if nb >= 8 else 2 if nb >= 4 else 1 if nb >= 2 else 0
     for i in range(1, 5):
         hide(f"c{i}", mu or i > tiers)
     hide("cmu", not mu)
-    for i, th in ((1, 8), (2, 5), (3, 3)):
+    for i, gone in ((1, nb < 8), (2, nb <= 5), (3, nb <= 3)):
         for p in ("h", "hw", "hf"):
-            hide(f"{p}{i}", nb > th)
+            hide(f"{p}{i}", not gone)
     hide("cap1", nb > 3)
     hide("cap2", nb > 1.5)
     hide("pile", nb > 3)
-    if nb >= 9:
-        pal = dict(L="purplegrey", R="grey", T="lpg", core="offgrey", sun="darkblue", farL="darkblue", farR="offblue",
-                   shadow="offblue", horizon="grey", sand="offgrey", course="darkblue")
-    elif nb >= 5:
-        pal = dict(L="lpg", R="offgrey", T="white", core="black", sun="darkblue", farL="darkblue", farR="darkblue",
-                   shadow="black", horizon="grey", sand="grey", course="black")
-    elif nb >= 2:
-        pal = dict(L="white", R="offgrey", T="white", core="black", sun="grey", farL="offgrey", farR="offgrey",
-                   shadow="black", horizon="white", sand="black", course="black")
-    else:
-        pal = dict(L="white", R="offgrey", T="white", core="black", sun="white", farL="white", farR="offgrey",
-                   shadow="black", horizon="white", sand="black", course="black")
+    # posterise inside the neutral family: lit face lpg / purplegrey, shade face offgrey / black, a grey sun; green is
+    # BITS's accent (rims, rubble, mu-law courses); pure white is only SQUASH's (press, stem, puff)
+    row = 0 if nb >= 9 else 1 if nb >= 5 else 2 if nb >= 2 else 3
+    pal = [dict(L="purplegrey", R="grey", RS="grey", T="lpg", core="offgrey", course="darkblue", sun="darkblue",
+                farL="darkblue", farR="offblue", shadow="offblue", horizon="grey", sand="offgrey"),
+           dict(L="lpg", R="offgrey", RS="offgrey", T="lpg", core="black", course="black", sun="grey",
+                farL="darkblue", farR="darkblue", shadow="black", horizon="grey", sand="grey"),
+           dict(L="lpg", R="black", RS="black", T="lpg", core="offgrey", course="black", sun="grey",
+                farL="offgrey", farR="offgrey", shadow="black", horizon="lpg", sand="black"),
+           dict(L="lpg", R="black", RS="green", T="lpg", core="offgrey", course="black", sun="grey",
+                farL="offgrey", farR="offgrey", shadow="black", horizon="lpg", sand="black")][row]
     st("faceL").update(fill=pal["L"], stroke=pal["L"])
-    st("faceR").update(fill=pal["R"], stroke="green" if nb < 2 else pal["R"])
+    st("faceR").update(fill=pal["R"], stroke=pal["RS"])
     for i in range(1, 5):
         st(f"vt{i}")["fill"] = pal["T"]
         st(f"vl{i}")["fill"] = pal["L"]
@@ -423,7 +457,7 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True):
         st(f"c{i}")["stroke"] = pal["course"]
     for i in range(1, 4):
         st(f"hf{i}")["fill"] = pal["T"]
-        st(f"hw{i}")["fill"] = pal["core"] if nb >= 5 else "offgrey"
+        st(f"hw{i}")["fill"] = pal["core"]
         st(f"gl{i}")["fill"] = pal["R"]       # XOR: the slice's faces swap shades
         st(f"gr{i}")["fill"] = pal["L"]
     for i in ("sun", "farL", "farR", "shadow"):
@@ -433,29 +467,33 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True):
     # SQUASH (capped: at least 60 % of the height)
     q = s * (0.45 + 0.55 * gr)
     sy, sx = 1 - 0.4 * q, 1 + 0.18 * q
-    m = (sx, 0, 0, sy, CX * (1 - sx), B0 * (1 - sy))
-    # GRIT jitter
-    dx = (0.5 + 1.5 * o) * jit(t, 1, 10 + 30 * o) if o > 0.05 else 0
-    dy = 0.6 * o * jit(t, 2, 14 + 30 * o) if o > 0.3 else 0
-    st("pyr")["m"] = mul((1, 0, 0, 1, dx, dy), m)
+    m_ = (sx, 0, 0, sy, CX * (1 - sx), B0 * (1 - sy))
+    # GRIT: the clock jitter shakes the pyramid, only while something plays
+    live = level > 0.001
+    dx = (0.5 + 1.5 * o) * jit(t, 1, 10 + 30 * o) if o > 0.05 and live else 0
+    dy = 0.6 * o * jit(t, 2, 14 + 30 * o) if o > 0.3 and live else 0
+    st("pyr")["m"] = mul((1, 0, 0, 1, dx, dy), m_)
     hide("press", s < 0.02)
     rows_gone = 4 if nb <= 1.5 else 2 if nb <= 3 else 0          # the press rests on what is left (cap1 / cap2)
     top_y = P(0, H * (1 - rows_gone / ROWS), 0)[1]
     apex_y = B0 - (B0 - top_y) * sy
     st("press")["m"] = (1, 0, 0, 1, dx, apex_y - APEX[1] + dy)
     hide("puff", not (s > 0.02 and gr > 0.55))
-    st("puff")["m"] = m
-    for i, th in enumerate([0.08, 0.2, 0.32, 0.45, 0.58, 0.72]):
+    st("puff")["m"] = m_
+    for i, th in enumerate(CRACK_AT):                 # static: how much GRIT
         hide(f"k{i + 1}", o < th)
-    hide("ch1", o < 0.3)
-    hide("ch2", o < 0.62)
-    hide("chr", o < 0.62)
-    nd = 0 if o < 0.45 else math.ceil((o - 0.45) / 0.55 * len(DEBRIS))
-    for i, d in enumerate(DEBRIS):
-        s0, land, g0 = debris_geo(*d)
+    hide("ch1", o < 0.5)
+    hide("ch2", o < 0.75)
+    hide("chr", o < 0.75)
+    # flips (the DSP's count since the last frame) shed debris and shift XOR slices; the design preview stands in a
+    # steady stream (the C side starts a debris fall per frame with flips and keeps slices up while they come)
+    df = ((1000 if o > 0.5 else 0) if flips is None else flips) if live else 0     # flips act on sound only
+    nd = 0 if o <= 0.5 else math.ceil((o - 0.5) / 0.5 * len(DEBRIS))
+    for i, dd in enumerate(DEBRIS):
+        s0, land, g0 = debris_geo(*dd)
         T = 1.0 + 0.17 * i
         u = ((t + i * 0.41) % T) / T * 1.25          # 0..1 falling, then 0.25 of the period resting hidden
-        on = i < nd and u <= 1
+        on = i < nd and df > 0 and u <= 1
         u = min(u, 1)
         hide(f"d{i + 1}", not on)
         hide(f"ds{i + 1}", not on)
@@ -463,10 +501,13 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True):
         cx, cy = g0[0] + (land[0] - g0[0]) * u, g0[1] + (land[1] - g0[1]) * u
         sc = 0.35 + 0.65 * u
         st(f"ds{i + 1}")["m"] = (sc, 0, 0, sc, cx - sc * g0[0], cy - sc * g0[1])
+    ns = 0 if df <= 0 else 1 if df < 3 else 2 if df < 7 else 3        # more flips, more slices
+    if nb <= 3 and o > 0.6:
+        ns = min(ns, 2)                                                # the busiest state: at most 2
+    start = min(2, int((jit(t, 10, 7) + 1) * 1.5))                # which slices: rotate at 7 Hz
+    pick = [(start + j) % 3 for j in range(ns)]
     for i in range(len(SLICES)):
-        p_on = max(0, (o - 0.6) / 0.4)
-        on = (jit(t, 10 + i, 7 + 9 * i) * 0.5 + 0.5) < p_on * 0.85
-        hide(f"g{i + 1}", not on)
+        hide(f"g{i + 1}", i not in pick)
         n = jit(t, 20 + i, 7 + 9 * i)
         st(f"gs{i + 1}")["m"] = (1, 0, 0, 1, (4 + 14 * o) * (1 if n >= 0 else -1) * (0.4 + 0.6 * abs(n)), 0)
     # idle parallax: the far layer drifts against the pyramid (a slow camera orbit), 2 matrices
@@ -490,22 +531,24 @@ ROUTE  TE's retained renderer only (notes/svg-route.md): no immediate-mode overl
        svg_render. Every recoloured element has a unique colour value (+-1 per channel) so TE keeps separate style entries.
        Style getters assert on a node without that style: request only the ones listed (fill: / stroke:).
 
-INPUTS r b s o = blue RATE, green BITS, white SQUASH, orange GRIT knobs, 0..1.
-       nb = 16 - 15 b (bit depth); mu = 0.4 <= b <= 0.6 (the DSP's mu-law range: use the DSP's own flag if it has one).
+INPUTS r b s o = blue RATE, green BITS, white SQUASH, orange GRIT knobs, 0..1 (the DSP's smoothed knobs).
+       nb, m = the DSP's bit depth and mu-law amount (crush_state bits_q12, mu; bits_dsp() here); mu = m > 0.25.
        gr = the SQUASH compressor's gain reduction, 0 (none) .. 1 (max), from the DSP, smoothed (the screen pumps with it).
+       level = the input's peak 0..1 (the shake, slices and debris need a signal: level > 0.001); flips = the DSP's
+       bit-flip events since the last frame.
        t = frame clock (s). jit(t, seed, rate) = noise -1..1 held for 1/rate s:
          k = floor(t rate); jit = frac(sin(k 12.9898 + seed 78.233) 43758.5453) 2 - 1   (any cheap hash is fine)
 
 VISIBILITY (hide = clear the flag; everything not listed is static and always shown)
-  smooth                 shown iff lvl == 0;  lvl = 0 (r < .12) 1 (< .4) 2 (< .65) 3 (< .85) 4
-  vox1..vox4             vox{i} shown iff i == lvl (12 / 8 / 5 / 3 block tiers)                          [blue RATE]
+  smooth                 shown iff lvl == 0;  lvl = number of RATE detents passed of 4, 10, 18, 25 (r 32 >= d)
+  vox1..vox4             vox{i} shown iff i == lvl (8 / 6 / 4 / 3 block tiers; vox1 without inner edges)  [blue RATE]
   c1 c2 c3 c4            c{i} shown iff !mu and i <= tiers; tiers = 4 (nb >= 12) 3 (>= 8) 2 (>= 4) 1 (>= 2) 0  [green]
   cmu                    shown iff mu (green mu-law courses)                                              [green]
-  h{i} hw{i} hf{i}       set i (missing blocks: opening, inner wall, floor) shown iff nb <= 8 / 5 / 3 for i = 1 / 2 / 3
+  h{i} hw{i} hf{i}       set i (missing blocks: opening, inner wall, floor) shown iff nb < 8 / <= 5 / <= 3, i = 1 / 2 / 3
   cap1, pile             shown iff nb <= 3 (top 2 rows gone; tumbled blocks at the base)                 [green]
   cap2                   shown iff nb <= 1.5 (top 4 rows gone)                                           [green]
-  k1..k6                 k{i} shown iff o >= .08 .2 .32 .45 .58 .72 (cracks)                             [orange GRIT]
-  ch1 / ch2, chr         shown iff o >= 0.3 / 0.62 (edge notches; chr = broken front-edge facets, with ch2)
+  k1..k6                 k{i} shown iff o >= .1 .25 .5 .6 .75 .9 (static: how much GRIT)                 [orange GRIT]
+  ch1 / ch2, chr         shown iff o >= 0.5 / 0.75 (edge notches; chr = broken front-edge facets, with ch2)
   press                  shown iff s >= 0.02                                                             [white SQUASH]
   puff                   shown iff s >= 0.02 and gr > 0.55 (dust at the base corners)
   g1..g3, d1..d4, ds1..ds4   see GRIT below
@@ -514,7 +557,8 @@ MATRICES
   pyr    (whole pyramid + damage): translate(dx, dy) * scale(sx, sy) about (160, 104):
            q = s (0.45 + 0.55 gr); sy = 1 - 0.4 q (never below 0.6 of the height); sx = 1 + 0.18 q
            M = {sx, 0, 0, sy, 160 (1 - sx) + dx, 104 (1 - sy) + dy}
-           dx = (0.5 + 1.5 o) jit(t, 1, 10 + 30 o) if o > 0.05 else 0;  dy = 0.6 o jit(t, 2, 14 + 30 o) if o > 0.3 else 0
+           dx = (0.5 + 1.5 o) jit(t, 1, 10 + 30 o) if o > 0.05 and level > 0.001 else 0;
+           dy = 0.6 o jit(t, 2, 14 + 30 o) if o > 0.3 and level > 0.001 else 0
   press  translate(dx, top' - 23.43 + dy): top' = 104 - (104 - top) sy, top = 23.43 (apex) / 33.5 with cap1 / 43.57 with
          cap2 shown (the press rests on what is left)
   puff   {sx, 0, 0, sy, 160 (1 - sx), 104 (1 - sy)} (pyr's scale, no jitter)
@@ -529,24 +573,28 @@ MATRICES
            3  5.6     64.64   187.05  102     192.64  110.25
   farg, sun  (optional idle parallax) translate(-3 w, 0) and translate(-1.5 w, 0), w = sin(2 pi t / 16); else identity
 
-GRIT VISIBILITY
-  g{i}   (i = 0..2 for g1..g3) shown iff (jit(t, 10 + i, 7 + 9 i) + 1) / 2 < 0.85 max(0, (o - 0.6) / 0.4)
+GRIT VISIBILITY (driven by the DSP's flips; the design preview stands in a steady stream while o > 0.5)
+  g{i}   ns = 0 (no flips this frame) 1 (< 3) 2 (< 7) 3 slices, at most 2 when nb <= 3 and o > 0.6; shown: (start + j) mod 3
+         for j < ns, start = floor((jit(t, 10, 7) + 1) 1.5) (0..2)
          (gx = the hole left behind, static; gs = the moving slice: gl gr shades swapped, go orange edge)
-  d{i}, ds{i}   shown iff i < nd and frac((t + 0.41 i) / T) * 1.25 <= 1; nd = ceil((o - 0.45) / 0.55 * 4) if o >= 0.45 else 0
+  d{i}, ds{i}   nd = ceil((o - 0.5) / 0.5 * 4) if o > 0.5 else 0 slots. Preview: shown iff i < nd, flips and
+         frac((t + 0.41 i) / T) * 1.25 <= 1. C: an idle slot i < nd starts a fall (u from 0) on a frame with flips;
+         u = frames since the start / (30 T); hidden again after u > 1.25
 
 RECOLOURS (BITS posterise; colours are colors.svg / palette 0x01BAAF50 names). Pick the row by nb:
            A: nb >= 9 (pristine)  B: 5 <= nb < 9   C: 2 <= nb < 5   D: nb < 2 (1 bit)
-  L  faceL fill+stroke, vl1..vl4 fill, gr1..gr3 fill   purplegrey   lpg        white      white
-  R  faceR fill, vr1..vr4 fill, gl1..gl3 fill          grey         offgrey    offgrey    offgrey
+  Neutral family only; green is BITS's accent (rim, rubble, mu-law courses); white belongs to SQUASH (press, puff).
+  L  faceL fill+stroke, vl1..vl4 fill, gr1..gr3 fill   purplegrey   lpg        lpg        lpg
+  R  faceR fill, vr1..vr4 fill, gl1..gl3 fill          grey         offgrey    black      black
      faceR stroke                                      = R          = R        = R        green (rim)
-  T  vt1..vt4 fill, hf1..hf3 fill                      lpg          white      white      white
+  T  vt1..vt4 fill, hf1..hf3 fill                      lpg          lpg        lpg        lpg
      hw1..hw3 fill                                     offgrey      black      offgrey    offgrey
      c1..c4 stroke                                     darkblue     black      black      black
-     sun fill                                          darkblue     darkblue   grey       white
-     farL fill                                         darkblue     darkblue   offgrey    white
+     sun fill                                          darkblue     grey       grey       grey
+     farL fill                                         darkblue     darkblue   offgrey    offgrey
      farR fill                                         offblue      darkblue   offgrey    offgrey
      shadow fill                                       offblue      black      black      black
-     horizon stroke                                    grey         grey       white      white
+     horizon stroke                                    grey         grey       lpg        lpg
      sand stroke                                       offgrey      grey       black      black
   (only the shown vox level needs its vt/vl/vr written; recolouring all four is also fine)
 
@@ -560,8 +608,8 @@ IDS (style each recoloured node owns)
 """
 
 
-def composite(out, name, k, t=0.3, gr=0.0, w=640):
-    St = runtime_state(k, t, gr)
+def composite(out, name, k, t=0.3, gr=0.0, w=640, level=1.0, flips=None):
+    St = runtime_state(k, t, gr, level=level, flips=flips)
     body = render(asset(), St).split(">", 1)[1].rsplit("</svg>", 1)[0]
     svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160">\n'
            '<rect width="320" height="160" fill="#000000"/>\n' + body +
