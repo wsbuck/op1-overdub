@@ -165,3 +165,33 @@ Confidence: **Confirmed** = read in code, **Verified** = re-checked in disassemb
 - Renamed `ens` → `ensemble` (alias `ens` keeps saved patches loading).
 - 2026-10-15: four FX: ensemble 8, pingpong 9, distortion 10, crush 11 (notes/fx-crush.md). Screen kinds by source in
   build_slot.py `FX_UI_KINDS` (crush 4); name loops 14, factory/ScreenId bounds 12.
+
+## ensemble (2026-10-16 rework: BBD chorus, CE-2 by default)
+The first version was a Juno/Solina string ensemble (LOG test image 32); the user wanted classic chorus tones
+("like the CE-2"). `src/slot/ensemble.c` now:
+- Blue RATE: triangle LFO 0.1 .. 8 Hz, exponential. Green DEPTH: sweep 0 .. +-3 ms. Orange MIX: dry .. wet at constant
+  average power, 50/50 = 0.707 each (level within 0.2 dB of bypass, averaged over 200 .. 5000 Hz).
+- White CHARACTER (`ensemble.h`): 0 .. 8191 CE (one delay line, fixed 6.0 ms centre; master: L = dry + wet,
+  R = dry - wet); 8192 .. 12287 crossfade (R's wet changes sign: spread over >= 16 blocks); 12288 .. 20479 DUAL
+  (1.66 ms + depth, R's line swept in anti-phase, Juno 60 style); 20480 .. 32767 the old three-tap ensemble fades in
+  (taps at 120 / 240 degrees, 6.5 Hz / 0.2 ms vibrato, base 1.66 -> 2 ms + depth); the top is the old sound (now
+  band-limited like the rest).
+- Default `[15360, 21504, 0, 16384]`: CE, 0.78 Hz, +-1.97 ms, 50/50.
+- Wet chain (once per channel, before the line; all linear around the clip, so it commutes with the delay): 2-pole
+  low-pass -> pre-emphasis 2x - x[-1] -> soft clip u (1.5 - u^2/2), u = 2/3 v saturated (flat at 1.5x full scale;
+  HD3 ~-40 dB at -6 dBFS before the 50 % mix) -> de-emphasis (exact inverse) -> 2-pole low-pass. The two sections
+  are a 4th-order Butterworth at 9 kHz (-3 dB 9 kHz, -15 dB 12 kHz, -31 dB 15 kHz). No compander noise modelled.
+- Linear interpolation: the line holds band-limited audio, so the loss swings 0 .. -0.5 dB at 5 kHz (measured 0.49 dB
+  ripple at full depth). Cubic would cost ~10 cycles per tap-sample more for little audible gain below 9 kHz.
+- All per-sample loops in inline asm (16-bit fractional MACs, circular write); weights and mix ramp per sample.
+- Reference values (from memory, not measured here; marked where unsure):
+  - Boss CE-2: MN3007 (1024 stages) + MN3101 clock, mono, dry + wet ~50/50, triangle LFO. Rate knob roughly
+    0.1 .. 6-8 Hz (unsure of the exact ends); delay centre around 5-7 ms with up to ~+-2-3 ms sweep (unsure: from
+    common descriptions, not a measured unit). Pre/de-emphasis around the BBD and ~8-10 kHz filtering (unsure of
+    order and corner). No compander (fairly sure).
+  - CE-1: stereo out = dry + wet / dry - wet (wet inverted on one side): the master's CE wiring.
+  - Juno 60 chorus (MN3009, two lines in anti-phase): I 0.513 Hz, II 0.863 Hz, delay ~1.66 .. 5.35 ms; I+II 9.75 Hz
+    at ~3.3 .. 3.7 ms (widely quoted figures; I+II's fast vibrato is above our 8 Hz and not provided). Blue 12288 =
+    0.517 Hz (I), 16384 = 0.894 Hz (II, 3.5 % fast); DUAL at depth 20206 (+-1.85 ms) spans 1.66 .. 5.36 ms.
+- Checks `src/slot/test/ensemble_check.py`; cycles: CE default 14.3 k per stereo call (223 per frame), DUAL ~14 k,
+  white max 21.2 k (old ensemble 21 k), mono 8 .. 12.3 k.

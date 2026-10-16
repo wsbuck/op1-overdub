@@ -6,12 +6,13 @@ Pivots: singer i stands at x = XS[i] (s1 160 lead, s2 90, s3 230) on the floor y
 phase = live LFO phase (0..1), tri(p) = triangle -1..1, R channel = phase + 0.5.
   s1, s2, s3       matrix = rotate(theta_i) about (XS[i], 124), theta_i = depth * 9 deg * tri(phase + (i-1)/3)   [blue LFO, green depth]
   head1..head3     extra matrix = rotate(0.6 * theta_i) about (XS[i], 84) (the head swings a little further)
-  s2, s3           hidden while ensemble = 0                                                                     [white]
+  s2, s3           hidden while white = CE (solo); DUAL: dim silhouettes; ensemble: fade in  [white = character, ensemble.h]
   robe2/3 hair2/3  recolour fill+stroke: ensemble < 0.5 -> fill black, stroke grey/purplegrey (outline);
   face2/3          >= 0.5 -> fill purplegrey (< 0.75) / white; face2/3 fill lpg once filled, else black with stroke
-  halo2, halo3     (2 green 8-ray stars) shown with s2/s3 when depth > 0; matrix = rotate(+-20 deg, flipped at 6.5 Hz) * scale(0.6 + 0.9 depth) about the head centre  [green]
+  halo2, halo3     (2 green 8-ray stars) shown with s2/s3 when depth > 0 and the ensemble taps are in; matrix = rotate(+-20 deg, flipped at 6.5 Hz) * scale(0.6 + 0.9 depth) about the head centre  [green]
   fade (white)     robe/hair/face/book/cheek/mo/shut 2,3 and cone2/3: fill/stroke recoloured from black to these colours as
-                   white goes 1024 -> 16384 (unique colour values: TE may share a style entry between equal colours)
+                   white goes CE -> DUAL (to 1/4) -> ensemble top (full) (unique colour values: TE may share a style entry
+                   between equal colours)
   cone2, cone3     shown with s2/s3
   mouth1..3        matrix = scale(1, 0.3 + 0.7 mix) about the mouth centre (XS[i], 78.5); hidden when mix < 0.05    [orange mix]
   shut1..3         shown only when mix < 0.05 (closed smile)

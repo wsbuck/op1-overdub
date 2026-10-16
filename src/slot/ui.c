@@ -1068,10 +1068,11 @@ static void mix_bar(void *r, int16_t mix)
         line_fp(r, FP(306), FP(130), FP(306), top, FP(4), ORANGE);
 }
 
-/* LFO rate of the ensemble in Hz, Q16: 0.05 * 2^(8 k / 32768) (ensemble.c rate_inc). */
+/* LFO rate of the ensemble in Hz, Q16: 0.1 * 2^(log2(80) k / 32768), 0.1 .. 8 Hz (ensemble.c rate_inc). */
 static uint32_t ens_rate_q16(int32_t k)
 {
-    return ((exp2_q16_ui(k << 4) >> 4) * 3277u) >> 12;
+    k = (k * 25891) >> 15;
+    return ((exp2_q16_ui(k << 4) >> 4) * 6554u) >> 12;
 }
 
 /* Triangle like ensemble.c's tri(), from a Q16 turn: -32768 at 0, +32766 at a half turn. */
@@ -1097,7 +1098,7 @@ static void ens_sweep(void *r, uint32_t now, uint32_t cyc, uint32_t off, int32_t
     fp32 xp = 0, yp = 0;
     for (int n = 0; n < 64; n++) {
         int32_t t = tri16(u);
-        fp32 x = FP(ENS_X0) + (fp32)udiv((u - u0) * (uint32_t)ENS_W, cyc) * 1024;   /* cyc <= 838861: no overflow */
+        fp32 x = FP(ENS_X0) + (fp32)udiv((u - u0) * (uint32_t)ENS_W, cyc) * 1024;   /* cyc <= 524288: no overflow */
         fp32 y = FP(ENS_CY) + (fp32)(((mirror ? t : -t) * amp) >> 5);  /* amp units at t = 32768 */
         if (n) {
             if (fast)
@@ -1116,8 +1117,8 @@ static void ens_sweep(void *r, uint32_t now, uint32_t cyc, uint32_t off, int32_t
 
 static void draw_ensemble(void *r, const int16_t *k, int stereo)
 {
-    int32_t ens = knob_pos(k[2]);
-    title(r, ens < 4096 ? "CHORUS" : "ENSEMBLE", WHITE);
+    int32_t ch = knob_pos(k[2]), ens = ens_amount(ch);               /* white: character (ensemble.h) */
+    title(r, ens ? "ENSEMBLE" : ch >= ENS_DUAL_HI ? "DUAL" : "CHORUS", WHITE);
     const struct ens *st = ensemble_state ? &ensemble_state[stereo] : 0;
     uint32_t now = st ? st->lfo >> 16 : 0;
     uint32_t cyc = ens_rate_q16(knob_pos(k[0]));                  /* turns per second, Q16 */
@@ -1133,7 +1134,7 @@ static void draw_ensemble(void *r, const int16_t *k, int stereo)
         ens_sweep(r, now, cyc, 0x5555, amp, 0, c, FP(1), 1);
         ens_sweep(r, now, cyc, 0xAAAA, amp, 0, c, FP(1), 1);
     }
-    if (stereo)                             /* master: R sweeps in anti-phase */
+    if (stereo)                             /* master: R in anti-phase (DUAL), or L's sweep with the wet inverted (CE) */
         ens_sweep(r, now, cyc, 0, amp, 1, DARKBLUE, FP(1), 1);
     ens_sweep(r, now, cyc, 0, amp, 0, BLUE, FP(2), 0);           /* blue: the sweep, at its rate */
     mix_bar(r, k[3]);
@@ -1519,7 +1520,7 @@ static int choir_ready(void)
 }
 
 /* Screen-side motion phases, clocked by the 6.5 Hz shimmer phase (a steady audio clock): the sway follows the blue
- * rate exactly up to 1 Hz, then at 0.35x of the excess (12.8 Hz -> ~5 Hz on screen), so it keeps speeding up over
+ * rate exactly up to 1 Hz, then at 0.35x of the excess (8 Hz -> ~3.5 Hz on screen), so it keeps speeding up over
  * the whole knob without becoming a blur; the star flick runs at a steady 3 Hz. */
 struct view { uint32_t last_vib, sway, flick; };
 static struct view choir_view RAM = { 0, 0, 0 };
@@ -1543,8 +1544,9 @@ static void draw_choir(void *r, const int16_t *k, int stereo)
     const struct ens *st = ensemble_state ? &ensemble_state[stereo] : 0;
     choir_motion(knob_pos(k[0]), st ? st->vib : 0);
     uint32_t lfo = choir_view.sway, vib = choir_view.flick;
-    int32_t depth = knob_pos(k[1]), ens = knob_pos(k[2]), mix = knob_pos(k[3]);
-    int32_t fade = ens <= 1024 ? 0 : ens >= 16384 ? 256 : ((ens - 1024) * 273) >> 14;   /* 0 .. 256 */
+    int32_t depth = knob_pos(k[1]), ch = knob_pos(k[2]), mix = knob_pos(k[3]);
+    /* white = character: CE a solo; DUAL two silhouettes behind (a second line); the ensemble fades them in fully */
+    int32_t ens = ens_amount(ch), fade = (ens_dual(ch) >> 9) + ((ens * 3) >> 9);   /* 0, 64 (DUAL), .. 255 */
     int backing = fade > 0, open = mix >= 1638;                     /* singers 2/3 on stage; mouths open (5 %) */
     if (fade != fade_level) {                       /* white: the backing singers fade in from black */
         fade_level = fade;
@@ -1569,7 +1571,7 @@ static void draw_choir(void *r, const int16_t *k, int stereo)
         /* green stars: grow with depth, flick +-20 degrees at the 6.5 Hz shimmer */
         set_rot_scale(choir_node[C_HALO][i], (vib >> 31) ? 0x0E38E38Eu : 0xF1C71C72u, 614 + ((depth * 922) >> 15),
                       xs[i], 72);
-        show(choir_node[C_HALO][i], on && depth > 0);
+        show(choir_node[C_HALO][i], on && depth > 0 && ens > 0);
         if (stereo) {                                               /* master: reflections lean in anti-phase */
             int32_t tr = tri16((lfo + off + 0x80000000u) >> 16);
             set_rotation(choir_node[C_R][i], (uint32_t)(-((depth * tr) >> 15) * 3277), xs[i], 124);

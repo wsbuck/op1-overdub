@@ -1,11 +1,11 @@
 /* Simulator driver for one of our FX, src/slot/<source>.c (bfin-elf-run; see fxsim.py). Built with
  * -DFX=<source>, so it calls <source>_mono / <source>_stereo.
- *   fx_main MODE K0 K1 K2 K3 BLOCKS FREQ_MHZ [SWITCH_BLOCK J0 J1 J2 J3]
+ *   fx_main MODE K0 K1 K2 K3 BLOCKS FREQ_MHZ [SWITCH_BLOCK J0 J1 J2 J3 [RAMP]]
  * MODE m (mono) or s (stereo). Input: a sine at FREQ_MHZ / 1000 Hz, -6 dBFS, on every channel (R a quarter
  * period later, so dry L != R). FREQ_MHZ 0: a click instead, one sample of CLICK on every channel at frame 0, then
  * silence (impulse response, e.g. echo times). FREQ_MHZ < 0: a clean sine at -FREQ_MHZ (series in double, no
  * harmonics or aliases of its own: THD and aliasing figures). From SWITCH_BLOCK on the knobs are J0..J3 (knob-jump
- * click test).
+ * click test); with RAMP they instead move from K toward J by RAMP per block (a knob turned detent by detent).
  * stdout: one line per frame (L, or "L R"); stderr: "cycles max <n> mean <n>" per process call. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +56,10 @@ int main(int argc, char **argv)
     int sw = argc >= 13 ? atoi(argv[8]) : -1;
     for (int i = 0; i < 4 && sw >= 0; i++)
         j[i] = atoi(argv[9 + i]);
+    int ramp = argc >= 14 ? atoi(argv[13]) : 0;
+    int16_t cur[8] = {0};
+    for (int i = 0; i < 8; i++)
+        cur[i] = k[i];
     __asm__ volatile("R0 = SYSCFG; BITSET (R0, 1); SYSCFG = R0; CSYNC;" ::: "R0");   /* CCEN: run CYCLES */
     uint32_t ph = 0, maxc = 0;
     uint64_t sum = 0;
@@ -72,6 +76,13 @@ int main(int argc, char **argv)
             }
         }
         const int16_t *p = sw >= 0 && b >= sw ? j : k;
+        if (ramp && sw >= 0 && b >= sw) {
+            for (int i = 0; i < 4; i++) {
+                int32_t d = j[i] - cur[i];
+                cur[i] += d > ramp ? ramp : d < -ramp ? -ramp : d;
+            }
+            p = cur;
+        }
         uint32_t t0 = cycles();
         if (stereo)
             FX_STEREO(0, l, r, p);

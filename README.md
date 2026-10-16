@@ -37,7 +37,7 @@ Every knob drives part of the picture, in its own colour.
 
 | FX | blue | green | white | orange | screen |
 |---|---|---|---|---|---|
-| **ensemble**: Juno / string-machine chorus | rate | depth | ensemble (Solina-style vibrato) | mix | a choir |
+| **ensemble**: BBD chorus, CE-2 style by default | rate | depth | character (CE solo → Juno-style dual → three-tap string ensemble) | mix | a choir |
 | **pingpong**: ping-pong delay | time: free 20 ms … 1.28 s, then tempo-synced 1/32 … 1/2 (dotted, triplets) | feedback | tone | mix | table tennis |
 | **distortion**: TUBE, MUFF, FUZZ, CLIP, FOLD, CRUSH | drive | voice (low-pass ↓, wah ↑) | character | mix | two pedals |
 
