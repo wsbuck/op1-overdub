@@ -1606,8 +1606,8 @@ enum { P_TOP, P_LEGL, P_LEGR, P_PADL, P_PADR, P_BATL, P_BATR, P_BALL, P_SHADE, P
 static const char *const pp_ids[P_KINDS] = { "tabletop", "legL", "legR", "padL", "padR", "batL", "batR", "ball",
     "ballshade", "ballglint", "glow", "shadow", "table", "wall" };
 #define PIPS 11
-#define PP_PIVOT_X 21                                               /* the paddles turn about their handle ends: */
-#define PP_PIVOT_Y 111                                              /* (21, 111) and (299, 111) (pingpong.svg) */
+#define PP_PIVOT_X 19                                               /* the paddles turn about their handle ends: */
+#define PP_PIVOT_Y 111                                              /* (19, 111) and (301, 111) (pingpong.svg) */
 static struct svgdoc tennis RAM = { 0, 0 };
 static void *pp_node[P_KINDS] RAM = { 0 };
 static struct recol pp_ball RAM = { 0, { 0 } };
@@ -1701,10 +1701,10 @@ static void draw_tennis(void *r, const int16_t *k, int stereo)
     show(pp_node[P_PADR], stereo);
     show(pp_node[P_WALL], !stereo);
 
-    /* bats: the hitter follows through (24 deg, back to -8 over 0.12 s, then 0), the receiver cocks back (20 deg) over
+    /* bats: the hitter follows through (24 deg, back to -8 over 0.12 s, then 0), the receiver cocks back (16 deg) over
      * the last 40 % of the flight */
     int32_t hit = since < HIT ? -24 * (int32_t)DEG + 72143 * (int32_t)since : since < 8820 ? 8 * (int32_t)DEG : 0;
-    int32_t recv = ph > 614 ? 581974 * (ph - 614) : 0;
+    int32_t recv = ph > 614 ? 465579 * (ph - 614) : 0;              /* up to 16 deg: the wide blade stays on screen */
     int32_t al = right ? recv : hit, ar = right ? hit : recv;
     set_rotation(pp_node[P_BATL], (uint32_t)-al, PP_PIVOT_X, PP_PIVOT_Y);
     set_rotation(pp_node[P_BATR], (uint32_t)ar, 320 - PP_PIVOT_X, PP_PIVOT_Y);

@@ -30,7 +30,8 @@ HREF = 104        # table half-length the asset is drawn at (= blue's longest); 
 HMIN = 40         # half-length at the shortest delay
 BAT_Y = 70        # where the ball meets the paddles (blade centre height)
 BS = 1.15         # blade scale (rim, sheen, throat flare and shadow with it; the handle stays as it is)
-BLADE_W = 12.5 * BS     # blade half-width
+WS = 1.13         # the blade (rim, sheen, shadow) widened against its height
+BLADE_W = 12.5 * BS * WS  # blade half-width
 BLADE_TOP = 16.5 * BS   # blade extent from its centre away from the handle (rounded) ...
 BLADE_BASE = 12.5 * BS  # ... and toward it (flatter: a superellipse half, where the throat meets it)
 TILT = 19         # the paddle leans toward the net, degrees from upright (left paddle; mirrored on the right)
@@ -198,7 +199,7 @@ def paddle(side):
           at(2.3, -BLADE_BASE - 4)]
     grips = [(at(-3.1, h), at(3.1, h)) for h in (-GRIP_END + 13, -GRIP_END + 7)]
     outline = blade_pts(BLADE_W, BLADE_TOP, BLADE_BASE)
-    off = (-side * 1.4 * BS, 1.2 * BS)                                       # the rim: the blade's edge, seen as its thickness
+    off = (-side * 1.4 * BS * WS, 1.2 * BS)                                       # the rim: the blade's edge, seen as its thickness
     rim = [at(v, h) for v, h in outline]
     # sheen: an arc along the inner outline, upper outer quarter (away from the net)
     inner = blade_pts(BLADE_W - 3.4 * BS, BLADE_TOP - 3.4 * BS, BLADE_BASE - 3.4 * BS, 48)
@@ -214,7 +215,7 @@ def paddle(side):
         N("path", f"sheen{s}", d=P(*sh), fill="none",
           **A(stroke=C[c["sheen"]], stroke_width="2", stroke_linecap="round", stroke_linejoin="round")),
     ])
-    shadow = N("path", f"padshadow{s}", d=ellipse_d(bx - side * 6 * BS, FLOOR - 2.5, 11 * BS, 1.8), fill=C["darkblue"])
+    shadow = N("path", f"padshadow{s}", d=ellipse_d(bx - side * 6 * BS * WS, FLOOR - 2.5, 11 * BS * WS, 1.8), fill=C["darkblue"])
     return N("g", f"pad{s}", [shadow, bat])
 
 

@@ -58,17 +58,17 @@ FX contract and slot mechanics: fx-slot.md. Confidence: **Confirmed** = read in 
 
 ## Screen (2026-10-16: paddles; `design/fx/pingpong.svg` from `design/fx/gen_pingpong.py`, ui.c `draw_tennis`)
 - The players are gone: two flat table-tennis bats, L blue and R pink, one at each table end, leaning 19 deg toward
-  the net. Blade 29 x 33 (taller than wide: an ellipse on top, a flatter superellipse base), its rim showing as the
+  the net. Blade 32.5 wide x 33.4 tall (an ellipse on top, a flatter superellipse base), its rim showing as the
   thickness, a sheen arc; a light throat flaring into the blade; a long purplegrey handle (two grip bands) with a
   flared end; a floor shadow. Mono (synth/drum FX) keeps squash: the L bat against the brick wall. Table, net,
   barrier, scoreboard, ball, arches unchanged. (First version 2026-10-16: round blades; the user found them too
-  round, so bigger, real bat shapes; then the blades 15 % bigger against the same handle.)
+  round, so bigger, real bat shapes; then the blades 15 % bigger against the same handle, then 13 % wider.)
 - gen_pingpong.py is the generator again (the SVG is reproducible): it writes the file, bridges multi-piece fills
   (strictify.py), makes the recoloured fills unique (uniquify.py) and runs check_svg.py and svg_cells.py --check.
   69 drawable elements, every one one subpath of absolute M / L / C / Z; heaviest fill the barrier ~784 cells (20 %).
 - Motion: the ball flies blade face to blade face once per delay (or a whole multiple >= 0.25 s), clocked by the
   line's write index (the generator places each blade so the ball at x 54 / 266 touches it); the hitter (group
-  `batL` / `batR`; the swing envelope stays off the table slab and below y 48, under the readouts) follows through 24 deg about its handle end (21, 111) / (299, 111) and settles, the receiver cocks back over the last 40 % of the flight; a lightblue swoosh for 0.12 s after a hit.
+  `batL` / `batR`; the swing envelope stays off the table slab and below y 48, under the readouts, and inside the safe area x 4 .. 316) follows through 24 deg about its handle end (19, 111) / (301, 111) and settles, the receiver cocks back 16 deg over the last 40 % of the flight; a lightblue swoosh for 0.12 s after a hit.
 - Blue: the table length now follows the delay played (log2 of the DSP's glided delay: 20 ms … 1.48 s = half length
   40 … 104), so it moves with the tape glide and with tempo changes; padL / padR, legs and the wall follow the ends.
 - Readout (immediate, after the SVG): top left in blue the division played ("1/8.", "1/8T", "1/4") or the free time
