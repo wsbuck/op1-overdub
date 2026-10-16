@@ -187,9 +187,10 @@ footer { padding: 28px 0 40px; font-size: 11px; color: var(--dim); display: flex
       <ol>
         <li>Download stock firmware 246 from TE: <a href="https://teenage.engineering/_software/op-1/op1_246.op1">op1_246.op1</a>.</li>
         <li>Download <code>overdub-*.zip</code> from <a href="https://github.com/wsbuck/op1-overdub/releases">releases</a> and unzip it.</li>
-        <li><code>python3 apply.py op1_246.op1</code> <span class="dim">(Python 3.10+, no other dependencies)</span> writes <code>OVERDUB.OP1</code>. It checks that your file is stock 246 and that the result is exactly the expected image.</li>
+        <li><code>python3 apply.py op1_246.op1</code> <span class="dim">(Python 3.10+, no other dependencies)</span> asks which features to install (every engine, FX, HOLD and CHORD; all on by default) and writes <code>OVERDUB.OP1</code>. It checks that your file is stock 246 and that the result is exactly the expected image for your choice.</li>
         <li>On the OP-1: hold <b>COM</b> while switching on, press <b>1</b> (upload firmware), connect USB, copy <code>OVERDUB.OP1</code> to the OP-1 disk, eject. Same procedure as an official update.</li>
       </ol>
+      <p class="note">Without the questions: <code>--all</code>, <code>--without amp,crush</code>, <code>--only va,grain,hold</code>; <code>--list</code> shows the features. A left-out engine or FX is only hidden from the lists, so sounds saved with it still load.</p>
       <p class="note">The release contains only our code, our database rows (engine/FX names and presets) and our SVG screens. TE's firmware never leaves your computer.</p>
     </div>
     <div id="safety">

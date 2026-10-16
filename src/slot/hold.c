@@ -12,6 +12,8 @@
  *   - the keyboard key-up CALL at 0x019AC3A6 (FUN_019ac2f8 -> FUN_01a85840 note-off) calls hold_keyup;
  *   - the synth controller's shift-key slot (vtable 0x01911994 +0x1C, pointer 0x019119B0 -> 0x01A50904)
  *     points at hold_shiftkey.
+ * Each hook checks the feature mask (slot.S _feature_mask, hold_impl.h FEAT_*): a hook left out at install time
+ * behaves as stock.
  * Held notes are kept as physical key indices (0..23) and released by rebuilding the note the way TE's
  * own key-up does (FUN_01a85014(&n, key, 0x40)), so octave and slot changes, which transpose the active
  * notes, are handled the same as stock. Both hooks run in the KeyHandler thread.
@@ -22,6 +24,7 @@ extern void te_note_off(int32_t *note);                     /* FUN_01a85840 (Voi
 extern void te_note_on(int32_t *note, int flags);           /* FUN_01a85750 (VoiceCtl.cpp:776) */
 extern void te_make_note(int32_t *note, int key, int vel);  /* FUN_01a85014 */
 extern int te_synth_shiftkey(void *self, int key);          /* FUN_01a50904 */
+extern const volatile uint32_t feature_mask;                /* slot.S: FEAT_HOLD | FEAT_CHORD, set by tools/apply.py */
 
 void hold_keyup(int32_t *note);
 void chord_keydown(int32_t *note);

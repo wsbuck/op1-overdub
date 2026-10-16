@@ -8,9 +8,13 @@
 #define VOICECTL_LOCKED (*(volatile uint8_t *)0x01DFE730)   /* note-offs are dropped while locked */
 #define SHIFT_DOWN (*(volatile uint8_t *)0x01DD7F78)        /* set/cleared by the global key handler */
 #define RAM __attribute__((section(".data")))
+#define FEATURES feature_mask                               /* slot.S, set by tools/apply.py */
 #else
 #define RAM
 #endif
+
+#define FEAT_HOLD 1u                   /* SHIFT+T2 toggles hold; off: SHIFT+T2 goes to TE's handler as in stock */
+#define FEAT_CHORD 2u                  /* SHIFT + notes learn a chord; off: notes play as stock (no learning) */
 
 #define KEY_T2 7
 #define CHORD_MAX 4                    /* notes in a shape (6 voices) */
@@ -131,7 +135,7 @@ void chord_keydown(int32_t *note)
     } else if (key_n[key]) {
         key_release(key, 0);           /* key-up never came (e.g. a sequencer took it): don't leak references */
     }
-    if (SHIFT_DOWN) {                  /* learn: SHIFT + notes; the first is the root */
+    if (SHIFT_DOWN && (FEATURES & FEAT_CHORD)) {   /* learn: SHIFT + notes; the first is the root */
         if (!chord_learning) {
             chord_learning = 1;
             learn_root = note[0];
@@ -184,7 +188,7 @@ void hold_keyup(int32_t *note)
 /* Synth screen SHIFT+key handler: SHIFT+T2 toggles hold, everything else goes to TE's handler. */
 int hold_shiftkey(void *self, int key)
 {
-    if (key == KEY_T2) {
+    if (key == KEY_T2 && (FEATURES & FEAT_HOLD)) {
         hold_on = !hold_on;
         if (!hold_on)
             release_held();

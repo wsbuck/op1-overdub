@@ -19,6 +19,8 @@ src/slot/slot.S is assembled at --slot-addr with tables generated into DIR/slot_
 image (TE data, never committed). TE's name lookup, producer factory, ScreenId, knob-range and
 per-engine flag-table code is repointed at the grown tables by checked halfword patches
 (tools/ldr_patch.py --half). iter (id 14) stays stock. See notes/engine-slot.md.
+Writes DIR/features.json: the address of slot.S's feature mask word and the hooks installed (--hold, --chord), for
+tools/mkpatch.py (apply.py clears the mask bits of hooks the user leaves out).
 With --db-in/--db-out, adds each engine's synth_types row and presets (tools/add_engine_db.py), optionally
 enables TE's hidden filter FX (--db-enable-filter), keeps
 only the first N presets of folders given with --db-trim FOLDER=N, and refuses a DB with more than
@@ -100,6 +102,7 @@ MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum pre
 STOCK_DRUM_PRESETS = 24
 MAX_FACTORY_DRUM_PRESETS = 28              # stock 24 + 4 kits: leaves the user room for 30 saved drum sounds (stock 34)
 MAX_FOLDER_LABEL = 13                      # the preset browser prints a column label with snprintf(buf, 14, "%s")
+FEATURE_BITS = {"hold": 1, "chord": 2}            # slot.S _feature_mask; must match hold_impl.h FEAT_*
 FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4}   # by source; must match ui.c's FX_* enum
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
@@ -492,6 +495,12 @@ def main():
                 "--half", f"0x{pc + 2:08x}=0x{old[1]:04x}:0x{new[1]:04x}"]
     cmd += [x for addr, old, new in halves for x in ("--half", f"0x{addr:08x}=0x{old:04x}:0x{new:04x}")]
     subprocess.run(cmd, check=True)
+    # Where the HOLD/CHORD feature mask lives (slot.S _feature_mask, hold_impl.h FEAT_*), for tools/mkpatch.py
+    if sym.get("_feature_magic") != sym["_feature_mask"] - 8:
+        sys.exit("slot.S: _feature_magic must sit right before _feature_mask")
+    json.dump({"mask_addr": sym["_feature_mask"], "mask_bits": FEATURE_BITS,
+               "hooks": [h for h, on in (("hold", a.hold), ("chord", a.chord)) if on]},
+              open(os.path.join(a.build, "features.json"), "w"), indent=1)
     print(f"{len(halves)} halfword patches; slot symbols:",
           ", ".join(f"{k} 0x{v:08x}" for k, v in sorted(sym.items(), key=lambda kv: kv[1]) if v >= a.slot_addr))
 

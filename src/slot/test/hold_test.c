@@ -1,5 +1,6 @@
 /* Host test of src/slot/hold.c (HOLD and CHORD) with stand-ins for TE's note functions and state.
- *   cc -std=gnu99 -I src/slot src/slot/test/hold_test.c -o /tmp/hold_test && /tmp/hold_test */
+ *   cc -std=gnu99 -I src/slot src/slot/test/hold_test.c -o /tmp/hold_test && /tmp/hold_test
+ * Also run in the Blackfin simulator by hold_check.py (device compiler, same checks). */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -13,6 +14,8 @@ static int offs[64], noffs, shift_calls, ons[64], nons, sounding[128], bad_range
 #define KEY_DOWN key_down
 #define VOICECTL_LOCKED locked
 #define SHIFT_DOWN shift_down
+static uint32_t features = 3;                      /* slot.S _feature_mask: FEAT_HOLD | FEAT_CHORD */
+#define FEATURES features
 
 void te_make_note(int32_t *n, int key, int vel) { n[0] = key + 0x35 + 12 * OCTAVE(SLOT); n[1] = vel; }
 void te_note_off(int32_t *n)
@@ -63,6 +66,24 @@ static void key_up(int key)
     key_down[key] = 0;
     te_make_note(n, key, 0x40);
     hold_keyup(n);
+}
+
+/* Fresh state and counters with the given feature mask. */
+static void reset_all(uint32_t mask)
+{
+    features = mask;
+    hold_on = hold_keys = 0;
+    chord_on = chord_learning = 0;
+    chord_n = 0;
+    chord_reset();
+    for (int i = 0; i < 24; i++)
+        key_down[i] = 0;
+    for (int i = 0; i < 128; i++)
+        sounding[i] = 0;
+    noffs = nons = shift_calls = bad_range = 0;
+    shift_down = 0;
+    play_mode = 0;
+    synth_mode();
 }
 
 int main(void)
@@ -184,6 +205,38 @@ int main(void)
     CHECK(shared_ok && count_sounding() == chord_n, "chord key lost in a mode switch: later chords keep every note");
     key_up(4);
     CHECK(count_sounding() == 0, "... and release cleanly");
+
+    /* Feature mask (tools/apply.py clears the bits of hooks left out): each hook then behaves as stock. */
+    reset_all(FEAT_CHORD);                             /* HOLD left out */
+    CHECK(hold_shiftkey(0, 7) == 0 && shift_calls == 1 && !hold_on, "no HOLD: SHIFT+T2 goes to TE's handler");
+    key_dn(3); key_up(3);
+    CHECK(count_sounding() == 0 && noffs == 1, "no HOLD: key-up releases at once");
+    shift_down = 1; key_dn(0); key_dn(4); key_dn(7); key_up(0); key_up(4); key_up(7); shift_down = 0;
+    key_dn(0);
+    CHECK(chord_on && count_sounding() == 3, "no HOLD: CHORD still learns and plays");
+    key_up(0);
+    CHECK(count_sounding() == 0, "no HOLD: the chord releases on key-up");
+
+    reset_all(FEAT_HOLD);                              /* CHORD left out */
+    shift_down = 1; key_dn(0); key_dn(4);
+    CHECK(!chord_learning && count_sounding() == 2 && nons == 2, "no CHORD: SHIFT + notes play plain notes, no learning");
+    key_up(0); key_up(4); shift_down = 0;
+    key_dn(0);
+    CHECK(!chord_on && count_sounding() == 1, "no CHORD: a plain key plays one note");
+    key_up(0);
+    CHECK(hold_shiftkey(0, 7) == 1 && hold_on && shift_calls == 0, "no CHORD: SHIFT+T2 still toggles HOLD");
+    key_dn(5); key_up(5);
+    CHECK(count_sounding() == 1, "no CHORD: HOLD keeps the released note");
+    hold_shiftkey(0, 7);
+    CHECK(!hold_on && count_sounding() == 0, "no CHORD: HOLD off releases it");
+
+    reset_all(0);                                      /* neither */
+    CHECK(hold_shiftkey(0, 7) == 0 && shift_calls == 1 && !hold_on, "neither: SHIFT+T2 goes to TE's handler");
+    shift_down = 1; key_dn(2); key_dn(9); key_up(2); key_up(9); shift_down = 0;
+    key_dn(2);
+    CHECK(!chord_learning && !chord_on && count_sounding() == 1, "neither: no learning, one note per key");
+    key_up(2);
+    CHECK(count_sounding() == 0 && bad_range == 0, "neither: every note released");
     printf(fails ? "\n%d failed\n" : "\nall passed\n", fails);
     return fails != 0;
 }

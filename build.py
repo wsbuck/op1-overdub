@@ -2,6 +2,7 @@
 """Build the custom firmware image and a shareable patch from stock OP-1 firmware 246.
 
   python3 build.py [--engines va,wavetable,grain] [--fx ensemble,pingpong,distortion] [--version 1.0]
+                   [--without amp,crush | --only va,grain]
 
 Needs Docker with the `op1-bfin` toolchain image (docker build -t op1-bfin tools/docker) and Python 3.10+.
 Stock 246 is downloaded from teenage.engineering into firmware/stock/ if it isn't there (and checked by sha256).
@@ -9,6 +10,9 @@ Outputs:
   firmware/images/<NAME>.OP1     the image to flash
   dist/overdub-<version>.zip     the patch and tools/apply.py, to share (our code, rows and SVGs only; no TE firmware)
 Everything under firmware/ is TE-derived and gitignored: never commit or share it.
+The patch always carries every engine, FX and key mode of the build; whoever applies it picks which to install
+(tools/apply.py: --without, --only, or a checklist). --without/--only here pick them for firmware/images/<NAME>.OP1
+(made by the bundle's apply.py, as a user would). Engines marked "probe" in engines.json are always installed.
 """
 import argparse
 import hashlib
@@ -59,6 +63,9 @@ def main():
     ap.add_argument("--name", default="OVERDUB", help="image name (default OVERDUB -> firmware/images/OVERDUB.OP1)")
     ap.add_argument("--version", default="dev", help="release version, used in the zip name (default dev)")
     ap.add_argument("--stock", default=os.path.join(ROOT, "firmware", "stock", "op1_246.op1"))
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--without", metavar="A,B", help="leave these features out of the image (apply.py --without)")
+    g.add_argument("--only", metavar="A,B", help="install only these features in the image (apply.py --only)")
     a = ap.parse_args()
     if not a.name.isalnum() or any(w in a.name.upper() for w in op1pack.FORBIDDEN_WORDS):
         sys.exit("--name must be letters and digits, without FRC, RBT or KEY (the OP-1's updater acts on those)")
@@ -114,16 +121,22 @@ def main():
 
     # The shareable bundle: apply.py and the two modules it uses, plus the patch (no TE firmware).
     dist = os.path.join(ROOT, "dist", f"overdub-{a.version}" + ("" if a.name == "OVERDUB" else f"-{a.name.lower()}"))
+    feats = os.path.join(build, "features.json")       # what apply.py may leave out (tools/mkpatch.py)
+    json.dump({"engines": [{"name": e["name"], "drum": bool(e.get("drum")), "probe": bool(e.get("probe"))} for e in engines],
+               "fx": [f["name"] for f in fxs],
+               "slot": json.load(open(os.path.join(build, "slot", "features.json")))}, open(feats, "w"), indent=1)
     run(sys.executable, os.path.join(ROOT, "tools", "mkpatch.py"), a.stock, image, os.path.join(dist, "patch"), "--name",
-        f"overdub {a.version}: {', '.join(e['name'] for e in engines)}; FX {', '.join(f['name'] for f in fxs) or 'none'}")
+        f"overdub {a.version}: {', '.join(e['name'] for e in engines)}; FX {', '.join(f['name'] for f in fxs) or 'none'}",
+        "--features", feats)
     for f in ("apply.py", "ldr.py", "op1pack.py"):
         shutil.copyfile(os.path.join(ROOT, "tools", f), os.path.join(dist, f))
     shutil.copyfile(os.path.join(ROOT, "LICENSE"), os.path.join(dist, "LICENSE"))
     # The image to flash is the one the bundle produces, so what is tested is what others get.
-    run(sys.executable, "-B", os.path.join(dist, "apply.py"), a.stock, image)   # -B: no __pycache__ in the bundle
+    choice = ["--without", a.without] if a.without else ["--only", a.only] if a.only else ["--all"]
+    run(sys.executable, "-B", os.path.join(dist, "apply.py"), a.stock, image, *choice)   # -B: no __pycache__ in the bundle
     zipf = shutil.make_archive(dist, "zip", os.path.dirname(dist), os.path.basename(dist))
     print(f"\nimage: {os.path.relpath(image, ROOT)}\npatch: {os.path.relpath(zipf, ROOT)} "
-          f"(unzip, then: python3 apply.py op1_246.op1)")
+          f"(unzip, then: python3 apply.py op1_246.op1; --list shows the features)")
 
 
 if __name__ == "__main__":

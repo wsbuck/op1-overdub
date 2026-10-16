@@ -49,10 +49,27 @@ Every knob drives part of the picture, in its own colour.
 
 1. Download stock firmware 246 from TE: <https://teenage.engineering/_software/op-1/op1_246.op1>.
 2. Download `overdub-*.zip` from [Releases](../../releases) and unzip it.
-3. `python3 apply.py op1_246.op1` (Python 3.10+, no other dependencies) writes `OVERDUB.OP1`.
-   It checks that your file is stock 246 and that the result is exactly the expected image.
+3. `python3 apply.py op1_246.op1` (Python 3.10+, no other dependencies) asks which features to install and writes
+   `OVERDUB.OP1`. It checks that your file is stock 246 and that the result is exactly the expected image for your
+   choice.
 4. On the OP-1: hold **COM** while switching on, press **1** (upload firmware), connect USB, copy `OVERDUB.OP1` to the
    OP-1 disk, eject. Same procedure as an official update.
+
+### Choosing features
+
+Every engine, FX, HOLD and CHORD can be left out. In a terminal `apply.py` shows a checklist with everything on;
+type numbers to toggle, Enter to install. Or choose with flags:
+
+```
+python3 apply.py --list                               # the features in this release
+python3 apply.py op1_246.op1 --all                    # everything, no questions (also the default when not in a terminal)
+python3 apply.py op1_246.op1 --without amp,crush      # everything except these
+python3 apply.py op1_246.op1 --only va,grain,hold     # only these
+```
+
+A left-out engine or FX stays in the firmware with the same name and id but is not listed in the browsers (its
+engine/FX list entry, presets and kits are not installed), so a sound saved with it still loads. A left-out HOLD or
+CHORD is switched off: SHIFT+T2 and SHIFT+keys behave as on stock firmware.
 
 The release contains only our code, our database rows (engine/FX names and presets) and our SVG screens.
 TE's firmware never leaves your computer.
@@ -73,6 +90,7 @@ Needs Docker and Python 3.10+.
 docker build -t op1-bfin tools/docker          # ADI's bfin-elf GCC 4.3 toolchain (x86_64; runs under emulation on Apple silicon)
 python3 build.py                               # everything; downloads stock 246 into firmware/stock/
 python3 build.py --engines grain --fx distortion --no-hold --name MINE
+python3 build.py --without crush --name MINE           # the image with a feature left out (the zip keeps them all)
 ```
 
 Outputs `firmware/images/<NAME>.OP1` and the shareable `dist/overdub-<version>.zip`.
