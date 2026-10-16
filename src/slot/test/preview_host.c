@@ -270,9 +270,16 @@ void *te_node_find(void *node, const char *id, int must)
     struct hnode *n = lookup(node, id);
     return n ? n->raw : 0;
 }
+/* TE's FUN_019ead58 (notes/svg-route.md, Verified): copies m[9] into the node as its local matrix (replacing the SVG
+ * transform; row vector, {a, b, 0, c, d, 0, e, f, 1} x 1024). Anything else in m[2], m[5], m[8] would make TE's
+ * transform projective: refuse it here, so the preview cannot accept a layout the device would misread. */
 void te_node_matrix(void *node, const int32_t *m)
 {
     struct hnode *n = (struct hnode *)node;
+    if (m[2] || m[5] || m[8] != 1024) {
+        fprintf(stderr, "te_node_matrix %s: not TE's layout {a, b, 0, c, d, 0, e, f, 1024}\n", n->id);
+        exit(5);
+    }
     n->m[0] = m[0], n->m[1] = m[1], n->m[2] = m[3], n->m[3] = m[4], n->m[4] = m[6], n->m[5] = m[7];
     n->has_m = 1;
 }

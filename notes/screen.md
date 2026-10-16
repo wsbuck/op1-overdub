@@ -90,6 +90,13 @@ Found 2026-10-15 after CRUSH4 stopped on opening the crush FX screen (LOG 72). S
   element) render. No scope (element, group, frame) explains both with the cell model, so the model misses something
   crush3d.svg has (Hypothesis). CRUSH6 brings the crush screen up layer by layer on its first open (build.py
   `--staged-screens`, labelled STAGE 0 SKY .. 4 GRIT, 2 s each) to find the layer that asserts.
+  - CRUSH6 result: no assert, but no pyramid either, only the sky (sun, horizon, sand, far pyramids) and the
+    readouts. Cause: the staged code hid `pyr` at stage 0 and nothing showed it again (it is visible by default, so the
+    normal code never sets it). So CRUSH6 showed the sky renders and the readout's AGG lines are fine, and never drew
+    the pyramid: the culprit is inside `pyr` (CRUSH4/5 asserted with it drawn). Not a transform format issue:
+    `te_node_matrix` (0x019EAD58) copies the 9 words as the node's local matrix and invalidates (vtable +0x74), the same
+    row-vector layout set_matrix writes (the host stub now refuses any other layout). CRUSH7 fixes the stage code
+    (3 s per stage) and keeps the staged bring-up.
 - Rules: split long compound paths and long strokes (many short stroked subpaths cost two sides plus two caps
   each); `build.py` runs `svg_cells.py --check` on every published SVG and fails above 70 % of the limit; crush's own
   check holds every state to 50 %. A fill's interior costs nothing here (only its edges): large fills cost render

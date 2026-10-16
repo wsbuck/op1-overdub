@@ -2140,16 +2140,15 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
             recol_set(&pyr_rc[i], sq ? CP_WHITE : pyr_pal[row][RL_SUN], sq ? 256 - ((141 * gr) >> 15) : 256);
 #ifdef CRUSH_STAGED
     /* Device diagnosis (build.py --staged-screens): on the first open after boot the layers come up one by one, every
-     * 2 s, labelled; a stage that stops the OP-1 (agg.cpp:339) names the culprit layer. */
+     * 3 s, labelled; a stage that stops the OP-1 (agg.cpp:339) names the culprit layer. */
     static const char *const stage_name[5] = { "STAGE 0 SKY", "STAGE 1 PYRAMID", "STAGE 2 RATE", "STAGE 3 BITS",
                                                 "STAGE 4 GRIT" };
     static uint32_t first RAM = 0;
     if (!first)
         first = f;
-    uint32_t stage = (f - first) / 60;
+    uint32_t stage = (f - first) / 90;                              /* 3 s per stage */
+    show(pyr_node[P_PYR], stage >= 1);      /* CRUSH6 hid it at stage 0 and never showed it again: always set it */
     if (stage < 5) {
-        if (stage < 1)
-            show(pyr_node[P_PYR], 0);
         if (stage < 2) {
             show(pyr_node[P_SMOOTH], 1);
             for (int i = 0; i < 4; i++)

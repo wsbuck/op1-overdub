@@ -29,14 +29,15 @@ SVG = os.path.join(ROOT, "design", "fx", "crush3d.svg")
 BOX = (-60, -60, 380, 220)          # screen 320 x 160 plus a margin, SVG units
 
 
-def build(tmp):
-    data, gdata, exe = (os.path.join(tmp, n) for n in ("wt.bin", "grain.bin", "fuzz"))
+def build(tmp, staged=False):
+    data, gdata, exe = (os.path.join(tmp, n) for n in ("wt.bin", "grain.bin", "fuzz_staged" if staged else "fuzz"))
     subprocess.run([sys.executable, os.path.join(ENGINE, "gen_wt_data.py"), data], check=True, capture_output=True)
     subprocess.run([sys.executable, os.path.join(ENGINE, "gen_grain_data.py"), gdata], check=True, capture_output=True)
     subprocess.run(["cc", "-std=gnu99", "-O1", "-Wall", "-I", ENGINE, "-I", SLOT, "-lm",
                     "-DPALETTE=((const uint8_t *)host_palette)", "-DKNOBS(s)=((const int16_t *)host_knobs)",
                     "-DPROF=((volatile uint32_t *)host_prof)", "-DFX_KNOBS(m,s)=((const int16_t *)host_knobs)",
-                    "-DTE_MATRIX=((const int32_t *)host_matrix)", "-include", os.path.join(HERE, "preview_decl.h"),
+                    "-DTE_MATRIX=((const int32_t *)host_matrix)", "-include", os.path.join(HERE, "preview_decl.h")]
+                   + (["-DCRUSH_STAGED"] if staged else []) + [
                     os.path.join(SLOT, "ui.c"), os.path.join(HERE, "preview_host.c"), os.path.join(SLOT, "crush.c"),
                     "-DDISTORTION_CURVE_ONLY", os.path.join(SLOT, "distortion.c"), "-o", exe], check=True)
     return exe, data, gdata
@@ -134,6 +135,21 @@ def main():
     n_lines = sum(len(f["lines"]) for f in fr)
     check(len(fr) == frames and not bad, f"line placeholder (no SVG), {len(fr)} fuzzed frames, {n_lines} segments: all "
           f"inside {BOX}{'; bad: ' + str(bad[:5]) if bad else ''}")
+    # the staged bring-up (build.py --staged-screens): pyr hidden only in stage 0, the voxels only in stages 0 .. 1,
+    # then back for good (CRUSH6 hid pyr at stage 0 and never showed it again)
+    exe2, _, _ = build(tmp, staged=True)
+    fr = run(exe2, data, gdata, 600, True, True)
+    wrong = []
+    for i, f in enumerate(fr):
+        stage = i // 90
+        pv = f["nodes"].get("pyr", (1, None))[0]
+        vox = max(f["nodes"].get(f"vox{j}", (0, None))[0] for j in range(1, 5))
+        if pv != (stage >= 1) or (stage < 2 and vox):
+            wrong.append((i, stage, pv, vox))
+    later = sum(f["nodes"].get("pyr", (0, None))[0] for f in fr[450:])
+    check(not wrong and later == len(fr) - 450, f"staged bring-up: pyr hidden only in stage 0, voxels only in stages 0 .. 1, "
+          f"the pyramid drawn on all {len(fr) - 450} frames after the stages{'; wrong: ' + str(wrong[:5]) if wrong else ''}")
+
     print(f"\n{len(fails)} failed" if fails else "\nall passed")
     sys.exit(1 if fails else 0)
 
