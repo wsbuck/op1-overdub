@@ -110,6 +110,7 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          "_voice_ram": 0x00810000,       # engines' per-voice RAM in FREE region 0 (src/engine/build.sh)
          "_te_engine_ids": 0xFF8016E4, "_te_ssamp": 0x01DF6F78, "_te_knobs": 0xFF8013C4,
          "_te_synth_slot": 0x01AAAC0C,   # grain_source.h
+         "_te_tempo_spb": 0x01AADAD8,    # the tempo, samples per beat Q14 (pingpong.c; notes/fx-pingpong.md "Tempo")
          # audio-input buffers (src/engine/inprobe.h, notes/input.md; as src/engine/build.sh)
          "_te_audio_in": 0xFF800CB4, "_te_rx_sel": 0xFF800364, "_te_rx": 0xFF800370, "_te_alt_in": 0x01AB2E2C,
          # drum side (notes/drum-engine.md, src/slot/drumprobe.h)

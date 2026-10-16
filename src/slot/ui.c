@@ -1139,6 +1139,56 @@ static void draw_ensemble(void *r, const int16_t *k, int stereo)
     mix_bar(r, k[3]);
 }
 
+static const char *const pp_div_names[PP_DIVS] = { "1/32", "1/16T", "1/16", "1/8T", "1/16.", "1/8", "1/4T", "1/8.",
+    "1/4", "1/2T", "1/4.", "1/2" };
+
+/* The pingpong delay the screen shows, whole samples: the DSP's (glided) delay once it runs, else blue's target at
+ * 120 BPM (pingpong.h). */
+static uint32_t pp_delay(const int16_t *k, int stereo)
+{
+    const struct pp *st = pingpong_state ? &pingpong_state[stereo] : 0;
+    if (st && st->d > 0)
+        return (uint32_t)st->d >> 15;
+    int div, fold;
+    return (uint32_t)pp_target(knob_pos(k[0]), PP_SPB_DEF, &div, &fold) >> 15;
+}
+
+/* The time readout, top left in blue: the division played ("1/8.", "1/8T", "1/4") or the free time ("330MS"); when
+ * synced, the tempo in grey top right ("120BPM", "133.3BPM"), as the DSP reads it, and under the division what blue
+ * asked for when it was too long for the line ("1/2 TOO LONG": the half or quarter plays). */
+static void pp_readout(void *r, const int16_t *k, const struct pp *st)
+{
+    int div, fold;
+    int32_t spb = st && st->spb ? st->spb : PP_SPB_DEF;
+    int32_t dt = st && st->dt ? st->dt : pp_target(knob_pos(k[0]), spb, &div, &fold);
+    if (st && st->dt) {
+        div = st->div;
+        fold = st->fold;
+    }
+    char buf[16], *p;
+    if (div >= 0 && div < PP_DIVS) {
+        text(r, pp_div_names[div], FP(8), FP(7), FP(2), BLUE);
+        if (fold > 0 && div + 3 * fold < PP_DIVS) {                 /* slow tempo: what blue asked for, in grey */
+            put_str(put_str(buf, pp_div_names[div + 3 * fold]), " TOO LONG");
+            text_fast(r, buf, FP(8), FP(23), FP(1), GREY);
+        }
+        uint32_t q = (uint32_t)spb >> 10;                           /* samples per beat, Q4 */
+        uint32_t t = udiv(423360000u + (q >> 1), q);                /* BPM x 10 = 60 x 44100 x 10 x 16 / q */
+        uint32_t whole = udiv(t, 10);
+        p = put_dec(buf, whole);
+        if (t - whole * 10) {
+            *p++ = '.';
+            p = put_dec(p, t - whole * 10);
+        }
+        put_str(p, "BPM");
+        int n = (int)(p - buf) + 3;
+        text_fast(r, buf, FP(312) - FP(12 * n - 4), FP(7), FP(2), GREY);   /* 1-px lines: cheap, secondary */
+    } else {
+        put_str(put_dec(buf, udiv(((uint32_t)dt >> 15) * 10 + 220, 441)), "MS");
+        text(r, buf, FP(8), FP(7), FP(2), BLUE);
+    }
+}
+
 #define PP_X0 20
 #define PP_W 270                            /* 2.7 s */
 #define PP_CY 82
@@ -1147,8 +1197,8 @@ static void draw_ensemble(void *r, const int16_t *k, int stereo)
 static void draw_pingpong(void *r, const int16_t *k, int stereo)
 {
     title(r, stereo ? "PING PONG" : "DELAY", BLUE);
-    /* time: 20 ms * 2^(6 k / 32768), in 1/100 units of the 2.7 s window: 1 unit = 10 ms */
-    uint32_t t10 = (exp2_q16_ui(knob_pos(k[0]) * 12) * 2u) >> 12;    /* 20 ms = 2 units, Q4 */
+    /* time: the delay played (pingpong.h), in 1/100 units of the 2.7 s window: 1 unit = 10 ms */
+    uint32_t t10 = udiv(pp_delay(k, stereo) << 4, 441);              /* Q4 units */
     int32_t g = (knob_pos(k[1]) * 31130) >> 15;                      /* feedback, Q15 (0.95 max) */
     int32_t mix = knob_pos(k[3]);
     line_fast(r, FP(PP_X0), FP(PP_CY), FP(PP_X0 + PP_W), FP(PP_CY), DARKBLUE);
@@ -1537,13 +1587,25 @@ static void draw_choir(void *r, const int16_t *k, int stereo)
     svg_cost(r);
 }
 
-/* pingpong: table tennis (design/fx/pingpong.svg; ids and behaviour in its header). The ball's flights are clocked by
- * the delay line's write index (audio time); one flight per delay, or a whole multiple of it of at least 0.25 s. */
-enum { P_TOP, P_LEGL, P_LEGR, P_PL, P_PR, P_BATL, P_BATR, P_SMILEL, P_SMILER, P_YELLL, P_YELLR, P_BALL, P_SHADE,
-       P_GLINT, P_GLOW, P_SHADOW, P_TABLE, P_WALL, P_KINDS };
-static const char *const pp_ids[P_KINDS] = { "tabletop", "legL", "legR", "pL", "pR", "batL", "batR", "smilegL",
-    "smilegR", "yellgL", "yellgR", "ball", "ballshade", "ballglint", "glow", "shadow", "table", "wall" };
+/* log2(x) in Q10 for x >= 1: the leading bit plus a linear mantissa (< 0.09 octave off; for pictures). */
+static int32_t log2_q10(uint32_t x)
+{
+    int32_t n = 0;
+    while (n < 31 && (x >> (n + 1)))
+        n++;
+    return (n << 10) + (int32_t)((n >= 10 ? x >> (n - 10) : x << (10 - n)) & 1023);
+}
+
+/* pingpong: table tennis (design/fx/pingpong.svg, made by design/fx/gen_pingpong.py; ids and behaviour in its
+ * header). The ball's flights are clocked by the delay line's write index (audio time); one flight per delay, or a
+ * whole multiple of it of at least 0.25 s. */
+enum { P_TOP, P_LEGL, P_LEGR, P_PADL, P_PADR, P_BATL, P_BATR, P_BALL, P_SHADE, P_GLINT, P_GLOW, P_SHADOW, P_TABLE,
+       P_WALL, P_KINDS };
+static const char *const pp_ids[P_KINDS] = { "tabletop", "legL", "legR", "padL", "padR", "batL", "batR", "ball",
+    "ballshade", "ballglint", "glow", "shadow", "table", "wall" };
 #define PIPS 11
+#define PP_PIVOT_X 30                                               /* the paddles turn about their handle ends: */
+#define PP_PIVOT_Y 98                                               /* (30, 98) and (290, 98) (pingpong.svg) */
 static struct svgdoc tennis RAM = { 0, 0 };
 static void *pp_node[P_KINDS] RAM = { 0 };
 static struct recol pp_ball RAM = { 0, { 0 } };
@@ -1560,6 +1622,10 @@ static int tennis_ready(void)
         return tennis.state > 0;
     if (!svg_open(&tennis, "/yaffs2/content/display/pingpong.svg", "pingpong.svg"))
         return 0;
+    if (!te_node_find(tennis.doc, "padL", 0)) {                     /* an older pingpong.svg (players) left on the */
+        tennis.state = -1;                                          /* disk: the line screen */
+        return 0;
+    }
     for (int i = 0; i < P_KINDS; i++)
         pp_node[i] = te_node_find(tennis.doc, pp_ids[i], 0);
     recol_init(&pp_ball, tennis.doc, "ballbody", 0);
@@ -1597,14 +1663,14 @@ static void arch(void *r, fp32 x0, fp32 y0, fp32 x1, fp32 y1, fp32 h, int n, fp3
 
 static void draw_tennis(void *r, const int16_t *k, int stereo)
 {
-    int32_t u = knob_pos(k[0]), g = knob_pos(k[1]), tone = knob_pos(k[2]), mix = knob_pos(k[3]);
+    int32_t g = knob_pos(k[1]), tone = knob_pos(k[2]), mix = knob_pos(k[3]);
     const struct pp *st = pingpong_state ? &pingpong_state[stereo] : 0;
     struct pp_view *v = &pp_view[stereo];
     uint32_t w = st ? st->w : 0, dw = w - v->last_w;
     v->last_w = w;
     if (!dw || dw > 44100)                                          /* FX not running: a 30 fps frame of time */
         dw = 1470;
-    uint32_t d = st && st->d ? (uint32_t)st->d >> 15 : (882u * (exp2_q16_ui(u * 12) >> 8)) >> 8;
+    uint32_t d = pp_delay(k, stereo);
     if (d < 441)
         d = 441;
     uint32_t period = d;
@@ -1619,30 +1685,27 @@ static void draw_tennis(void *r, const int16_t *k, int stereo)
     int32_t ph = (int32_t)udiv(v->fpos << 10, period);              /* 0 .. 1023 */
     int right = stereo && (v->flights & 1);                         /* the hitter: R on odd flights (stereo) */
 
-    /* blue: the table length (and the players with its ends) */
-    fp32 half = FP(40) + 2 * u, dx = FP(104) - half;
+    /* blue: the table length follows the delay played, log scale: 20 ms .. 1.48 s = half 40 .. 104 */
+    int32_t oct = log2_q10(d) - log2_q10(PP_D_MIN);                 /* 0 .. 6.21 octaves, Q10 */
+    fp32 half = FP(40) + clamp_i((oct * 10551) >> 10, 0, FP(64)), dx = FP(104) - half;
     int32_t sx = (half * 10082) >> 20;                              /* half / 104, Q10 */
     set_matrix(pp_node[P_TOP], sx, 0, 0, 1024, 160 * (1024 - sx), 0);
     translate(pp_node[P_LEGL], dx, 0);
     translate(pp_node[P_LEGR], -dx, 0);
-    translate(pp_node[P_PL], dx, 0);
-    translate(pp_node[P_PR], -dx, 0);
+    translate(pp_node[P_PADL], dx, 0);
+    translate(pp_node[P_PADR], -dx, 0);
     translate(pp_node[P_WALL], -dx, 0);
     show(pp_node[P_TABLE], stereo);
-    show(pp_node[P_PR], stereo);
+    show(pp_node[P_PADR], stereo);
     show(pp_node[P_WALL], !stereo);
 
-    /* bats: the hitter swings through, the receiver cocks back over the last 40 % of the flight */
+/* bats: the hitter swings through, the receiver cocks back over the last 40 % of the flight */
     int32_t hit = since < HIT ? -35 * (int32_t)DEG + 101447 * (int32_t)since : since < 8820 ? 10 * (int32_t)DEG : 0;
     int32_t recv = ph > 614 ? 581974 * (ph - 614) : 0;
     int32_t al = right ? recv : hit, ar = right ? hit : recv;
-    set_rotation(pp_node[P_BATL], (uint32_t)-al, 39, 84);
-    set_rotation(pp_node[P_BATR], (uint32_t)ar, 281, 84);
-    int yell = since < HIT;
-    show(pp_node[P_YELLL], yell && !right);
-    show(pp_node[P_SMILEL], !(yell && !right));
-    show(pp_node[P_YELLR], yell && right);
-    show(pp_node[P_SMILER], !(yell && right));
+    set_rotation(pp_node[P_BATL], (uint32_t)-al, PP_PIVOT_X, PP_PIVOT_Y);
+    set_rotation(pp_node[P_BATR], (uint32_t)ar, 320 - PP_PIVOT_X, PP_PIVOT_Y);
+    int swoosh = since < HIT;
 
     /* the ball along the newest arch */
     fp32 xl = FP(158) - half, xr = stereo ? FP(162) + half : FP(155) + half;
@@ -1689,7 +1752,7 @@ static void draw_tennis(void *r, const int16_t *k, int stereo)
         else
             arch(r, xl, y0, xr, y1, h, 16, 0, DARKGREEN);
     }
-    if (yell) {                                                     /* a swoosh in front of the hitter's bat */
+    if (swoosh) {                                                   /* a swoosh in front of the hitter's paddle */
         fp32 hx = right ? xr : xl;
         int32_t side = right ? -1 : 1;
         for (int32_t rr = 10; rr <= 16; rr += 3) {
@@ -1704,6 +1767,7 @@ static void draw_tennis(void *r, const int16_t *k, int stereo)
             }
         }
     }
+    pp_readout(r, k, st);
     svg_cost(r);
 }
 

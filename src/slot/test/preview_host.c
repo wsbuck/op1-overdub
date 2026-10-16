@@ -188,11 +188,13 @@ static void host_tick(int i)
         ensemble_state[s].vib += 0x0DDDDDDDu;               /* 6.5 Hz / 30 fps */
         ensemble_state[s].lfo += 0x01000000u;
         pingpong_state[s].w += 1470;
-        if (!pingpong_state[s].d) {                         /* the delay the knob sets: 20 ms * 2^(6 k / 32768) */
-            double ms = 20.0;
-            for (int j = 0; j < (host_knobs[0] * 6) / 4096; j++)
-                ms *= 1.0905077326652577;                   /* 2^(1/8) */
-            pingpong_state[s].d = (int32_t)(ms * 44.1 * 32768);
+        if (!pingpong_state[s].d) {                         /* the delay blue sets (pingpong.h) at PP_BPM (120) */
+            struct pp *q = &pingpong_state[s];
+            int div, fold;
+            q->spb = (int32_t)(2646000.0f / (getenv("PP_BPM") ? (float)atof(getenv("PP_BPM")) : 120.0f) * 16384.0f);
+            q->dt = q->d = pp_target(host_knobs[0] < 0 ? 0 : host_knobs[0], q->spb, &div, &fold);
+            q->div = (int16_t)div;
+            q->fold = (int16_t)fold;
         }
     }
 }
