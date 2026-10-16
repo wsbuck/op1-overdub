@@ -1345,3 +1345,28 @@
   4. fm4: the gear tick marks (three per gear) with no lines joining them.
   5. Crush: as in 78 (no test card now); cost idle and heavy.
 - Result: _pending user flash_.
+
+## 2026-10-16 — Test image 80: FX4.OP1 (pingpong paddles + tempo sync, ensemble as a CE-2 chorus)
+- Changes since SVG9:
+  - pingpong: tempo-synced delay. Blue detents 21–32 step through 1/32 … 1/2 from the metronome's samples-per-beat
+    word at 0x01AADAD8 (notes/fx-pingpong.md "Tempo"). The screen shows two table-tennis bats; readout of the
+    division or the free time, plus the BPM when synced.
+  - ensemble: CE-2-style BBD chorus (notes/fx-slot.md). White CHARACTER sweeps CE → DUAL (Juno-60) → the old
+    ensemble. Default [15360, 21504, 0, 16384]. Saved sounds that use pingpong or ensemble come back with different
+    times and voicings.
+- `firmware/images/FX4.OP1` = `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum
+  --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+  --db-trim harmonic=6 --db-trim fm4=6 --svg-cost --name FX4` from commit 15203eb in a clean `git archive`. All SVGs
+  pass check_svg (one subpath per element) and svg_cells. te-boot identical to stock. sha256
+  a4c3c5543ac3acc229c498a33be5cdcb8be8b54d56ff6381a10f943da7f7d42a.
+- Checklist:
+  1. pingpong:
+     - Blue through free (detents 0–20), then synced (21–32): the divisions sound on the beat at the metronome tempo.
+     - Change the tempo while it plays: the delay glides with no clicks, and the BPM readout follows (tenths too).
+     - A slow tempo with 1/2 shows TOO LONG and plays half.
+     - The bats and table have no stray lines.
+  2. ensemble: CE-2 default on guitar and synth; DUAL and the old ensemble at the top of white; MIX dry to wet;
+     no zipper on knobs.
+  3. SVG9's list (distortion/pedals, choir, fm4, crush match their previews), and the --svg-cost readings for each
+     screen at rest and at its busiest.
+- Result: _pending user flash_.
