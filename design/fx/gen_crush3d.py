@@ -444,7 +444,7 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True, level=1.0, flips=None):
                 farL="darkblue", farR="offblue", shadow="offblue", horizon="grey", sand="offgrey"),
            dict(L="lpg", R="offgrey", RS="offgrey", T="lpg", core="black", course="black", sun="grey",
                 farL="darkblue", farR="darkblue", shadow="black", horizon="grey", sand="grey"),
-           dict(L="lpg", R="black", RS="black", T="lpg", core="offgrey", course="black", sun="grey",
+           dict(L="lpg", R="offgrey", RS="offgrey", T="lpg", core="offgrey", course="black", sun="grey",
                 farL="offgrey", farR="offgrey", shadow="black", horizon="lpg", sand="black"),
            dict(L="lpg", R="black", RS="green", T="lpg", core="offgrey", course="black", sun="grey",
                 farL="offgrey", farR="offgrey", shadow="black", horizon="lpg", sand="black")][row]
@@ -584,8 +584,9 @@ GRIT VISIBILITY (driven by the DSP's flips; the design preview stands in a stead
 RECOLOURS (BITS posterise; colours are colors.svg / palette 0x01BAAF50 names). Pick the row by nb:
            A: nb >= 9 (pristine)  B: 5 <= nb < 9   C: 2 <= nb < 5   D: nb < 2 (1 bit)
   Neutral family only; green is BITS's accent (rim, rubble, mu-law courses); white belongs to SQUASH (press, puff).
+  The shade face is black only at 1 bit (D), where the green rim outlines it; above, it never meets the black ground.
   L  faceL fill+stroke, vl1..vl4 fill, gr1..gr3 fill   purplegrey   lpg        lpg        lpg
-  R  faceR fill, vr1..vr4 fill, gl1..gl3 fill          grey         offgrey    black      black
+  R  faceR fill, vr1..vr4 fill, gl1..gl3 fill          grey         offgrey    offgrey    black
      faceR stroke                                      = R          = R        = R        green (rim)
   T  vt1..vt4 fill, hf1..hf3 fill                      lpg          lpg        lpg        lpg
      hw1..hw3 fill                                     offgrey      black      offgrey    offgrey

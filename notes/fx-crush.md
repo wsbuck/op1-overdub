@@ -96,13 +96,16 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
     the XOR slices (1 / 2 / 3 for < 3 / < 7 / more flip events per frame; at most 2 at 3 bits or less with GRIT > 0.6)
     and start a debris fall (one per frame with flips, in up to ceil((o - .5) / .5 x 4) slots). Flip events also need
     a signal (the DSP counts them on its clock; they only change nonzero codes).
-  - Colours: BITS posterises inside the neutral family (lit face purplegrey -> lpg, shade face grey -> offgrey -> black,
-    a grey sun once crushed); green is BITS's accent (the 1-bit rim, rubble, mu-law courses); pure white belongs only
-    to SQUASH's press, stem and puff.
-  - Readout: a raw knob change of 512 or more shows its value for 45 frames (~1.5 s) at the title position (8, 7),
-    size 1.5 (clear of the sun and the press), in the knob's colour: `RATE 11.0KHZ`, `BITS 8`, `BITS 7.5`,
-    `BITS 8 MU-LAW` (the font has no mu), `SQUASH 4.0:1` / `20:1` / `OFF`, `GRIT JITTER` / `GRIT FLIP` / `OFF`. Not
-    on entering the screen or switching sound / mode.
+  - Colours: BITS posterises inside the neutral family (lit face purplegrey -> lpg, shade face grey -> offgrey, black
+    only at 1 bit where the green rim outlines it: above, the shade face never melts into the black ground; a grey sun
+    once crushed); green is BITS's accent (the 1-bit rim, rubble, mu-law courses); pure white belongs only to SQUASH's
+    press, stem and puff.
+  - Readout: a raw knob change of 512 or more shows its value for 45 frames (~1.5 s) at the title position (8, 7) in
+    the knob's colour, size 1.5 (1.25 above 13 characters), so every string ends by x 122, left of the press plate
+    (~128 at that height) and the stem (160), above the sun: `RATE 11.0KHZ`, `BITS 8`, `BITS 7.5`, `BITS 8 MU-LAW`
+    (only on the full mu-law plateau; the font has no mu), `BITS 8 MU 50%` / `BITS 7.5 MU 75%` (morphing),
+    `SQUASH 4.0:1` / `20:1` / `OFF`, `JITTER 40%` (lower half), `FLIP 25%` (upper half), `GRIT OFF`. Not on entering
+    the screen or switching sound / mode.
   - Clock: the frame counter at 30 fps (t = frames / 30); jitter is ui.c's `jit()` hash (the header allows any).
 - `crush_state[mode == 3]` (`struct crush`, `src/slot/crush.h`; `[0]` synth/drum, `[1]` master), updated once per block:
   `gr` (0 .. 32767 = 0 .. 30 dB, smoothed), `k[4]` (smoothed knobs), `rate_hz`, `bits_q12`, `mu` (Q15), `flips`
@@ -111,7 +114,8 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   links the real crush.c and settles it on the knobs; `CRUSH_GR`, `CRUSH_LEVEL`, `CRUSH_FLIPS`, `CRUSH_TURN` set the
   rest) and through `runtime_state` (rsvg), side by side: the 9 states without GRIT match within anti-aliasing (mean
   |diff| 0.3 .. 0.7 of 255); GRIT states differ by randomness. Then the readout trigger (512 yes, 400 no, gone after
-  55 frames), the shake gate (still on silence) and flips (slices and debris with flips, none on silence).
+  55 frames), the shake gate (still on silence), flips (slices and debris with flips, none on silence), the shade face
+  visible at every BITS detent down to 2 bits (with and without voxels) and the readout lengths.
 - Cost (Hypothesis until read on the device with `--svg-cost`; CRUSH2 / CRUSH3 show it): 10 visible shape elements
   (voxel levels, mu-law) to ~59 (everything at max) of 86; pedals has 66 shapes and read 17.6 M cycles per frame on the device, choir 2 .. 11 M.
   The large fills are the two faces, the shadow and the sun (smaller than pedals' bodies). The per-frame C work is a

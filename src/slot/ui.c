@@ -1920,8 +1920,8 @@ static const uint32_t pyr_pal[4][RL_N] = {     /* neutral family; green only as 
       CP_GREY, CP_OFFGREY },
     { CP_LPG, CP_OFFGREY, CP_OFFGREY, CP_LPG, CP_BLACK, CP_BLACK, CP_GREY, CP_DARKBLUE, CP_DARKBLUE, CP_BLACK, CP_GREY,
       CP_GREY },
-    { CP_LPG, CP_BLACK, CP_BLACK, CP_LPG, CP_OFFGREY, CP_BLACK, CP_GREY, CP_OFFGREY, CP_OFFGREY, CP_BLACK, CP_LPG,
-      CP_BLACK },
+    { CP_LPG, CP_OFFGREY, CP_OFFGREY, CP_LPG, CP_OFFGREY, CP_BLACK, CP_GREY, CP_OFFGREY, CP_OFFGREY, CP_BLACK, CP_LPG,
+      CP_BLACK },                                   /* the shade face stays offgrey: black only at 1 bit, with its rim */
     { CP_LPG, CP_BLACK, CP_GREEN, CP_LPG, CP_OFFGREY, CP_BLACK, CP_GREY, CP_OFFGREY, CP_OFFGREY, CP_BLACK, CP_LPG,
       CP_BLACK } };
 /* Falling debris (header table, Q10): fall DX DY, ground shadow start GX GY and landing LX LY; 1 / period (Q16). */
@@ -1961,7 +1961,8 @@ static int pyramid_ready(void)
     return 1;
 }
 
-/* "RATE 11.0KHZ", "BITS 8 MU-LAW", "SQUASH 4:1", "GRIT FLIP": the knob's value as the DSP has it. */
+/* "RATE 11.0KHZ", "BITS 8 MU-LAW" / "BITS 7.5 MU 50%", "SQUASH 4.0:1", "JITTER 40%" / "FLIP 25%": the knob's value as
+ * the DSP has it (at most 15 characters; drawn so they end left of the press plate and stem, draw_pyramid). */
 static char *put_frac(char *p, uint32_t v, uint32_t div)     /* v / div with log10(div) decimals, v already rounded */
 {
     uint32_t w = udiv(v, div), f = v - w * div;
@@ -1990,8 +1991,10 @@ static void crush_readout(char *p, int knob, const struct crush *st, const int32
             p = put_dec(p, (uint32_t)w);
         else
             p = put_frac(p, (uint32_t)((nb * 10 + 2048) >> 12), 10);
-        if (st && st->mu > 8192)
-            put_str(p, " MU-LAW");
+        if (st && st->mu >= 32768)
+            put_str(p, " MU-LAW");                                      /* the full mu-law plateau (detent 16) */
+        else if (st && st->mu > 327)                                    /* morphing: how far, 1 .. 99 % */
+            put_str(put_dec(put_str(p, " MU "), (uint32_t)((st->mu * 100 + 16384) >> 15)), "%");
     } else if (knob == 2) {
         int32_t sq = k[2], c = (31130 * ((sq * (65536 - sq)) >> 15)) >> 15;   /* crush.c's slope 1 - 1 / ratio */
         p = put_str(p, "SQUASH ");
@@ -2001,8 +2004,12 @@ static void crush_readout(char *p, int knob, const struct crush *st, const int32
             uint32_t t = udiv(327680u + (uint32_t)((32768 - c) >> 1), (uint32_t)(32768 - c));   /* ratio x 10 */
             put_str(t >= 100 ? put_dec(p, udiv(t + 5, 10)) : put_frac(p, t, 10), ":1");
         }
-    } else
-        put_str(p, k[3] == 0 ? "GRIT OFF" : k[3] <= 16384 ? "GRIT JITTER" : "GRIT FLIP");
+    } else if (k[3] == 0)
+        put_str(p, "GRIT OFF");
+    else if (k[3] <= 16384)                                             /* lower half: jitter amount */
+        put_str(put_dec(put_str(p, "JITTER "), (uint32_t)((k[3] * 200 + 16384) >> 15)), "%");
+    else                                                                /* upper half: flips (jitter at full) */
+        put_str(put_dec(put_str(p, "FLIP "), (uint32_t)(((k[3] - 16384) * 200 + 16384) >> 15)), "%");
 }
 
 static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
@@ -2132,7 +2139,11 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
     if ((int32_t)(pyr_until - f) > 0) {                             /* the value readout, title position */
         char buf[28];
         crush_readout(buf, pyr_shown, st, k);
-        text(r, buf, FP(8), FP(7), FP(3) >> 1,                 /* 1.5: ends before SQUASH's press and stem */
+        int len = 0;
+        while (buf[len])
+            len++;
+        /* size 1.5 (1.25 above 13 characters): ends left of SQUASH's press plate (x ~128 at this height) and stem */
+        text(r, buf, FP(8), FP(7), len > 13 ? FP(5) >> 2 : FP(3) >> 1,
              pyr_shown == 0 ? BLUE : pyr_shown == 1 ? GREEN : pyr_shown == 2 ? WHITE : ORANGE);
     }
     svg_cost(r);

@@ -99,6 +99,27 @@ def main():
     q3 = c_path("silent", fk, FRAMES=9)[1]
     check(np.abs(q1 - q0).mean() > 1 and np.abs(q2 - q3).mean() == 0, f"GRIT 0.8: the DSP's flips bring slices and debris "
           f"(image change {np.abs(q1 - q0).mean():.2f}), none on silence (change {np.abs(q2 - q3).mean():.2f})")
+    # the shade (right) face never vanishes into the black ground while nb >= 2 (BITS detents 0..29; past the 2-bit
+    # plateau at 30310 it is the 1-bit row: black with the green rim); sampled near the base, plain and with voxels
+    pts = [g3.F("R", u, v) for u, v in ((0.15, 0.08), (0.45, 0.1), (0.7, 0.06))]
+    dark = []
+    for d in list(range(0, 20, 4)) + list(range(20, 30)):
+        for kr in (0, 10240):
+            img = c_path(f"rface_{d}_{kr}", (kr, 1024 * d, 0, 0), FRAMES=9)[1]
+            lum = sorted(img[int(y * S), int(x * S)] for x, y in pts)[1]           # median of the three points
+            if lum < 25:
+                dark.append((d, kr, int(lum)))
+    check(not dark, "BITS detents 0..29 (down to 2 bits), RATE 0 and 11 kHz: the shade face stays visible (median "
+          f"luminance >= 25 near the base){'; black at ' + str(dark) if dark else ''}")
+    # every readout ends left of the press plate's corner at text height (x ~128) and the stem (160): size 1.5 up to
+    # 13 characters (x 8 + 12 x 9 + 6 = 122), 1.25 above (15: x 8 + 14 x 7.5 + 5 = 118)
+    ends = {t: 8 + (len(t) - 1) * (9 if len(t) <= 13 else 7.5) + (6 if len(t) <= 13 else 5)
+            for t in ("RATE 11.0KHZ", "BITS 8 MU 50%", "BITS 7.5 MU 75%", "SQUASH 20.0:1", "JITTER 100%", "FLIP 100%")}
+    check(max(ends.values()) < 127, "readout: the longest strings end at x = " + ", ".join(f"{t!r} {v:g}" for t, v in
+          ends.items()) + " (press plate corner ~128, stem 160; the sun is below the text)")
+    n_mu = c_path("ro_mu", (0, 16384, 1000, 0), FRAMES=10, CRUSH_TURN="5:1:17408")[0]
+    check(n_mu > 0, f"readout while mu-law morphs out (BITS detent 17: 'BITS 7.5 MU 75%'): {n_mu} segments")
+
     print(f"\n{len(fails)} failed" if fails else "\nall passed")
     sys.exit(1 if fails else 0)
 
