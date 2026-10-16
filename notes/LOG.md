@@ -1078,3 +1078,35 @@
 - Report: the four cost numbers, detent readouts that are off, any step that sounds cleaner clockwise, colours or
   elements that look wrong (photo), any assert text.
 - Result: _pending user flash_.
+
+## 2026-10-15 — Test image 72: CRUSH4.OP1 (crush: second UX review fixes)
+- Commit 0f55f55 (notes/fx-crush.md "Screen"); DSP unchanged from CRUSH3.
+  1. Regression fixed: the posterise row C (2 <= nb < 5, BITS detents ~22..29) kept the shade face black, so it vanished
+     into the ground (a lone triangle; with RATE on, the blue voxel edges floated). It is offgrey now; black only at
+     1 bit (past detent 30), outlined by the green rim. gen_crush3d.py / crush3d.svg header / runtime_state and ui.c
+     agree. New check: the shade face is visible at every BITS detent down to 2 bits, with and without voxels.
+  2. Readout tells detents apart: `BITS 8 MU-LAW` only on the full mu-law plateau (detent 16), `BITS 8 MU 50%` /
+     `BITS 7.5 MU 75%` while morphing, `JITTER 40%` (GRIT lower half), `FLIP 25%` (upper half). Strings over 13
+     characters draw at size 1.25, so every readout ends by x 122: left of the press plate (~128), the stem (160), above
+     the sun.
+- Checks: crush_screen_check all pass (incl. the two new ones); crush_check and fx_abi unchanged (DSP unchanged).
+- `firmware/images/CRUSH4.OP1` = CRUSH3's command (`--svg-cost`, all engines and trims, all FX) with `--name CRUSH4`,
+  from commit 0f55f55 in a clean `git archive`; te-boot identical to stock. sha256
+  4931bfe8340da881fbd9e8c0f8c47c8fcfafe947fd3d1f2c9bf9ded8ad2f9609.
+- Checklist (as CRUSH3, test image 71):
+  1. First view (fx.json default): a stepped, intact pyramid with the press resting on it, not wrecked.
+  2. Readout per detent, top left in the knob's colour, ~1.5 s, never over the sun or the press: RATE 22.0 / 11.0 / 5.51 /
+     2.76 / 1.38 KHZ at 5 / 10 / 15 / 20 / 25, 26.0KHZ at 4; BITS 12 at 4, 8 at 12, 8 MU nn% at 13..15, 8 MU-LAW at
+     16, 7.5 MU 75% at 17, 6 at 20, 4 at 25; GRIT JITTER nn% / FLIP nn%.
+  3. BITS 20..29: the right face stays dark grey, never black; with RATE on, the voxel tiers read as solid steps (no
+     floating blue edges). From detent 30 on, black with a green rim.
+  4. BITS from 0 clockwise on a decaying note: every detent rougher, tails never cleaner (also through MU-LAW).
+  5. GRIT at RATE 0, 16 bits: audible sizzle below half, clear glitches above; slices and falling blocks with the
+     glitches, none when the sound stops; the pyramid is still when nothing plays.
+  6. Colours: pure white only on the press, stem and dust; green only on the 1-bit rim, rubble and mu-law lines.
+  7. SQUASH on drums: pumps with the hits.
+  8. `--svg-cost` readings (kilocycles, bottom right): crush clean, crush busy (default + GRIT 0.8 while playing),
+     crush everything at max while playing, and pedals (distortion) for comparison; any UI lag or audio crackle.
+- Report: the four cost numbers, readouts that are off, the BITS 20..29 right face, any step that sounds cleaner
+  clockwise, anything that looks wrong (photo), any assert text.
+- Result: _pending user flash_.
