@@ -1308,4 +1308,5 @@
   3. Optional: RATE at detents 0 / 18 / 25, BITS at 25 / 32, GRIT at max while playing; the `--svg-cost` number
      (bottom right) at the default and at the busiest state.
 - Recovery: power-cycle (the card shows once per boot); CRUSH1 (69) is the safe fallback.
-- Result: _pending user flash_.
+- Result (2026-10-16, device): crush screen renders; "everything works way better now". Test card photo and
+  --svg-cost readings: pending.
