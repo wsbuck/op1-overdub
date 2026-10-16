@@ -2,6 +2,7 @@
 """Table Tennis, HQ hybrid: pingpong.svg (shippable asset, TE retained-renderer subset) + composite mock frames
 (asset with the runtime matrices / visibility / recolours applied + our immediate-mode line overlay) + a GIF."""
 import math, os, subprocess, json
+import strictify
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 RSVG = "/opt/homebrew/bin/rsvg-convert"
@@ -451,6 +452,7 @@ if __name__ == "__main__":
     a = asset()
     xml = render(a)
     open(os.path.join(OUT, "pingpong.svg"), "w").write('<?xml version="1.0" encoding="utf-8"?>\n<!--' + HEADER.replace("--", "-") + '-->\n' + xml)
+    strictify.strictify_file(os.path.join(OUT, "pingpong.svg"), ("barrier_seams", "netmesh"))   # one subpath per element
     info = {}
     for name, k, cap in STATES:
         info[name] = composite(f"hq_{name}", k)

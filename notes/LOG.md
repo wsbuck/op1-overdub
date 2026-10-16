@@ -1308,5 +1308,9 @@
   3. Optional: RATE at detents 0 / 18 / 25, BITS at 25 / 32, GRIT at max while playing; the `--svg-cost` number
      (bottom right) at the default and at the busiest state.
 - Recovery: power-cycle (the card shows once per boot); CRUSH1 (69) is the safe fallback.
-- Result (2026-10-16, device): crush screen renders; "everything works way better now". Test card photo and
-  --svg-cost readings: pending.
+- Result (2026-10-16, device, photo of the card): the crush screen now renders well ("everything works way
+  better now"); `--svg-cost` on the crush screen ~3,000 kcycles idle, ~12,000 under heavy animation (pedals 17,599,
+  LOG 592). Card: right 1, 4, 6, 7, 9 .. 18 (case 17 half size, 18 green); wrong 2 (each Λ gets its base), 3 (the
+  three dashes become an "E"), 5 (the H / V pieces joined), 8 (the triangle joined to the V). **Verified rule: every
+  M after the first closes the current subpath and draws a line to the new point; the subpaths of one element are
+  always connected** (notes/svg-route.md "Path quirks"). Next: every published SVG one subpath per element (79).

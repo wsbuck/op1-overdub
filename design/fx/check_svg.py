@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check an SVG against TE's retained-renderer subset and its path quirks (notes/svg-route.md).
-Usage: check_svg.py file.svg [colors.svg] [--strict: one subpath per element] [--card: the test card, quirks allowed]"""
+Every element must be one subpath (TE joins subpaths, Verified test 78).
+Usage: check_svg.py file.svg [colors.svg] [--card: the test card, several subpaths allowed]"""
 import os, re, sys
 import xml.etree.ElementTree as ET
 
@@ -29,8 +30,7 @@ def near_palette(v, pal):
     return False
 
 
-STRICT = "--strict" in sys.argv     # one subpath per element (crush3d.svg)
-CARD = "--card" in sys.argv         # the test card: exercises the parser quirks on purpose (subset rules still apply)
+CARD = "--card" in sys.argv         # the test card: several subpaths on purpose (the subset rules still apply)
 
 
 def main():
@@ -68,25 +68,16 @@ def main():
                 bad = set(re.findall(r"[A-Za-z]", v)) - set("MLHVCSZmlhvcsz")
                 if bad:
                     errs.append(f"{where}: path commands {sorted(bad)} not supported")
-                # TE's parser quirks (notes/svg-route.md "Path quirks"): H / V and relative commands are drawn wrongly
-                # (stray joins on the device, CRUSH7); every M after the first closes the open subpath before it with
-                # a line back to its start, so in a stroked path an open subpath of more than one segment gets a chord
+                # TE's parser (notes/svg-route.md "Path quirks", Verified on the device, test 78): every M after the
+                # first closes the subpath before it and draws a line to the new point (the pen never lifts), so
+                # every element must be one subpath (strictify.py converts). Relative commands: avoided.
                 rel = set(re.findall(r"[hvmlcsz]", v))
                 if rel:
                     errs.append(f"{where}: relative path commands {sorted(rel)}: use absolute ones")
                 subs = [x for x in re.split(r"(?=M)", v.strip()) if x.strip()]
-                if STRICT and len(subs) > 1:
-                    errs.append(f"{where}: {len(subs)} subpaths (strict: one subpath per element)")
-                if not CARD and any(re.search(r"[HV]", sp) and "Z" not in sp for sp in subs[:-1]):
-                    errs.append(f"{where}: an open subpath with H / V followed by M: TE joins it to the next subpath "
-                                "(CRUSH7); use L, or close it (pedals' closed H / V shapes are fine)")
-                if el.get("stroke", "none") != "none" and not CARD:
-                    if len(subs) > 1:
-                        for sp in subs[:-1]:            # the last subpath is not closed
-                            if "Z" not in sp and len(re.findall(r"[LC]", sp)) + len(re.findall(r"[HV]", sp)) > 1:
-                                errs.append(f"{where}: stroked open subpath of several segments followed by M (TE "
-                                            f"closes it with a chord): {sp[:40].strip()}..")
-                                break
+                if not CARD and len(subs) > 1:
+                    errs.append(f"{where}: {len(subs)} subpaths: TE joins them (one subpath per element; "
+                                "design/fx/strictify.py)")
             if k == "stroke-linejoin" and v not in ("miter", "round", "belvel"):
                 errs.append(f"{where}: stroke-linejoin {v!r}: TE knows miter, round and 'belvel' (its spelling; "
                             "'bevel' is not recognised)")

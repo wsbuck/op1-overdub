@@ -3,6 +3,7 @@
 (asset with runtime matrices / visibility / recolours applied + our immediate-mode overlay) + animated GIFs.
 A wah (green, three-quarter view, rocking treadle) patched into a compact distortion box (blue / white / orange)."""
 import json, math, os, re, subprocess
+import strictify
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 RSVG = "/opt/homebrew/bin/rsvg-convert"
@@ -453,6 +454,7 @@ def gif(name, frames):
 if __name__ == "__main__":
     a = asset()
     open(os.path.join(OUT, "pedals.svg"), "w").write('<?xml version="1.0" encoding="utf-8"?>\n<!--' + HEADER.replace("--", "-") + '-->\n' + render(a))
+    strictify.strictify_file(os.path.join(OUT, "pedals.svg"))       # one subpath per element (TE joins subpaths)
     info = {name: composite(f"hq_{name}", k) for name, k, cap in STATES}
     fr = os.path.join(OUT, "frames")
     os.makedirs(fr, exist_ok=True)

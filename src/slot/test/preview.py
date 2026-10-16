@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw
 
 DESIGN = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "design")
 SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "crush3d.svg": "fx", "fm4.svg": "synth"}   # name -> design/ subfolder
-if os.environ.get("CRUSH_CARD"):        # the crush screen's boot test card (ui.c draw_card); off: straight to the pyramid
+if os.environ.get("CRUSH_CARD"):        # build.py --test-card: the crush screen's boot test card (ui.c draw_card)
     SVG_PATHS["crushcard.svg"] = "fx"
 SVGS = tuple(SVG_PATHS)
 SVG_DIR = None                       # main(): a temp folder holding every document (preview_host looks there by name)
@@ -101,7 +101,7 @@ def main():
                     os.path.join(SLOT, "ui.c"), os.path.join(HERE, "preview_host.c"),
                     os.path.join(SLOT, "crush.c"),
                     "-DDISTORTION_CURVE_ONLY", os.path.join(SLOT, "distortion.c"), "-o", exe,
-                    ], check=True)
+                    ] + (["-DCRUSH_TEST_CARD"] if os.environ.get("CRUSH_CARD") else []), check=True)
     ids = os.path.join(tmp, "ids.txt")
     svg_ids(ids)
     env = dict(os.environ, SVG_DIR=SVG_DIR, SVG_IDS=ids)

@@ -80,7 +80,7 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
 ## Screen
 - **The 3D pyramid** (design/fx/crush3d.svg, generator design/fx/gen_crush3d.py, which imports gen_crush.py's helpers;
   the SVG header documents every id, threshold, matrix and recolour; `runtime_state()` is the reference). Published as
-  `content/display/crush3d.svg` (build.py `FX_SVGS`, with the test card `crushcard.svg`). ui.c `pyramid_ready()` / `draw_pyramid()`: loaded lazily, every
+  `content/display/crush3d.svg` (build.py `FX_SVGS`; the test card `crushcard.svg` only with `--test-card`). ui.c `pyramid_ready()` / `draw_pyramid()`: loaded lazily, every
   id found once with must = 0 (13 single nodes, 37 numbered ones, 38 recoloured styles); per frame visibility,
   matrices, recolours (only when the posterise row changes), one `svg_render`. Falls back to `draw_crush()` (the line
   placeholder) when the file is missing.
@@ -130,15 +130,14 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   became a group of single-subpath paths (`id_1`, `id_2`, ..; ids_header lists the leaves, 127 recoloured styles,
   each with its own colour value). Voxel edges simplified: per tier one outline polyline and one front vertical, block
   joints only every second one from RATE level 2. 298 drawable elements (362 ids, 46 KB), heaviest element faceL's
-  stroke ~1052 cells (27 %). Marker `cells4`. `check_svg.py --strict` (build.py) enforces it.
-- **Test card (CRUSH9)**: on the first open of the crush screen after boot ui.c `draw_card()` shows
+  stroke ~1052 cells (27 %). Marker `cells4`. check_svg.py (build.py) enforces it for every SVG.
+- **Test card (CRUSH9; since SVG1 only with `build.py --test-card`)**: on the first open of the crush screen after boot ui.c `draw_card()` shows
   `content/display/crushcard.svg` (design/fx/gen_card.py) for 360 frames (~12 s), then the pyramid; numbers and
   expected outlines (grey) drawn by the C beside each case; case 17 is scaled to half by the C, case 18 recoloured
   green. Missing file: straight to the pyramid. crush_screen_check checks it (`CRUSH_CARD=1` in preview.py).
-- Cost (Hypothesis until read on the device with `--svg-cost`; CRUSH5 shows it): 10 visible shape elements
-  (voxel levels, mu-law) to ~59 (everything at max) of 86; pedals has 66 shapes and read 17.6 M cycles per frame on the device, choir 2 .. 11 M.
-  The large fills are the two faces, the shadow and the sun (smaller than pedals' bodies). The per-frame C work is a
-  few thousand cycles (no loops over pixels; matrices and ~90 flag writes).
+- Cost (Measured on the device, CRUSH9 `--svg-cost`): ~3,000 kcycles per frame idle, ~12,000 under heavy animation
+  (23 .. 133 elements drawn); pedals read 17,599 (LOG 592), choir 2 .. 11 M cycles. The per-frame C work is a few
+  thousand cycles (no loops over pixels; matrices and flag writes).
 
 ## Implementation
 - Fixed point: signals Q15 in int32, compressor envelope Q26, gains Q15 / Q13 / Q20, clock Q16. 16 x 16 MACs where

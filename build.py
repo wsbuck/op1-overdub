@@ -30,9 +30,8 @@ import op1pack  # noqa: E402
 STOCK_URL = "https://teenage.engineering/_software/op-1/op1_246.op1"
 STOCK_SHA256 = "c5315218f825f143b415ca554516541898abee843d3a236df0b54c04e1fb13a9"
 FX_SVGS = {"ensemble": "choir.svg", "pingpong": "pingpong.svg", "distortion": "pedals.svg", "crush": "crush3d.svg"}   # by source
-FX_EXTRA_SVGS = {"crush": ["crushcard.svg"]}     # also published: crush's boot test card (ui.c draw_card)
-SVG_FLAGS = {"crush3d.svg": ["--strict"], "crushcard.svg": ["--card"]}   # check_svg.py modes (one subpath per element;
-                                                                        # the card exercises the path quirks on purpose)
+TEST_CARD_SVGS = {"crush": ["crushcard.svg"]}    # --test-card: crush's boot test card (ui.c draw_card), also published
+SVG_FLAGS = {"crushcard.svg": ["--card"]}         # check_svg.py: the card has several subpaths on purpose
 ENGINE_SVGS = {"fm4": "fm4.svg"}   # by source: engine screens drawn through the SVG route (design/synth/)
 
 
@@ -60,6 +59,8 @@ def main():
     ap.add_argument("--no-hold", action="store_true", help="leave out HOLD (SHIFT+T2) and CHORD")
     ap.add_argument("--no-chord", action="store_true", help="leave out CHORD")
     ap.add_argument("--svg-cost", action="store_true", help="show the screen render cost on the FX screens (development)")
+    ap.add_argument("--test-card", action="store_true",
+                    help="crush screen: show the SVG test card (crushcard.svg) for ~12 s on its first open (diagnostics)")
     ap.add_argument("--staged-screens", action="store_true",
                     help="bring the crush screen up layer by layer on its first open, labelled (device diagnosis)")
     ap.add_argument("--debug-ui", action="store_true", help="show profiler lines on the engine screens (development)")
@@ -107,12 +108,13 @@ def main():
     cmd += [x for t in a.db_trim for x in ("--db-trim", t)]
     cmd += [] if a.no_hold else ["--hold"] + ([] if a.no_chord else ["--chord"])
     cmd += ["--fx", fj] if fxs else []
-    cmd += ["--svg-cost"] * a.svg_cost + ["--debug-ui"] * a.debug_ui + ["--staged-screens"] * a.staged_screens
+    cmd += ["--svg-cost"] * a.svg_cost + ["--debug-ui"] * a.debug_ui + ["--staged-screens"] * a.staged_screens \
+        + ["--test-card"] * a.test_card
     run(*cmd)
 
     # every SVG screen within AGG's per-path cell budget (notes/screen.md: over it, the OP-1 asserts on the screen)
     svgs = [os.path.join(ROOT, "design", "fx", v) for f in fxs if f["source"] in FX_SVGS
-            for v in [FX_SVGS[f["source"]]] + FX_EXTRA_SVGS.get(f["source"], [])]
+            for v in [FX_SVGS[f["source"]]] + (TEST_CARD_SVGS.get(f["source"], []) if a.test_card else [])]
     svgs += [os.path.join(ROOT, "design", "synth", ENGINE_SVGS[e["source"]]) for e in engines if e["source"] in ENGINE_SVGS]
     if svgs:
         colors = os.path.join(build, "colors.svg")
@@ -128,7 +130,7 @@ def main():
            "--replace", f"content/op1_factory.db={db}", "--replace", f"OP1_vdk.ldr={out_ldr}"]
     for f in fxs:
         if f["source"] in FX_SVGS:
-            for svg in [FX_SVGS[f["source"]]] + FX_EXTRA_SVGS.get(f["source"], []):
+            for svg in [FX_SVGS[f["source"]]] + (TEST_CARD_SVGS.get(f["source"], []) if a.test_card else []):
                 cmd += ["--add", f"content/display/{svg}={os.path.join(ROOT, 'design', 'fx', svg)}"]
     for e in engines:
         if e["source"] in ENGINE_SVGS:

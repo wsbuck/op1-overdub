@@ -12,6 +12,8 @@ bite, the selected operator white with its ring shown.
 import math
 import os
 import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fx"))
+import strictify
 
 PITCH = 6.0                                 # tooth pitch at the pitch radius, units
 SIZES = (9, 14, 21)                         # tooth counts (= fu_teeth in ui_fm4.h)
@@ -120,6 +122,7 @@ everything (gears drawn at their axle).
 </svg>
 '''
     open(out, "w").write(svg)
+    strictify.strictify_file(out)                                   # one subpath per element (TE joins subpaths)
 
 
 if __name__ == "__main__":

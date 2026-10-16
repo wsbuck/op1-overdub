@@ -105,46 +105,37 @@ Marks: **Verified** = read at the call site or in the disassembly; **Confirmed**
 - **Delay** (`0x01984F3C`): 4 text nodes, `+0x50` toggles for the tempo and mode marks, one `FUN_019ead58`.
 
 ## Path quirks (TE's `d` parser, `0x019FCA1C`; command switch `0x019FCACC`, table `0x018F13A0` by toupper(c) - 'C')
-Found 2026-10-15 from CRUSH7's photo (stray lines) and the parser. **Verified** = read in the disassembly.
-- Path object: `[+0]`/`[+4]` current point, `[+8]`/`[+0xC]` start of the current subpath, `B[+0x14]` closed flag.
-  move_to `0x01A070A4`, line_to `0x01A0712C` (skips a segment shorter than a minimum, `[0x01DE2E48]`, without moving
-  the current point), close `0x01A0722E` (sets the flag, line_to back to the start). **Verified**.
-- **Every M after the first closes the subpath before it** (`[FP - 0x2C]` counts the Ms; M calls `0x01A0722E` when it
-  is not the first). So in a stroked path with several subpaths, an open subpath of several segments gets a chord
-  back to its start; a single segment just retraces itself (pingpong's `bricks`, pedals' `rays` render right).
-  **Verified**. The last subpath is not closed (the parser returns at the string end). **Verified**.
-- Z calls the same close. Fills close every subpath anyway.
-- **H / V in an open subpath followed by M: on the device the subpath's end is joined to the next M's point** (the
-  sand lines and voxel edges of CRUSH7, photo). H takes y from the current point, V takes x from it (the absolute V
-  builds its point in the caller's argument slots `[FP + 8]`). Why the join happens: **Hypothesis** (not pinned in the
-  code); closed H / V shapes render right (pedals' rounded rects and `grooves`).
-- Relative commands: handled through a separate offset path (H / V relative read the other coordinate from a global,
-  `[0x01DDD564]`); avoid.
-- `stroke-linejoin`: TE's keywords are `miter`, `round` and **`belvel`** (sic); `bevel` is not recognised.
-- Rules (`design/fx/check_svg.py`, run by build.py on every published SVG): absolute commands only; no H / V in an
-  open subpath followed by M; in a stroked path with several subpaths every open subpath is one segment; joins as
-  above. The generators (gen_crush.py `te_safe_d`) write M / L / Z only and split stroked polylines into segments.
-- The cell model (svg_cells.py) counts the implicit close. With the observed joins, crush3d.svg's heaviest stroke was
-  ~22.6 k cells in CRUSH4, ~7.2 k in CRUSH5 (both asserted) and ~3.8 k in CRUSH6/7 (just under 3840: drawn, no
-  assert): the device results line up.
-- CRUSH8 (M / L / Z only, stroked polylines split into segments) still showed diagonal lines and black triangles on
-  the device: the model above is incomplete. **From CRUSH9 we stop relying on path semantics**:
-  - `check_svg.py --strict`: one subpath per element (one M; build.py requires it of crush3d.svg). gen_crush.py
-    `path()` turns a d with several subpaths into a group of single-subpath paths (`id_1`, `id_2`, ..); recolours
-    name the leaves (generated `src/slot/crush3d_ids.h`), each with a colour value no other element uses (±2 per
-    channel of the palette; check_svg accepts ±2).
-  - Other SVGs that would fail `--strict` (not converted): pedals.svg 9 elements, pingpong.svg 13, choir.svg 19,
-    fm4.svg 12. They render right on the device so far.
-  - Limits for the element count (static): no node or pool count assert in the parser or Screen (their assert
-    strings name only the subset errors); TE's own `lander.svg` has 885 elements / 171 KB and parses at boot.
-    crush3d.svg (CRUSH9): 298 drawable elements, 362 ids, 46 KB; 23 .. 133 drawn per frame over the 14 gallery states (73 at the default; before the split 10 .. ~59 compound elements). Heap ~144 B per shape
-    (above): ~45 KB. **Hypothesis** until CRUSH9 runs.
-  - Ground truth: `crushcard.svg` (design/fx/gen_card.py), 18 numbered cases (polylines with one and several
-    subpaths, H / V open and closed, Z then M, two closed subpaths filled, a hole, polygon / polyline / line / rect,
-    miter / round / belvel on an acute angle, widths 0.5 and 0.8, a group matrix, a recolour), each with its expected
-    result drawn beside it in 1-px grey lines by the C (no parser). ui.c shows it for 360 frames (~12 s) on the first
-    open of the crush screen after boot (`draw_card`), then the pyramid. `check_svg.py --card`: the subset rules
-    only (the card breaks the quirk rules on purpose).
+- **Rule (Verified, device, test 78 `crushcard.svg`): every M after the first does not lift the pen: it closes the
+  current subpath and draws a line to the new point. The subpaths of one element are always connected.** Seen on
+  the card: M L L M L L (case 2) gets each Λ's base; three M L dashes (3) become an "E" (the closes retrace, the
+  lines to each next M join the left ends); open H / V pieces after Ms (5) are joined the same way; a closed triangle
+  then M L L (8) is joined to the V. In the code: M calls close `0x01A0722E` when it is not the first (`[FP - 0x2C]`
+  counts the Ms), Verified; the line to the new point is what the device shows.
+- Fills: the connecting lines become edges. Two closed pieces (card 7, and 9 with a reversed hole) come out right
+  (the one connector is cancelled by the final close); with three or more pieces the connectors s1 -> s2 -> .. -> sn
+  -> s1 enclose an extra polygon (most likely CRUSH8's black triangles; its stray diagonals and the frayed wah grip
+  and grooves of LOG 592 .. 48 are the stroked connectors).
+- Everything else on the card is right (Verified, test 78): a single M L L polyline (1), one open H / V subpath (4),
+  closed H / V fill (6), polygon, polyline, line, rect (10 .. 12), miter / round / `belvel` joins on an acute angle
+  (13 .. 15; TE's spelling, `bevel` is not recognised), strokes 0.5 and 0.8 (16), a group matrix (17), a recolour
+  (18). line_to `0x01A0712C` skips a segment shorter than a minimum (`[0x01DE2E48]`). Relative commands go through a
+  separate offset path (H / V relative read a global, `[0x01DDD564]`): avoided.
+- **Rule for our SVGs: one subpath per element** (`design/fx/check_svg.py`, run by build.py on every published SVG;
+  `--card` lets the test card break it). `design/fx/strictify.py` converts, in place and keeping the look (rsvg and
+  the C-path previews match the old files within anti-aliasing): fill-only pieces are joined into one subpath by
+  bridges from start to start and back along the same lines (the edges cancel; same id, nothing changes in ui.c);
+  butt-capped single segments without a recoloured stroke become one filled subpath of their rectangles; other
+  strokes become a group of one-subpath leaves `id_1`, `id_2`, .. (ui.c recolours the leaves). The generators
+  call it (gen_crush.py splits itself).
+- The cell model (svg_cells.py) counts closes and connectors; it matched CRUSH4 .. 7 (~22.6 k, ~7.2 k cells: assert;
+  ~3.8 k: drawn with stray lines).
+- Element count limits (static): no node or pool count assert in the parser or Screen; TE's `lander.svg` has 885
+  elements / 171 KB and parses at boot. crush3d.svg (CRUSH9): 298 drawable elements, 23 .. 133 drawn per frame;
+  rendered right on the device (test 78), cost ~3,000 kcycles idle and ~12,000 under heavy animation (pedals 17,599,
+  LOG 592).
+- Test card: `crushcard.svg` (design/fx/gen_card.py), 18 numbered cases with the expected result drawn beside each
+  by the C. Only with `build.py --test-card` (ui.c `CRUSH_TEST_CARD`): 360 frames (~12 s) on the first open of the
+  crush screen after boot, then the pyramid.
 
 ## Cost (Hypothesis; measure before relying on it)
 - **Hard limit, not cost: every fill and every stroke must stay under ~3840 AGG cells** (notes/screen.md "AGG cell

@@ -1428,11 +1428,12 @@ static const char *const choir_ids[C_KINDS][3] = {
 static const char *const note_ids[6] = { "n1", "n2", "n3", "n4", "n5", "n6" };
 /* The backing singers fade in from black with white: these fills and strokes are scaled toward black. Their colour
  * values are unique in choir.svg (TE may share one style entry between elements of equal colour). */
-static const char *const fade_fill[2][7] = { { "robe2", "hair2", "face2", "book2", "cheek2", "mo2", "cone2" },
-                                             { "robe3", "hair3", "face3", "book3", "cheek3", "mo3", "cone3" } };
-static const char *const fade_stroke[2][4] = { { "robe2", "hair2", "face2", "shut2" },
-                                               { "robe3", "hair3", "face3", "shut3" } };
-#define FADES (2 * (7 + 4))
+/* hair2 / hair3 are groups of one-subpath leaves (notes/svg-route.md "Path quirks"): recolour the leaves */
+static const char *const fade_fill[2][8] = { { "robe2", "hair2_1", "hair2_2", "face2", "book2", "cheek2", "mo2", "cone2" },
+                                             { "robe3", "hair3_1", "hair3_2", "face3", "book3", "cheek3", "mo3", "cone3" } };
+static const char *const fade_stroke[2][5] = { { "robe2", "hair2_1", "hair2_2", "face2", "shut2" },
+                                               { "robe3", "hair3_1", "hair3_2", "face3", "shut3" } };
+#define FADES (2 * (8 + 5))
 static uint8_t *fade_rgba[FADES] RAM = { 0 };
 static uint8_t fade_orig[FADES][3] RAM = { { 0 } };
 static int32_t fade_level RAM = -1;
@@ -1456,9 +1457,9 @@ static int choir_ready(void)
     struct { void *doc; } screen = { choir.doc };
     int n = 0;
     for (int i = 0; i < 2; i++) {                   /* the getters assert on a missing id: check with find first */
-        for (int j = 0; j < 7; j++, n++)
+        for (int j = 0; j < 8; j++, n++)
             fade_rgba[n] = te_node_find(choir.doc, fade_fill[i][j], 0) ? te_svg_fill(&screen, fade_fill[i][j]) : 0;
-        for (int j = 0; j < 4; j++, n++)
+        for (int j = 0; j < 5; j++, n++)
             fade_rgba[n] = te_node_find(choir.doc, fade_stroke[i][j], 0) ? te_svg_stroke(&screen, fade_stroke[i][j]) : 0;
     }
     for (n = 0; n < FADES; n++)
@@ -1715,14 +1716,15 @@ static const char *const dist_ids[D_KINDS] = { "pedal", "plate", "s1", "s2", "s3
  * getters assert (Screen.cpp linestyle_id) when asked for a stroke or fill the element does not have. */
 enum { FF = 1, FS = 2 };
 static const struct { const char *id; uint8_t has; } dist_fade_ids[] = {
-    { "shadow", FF }, { "cableO", FS }, { "plugL", FF | FS }, { "plugR", FF | FS }, { "collar", FF | FS },
-    { "jackL", FF | FS }, { "jackR", FF | FS }, { "hilite", FS }, { "lip", FS }, { "grooves", FF },
+    { "shadow", FF }, { "cableO", FS }, { "plugL_1", FF | FS }, { "plugL_2", FF | FS }, { "plugR_1", FF | FS },
+    { "plugR_2", FF | FS }, { "collar", FF | FS }, { "jackL", FF | FS }, { "jackR", FF | FS }, { "hilite", FS }, { "lip", FS },
+    { "grooves", FF },
     { "screw", FF | FS }, { "slot", FS }, { "wshadow", FF }, { "wroofL", FF | FS }, { "wroofR", FF | FS },
     { "wend", FF | FS }, { "wside", FF | FS }, { "wbrk", FF | FS }, { "rubber", FS }, { "chrome", FF | FS },
     { "shine", FS }, { "wjackI", FS }, { "wjackO", FF | FS }, { "cableI", FS }, { "patch", FS }, { "plugW", FF | FS },
     { "tendf", FF | FS } };
 #define DIST_FADES (sizeof dist_fade_ids / sizeof dist_fade_ids[0])
-enum { R_BODYF, R_BODYS, R_PLATEB, R_PLAQUE, R_LEDF, R_LEDS, R_RAYS, R_RIBS, R_SPECIAL };
+enum { R_BODYF, R_BODYS, R_PLATEB, R_PLAQUE, R_LEDF, R_LEDS, R_RIBS, R_RAYS, R_SPECIAL = R_RAYS + 5 };   /* rays_1..5 */
 static struct svgdoc pedals RAM = { 0, 0 };
 static void *dist_node[D_KINDS] RAM = { 0 };
 static struct recol dist_fade[DIST_FADES][2] RAM = { { { 0, { 0 } } } };
@@ -1753,7 +1755,9 @@ static int pedals_ready(void)
     recol_init(&dist_rc[R_PLAQUE], pedals.doc, "plaque", 1);
     recol_init(&dist_rc[R_LEDF], pedals.doc, "led", 0);
     recol_init(&dist_rc[R_LEDS], pedals.doc, "led", 1);
-    recol_init(&dist_rc[R_RAYS], pedals.doc, "rays", 1);
+    static const char *const rays[5] = { "rays_1", "rays_2", "rays_3", "rays_4", "rays_5" };  /* one subpath each */
+    for (int i = 0; i < 5; i++)
+        recol_init(&dist_rc[R_RAYS + i], pedals.doc, rays[i], 1);
     recol_init(&dist_rc[R_RIBS], pedals.doc, "ribs", 0);
     return 1;
 }
@@ -1833,7 +1837,8 @@ static void draw_pedals(void *r, const int16_t *k)
         recol_set(&dist_rc[R_PLAQUE], mode_trim[mode], v);
         recol_set(&dist_rc[R_LEDF], m > 0 ? 0xFF3A5D : 0x4E2832, m > 0 ? v : 256);
         recol_set(&dist_rc[R_LEDS], m > 0 ? 0xFF3A5D : 0x4E2832, m > 0 ? v : 256);
-        recol_set(&dist_rc[R_RAYS], mode_rays[mode], 256);
+        for (int i = 0; i < 5; i++)
+            recol_set(&dist_rc[R_RAYS + i], mode_rays[mode], 256);
         recol_set(&dist_rc[R_RIBS], 0x00ED95, 102 + ((154 * v) >> 8));
     }
     svg_render(pedals.doc);
@@ -2190,7 +2195,8 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
     svg_cost(r);
 }
 
-/* Device ground truth for TE's SVG route (CRUSH9): on the first open of the crush screen after boot, crushcard.svg
+#ifdef CRUSH_TEST_CARD
+/* Device ground truth for TE's SVG route (CRUSH9; build.py --test-card): on the first open of the crush screen after boot, crushcard.svg
  * (design/fx/gen_card.py: 18 numbered cases) for 360 frames (~12 s), each case's expected result beside it in 1-px
  * grey lines (not through TE's parser). Case 17 is a group the C scales to half about its centre, case 18 a grey
  * square the C recolours green. Returns 1 while the card is up. */
@@ -2229,6 +2235,9 @@ static int draw_card(void *r)
     }
     return 1;
 }
+#else
+#define draw_card(r) 0
+#endif
 
 /* FX screen: id = our FX id (8..), mode = edit mode (0 synth, 1 drum, 3 master), slot = sound slot. */
 void fx_ui_draw(int id, int mode, int slot)
@@ -2256,7 +2265,7 @@ void fx_ui_draw(int id, int mode, int slot)
     }
     else if (kind == FX_CRUSH) {
         if (draw_card(r))
-            ;
+            (void)0;
         else if (pyramid_ready())
             draw_pyramid(r, k, mode == 3, mode << 4 | slot);
         else

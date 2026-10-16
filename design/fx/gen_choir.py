@@ -2,6 +2,7 @@
 """The Choir, HQ hybrid: choir.svg (the shippable asset, TE retained-renderer subset) + composite mock frames
 (asset with runtime matrices/visibility/recolours applied + our immediate-mode line overlay) + an animated GIF."""
 import math, os, re, subprocess, json
+import strictify
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 FONT_H = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "slot", "font.h")
@@ -438,6 +439,7 @@ if __name__ == "__main__":
     a = asset()
     xml = render(a)
     open(os.path.join(OUT, "choir.svg"), "w").write('<?xml version="1.0" encoding="utf-8"?>\n<!--' + HEADER.replace("--", "-") + '-->\n' + xml)
+    strictify.strictify_file(os.path.join(OUT, "choir.svg"))        # one subpath per element (TE joins subpaths)
     info = {}
     for name, k, cap in STATES:
         aa = composite(f"hq_{name}", k)
