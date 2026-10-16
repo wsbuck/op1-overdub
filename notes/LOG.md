@@ -1110,3 +1110,58 @@
 - Report: the four cost numbers, readouts that are off, the BITS 20..29 right face, any step that sounds cleaner
   clockwise, anything that looks wrong (photo), any assert text.
 - Result: _pending user flash_.
+
+## 2026-10-15 — Test image 73: PICK1.OP1 (install CLI: amp and crush left out)
+- `tools/apply.py` is now the install CLI (commit 3fd47c7): one patch carries every feature, the user picks which to
+  install (checklist with everything on, `--all`, `--without A,B`, `--only A,B`, `--list`). The feature list comes from
+  patch.json (mkpatch.py `--features`, written by build.py): every non-probe engine and FX of the build, HOLD and CHORD.
+  Probes (`"probe": true` in engines.json: inprobe, sprobe, dprobe) are always installed.
+- Leaving out an engine or FX skips only its DB rows: synth engine = its `synth_types` row and `synth_presets`; drum
+  engine = its `drum_presets` (fmdrum: the kit folder = its browser column); FX = its `fx_types` row. The firmware is the
+  same in every selection: name tables, ids, code and SVGs all stay, so a saved sound using it loads.
+- Static evidence (decompiles, fw 246) that the missing rows are safe:
+  - Readers of `synth_types`: only the type browser list `FUN_01a02440` (`FUN_019707d8` = `SELECT id, type FROM
+    synth_types`, one column per row, plus the sampler presets; asserts only if the list is empty, db2.cpp:806 /
+    patch.cpp:815), its cursor `FUN_01a02304` (`SELECT id FROM synth_types WHERE type='%s'`: no row gives 0 and falls
+    back to `FUN_01a02030`, the path `sampler` takes every day since it has no row; `FUN_01a172d4` lands on column 0
+    when the id isn't listed, no assert) and `FUN_01940356` (type/defaults by the id picked in that browser: a hidden
+    engine can't be picked). No data pointers to these strings. The preset browser (`FUN_01a02790`) is columns =
+    preset folders, as on the drum side.
+  - `fx_types`: the FX browser list (`FUN_01970a84`), its cursor (`FUN_01a01954`, master `0x019D980A`: `SELECT id ...
+    WHERE type`, 0 -> cursor 0) and type/defaults by picked id. Loading a patch maps `fx_type` by name through the
+    firmware table (`FUN_019aae44`, notes/fx-slot.md); device precedent: iter presets with `filter` loaded while
+    `filter` had no row (test image 2).
+  - Engine names: TE's lookup (`FUN_019b97c4`, instr_types.cpp:49) and the validator use our grown name table, which
+    is unchanged. Preset counts only fall (patch.cpp:616 <= 176, :656 drum).
+- HOLD/CHORD: `_feature_mask` (slot.S, after the 8-byte magic `OVDBMASK`; bit 0 HOLD, bit 1 CHORD) read by the hooks:
+  HOLD off -> SHIFT+T2 goes to TE's handler (stock: unused); CHORD off -> SHIFT+notes play plain notes, no learning.
+  The hooks stay installed (key-up and note-on pass through as stock when nothing is held or learned). apply.py checks
+  the all-features OP1_vdk.ldr sha256 first, then the magic and built value at the recorded offset, then the sha256
+  recorded for that mask value. The DB is checked against the rows expected for the selection (and the full row set
+  against the build's digest first).
+- Checks: `tools/apply_check.py` (host; selections all, without amp+crush, only va+grain+hold, without hold+chord,
+  without chord+fmdrum+ensemble, none: te-boot identical, LDR = all-features but the feature word, the name tables
+  read through the patched code hold all 10 engines with the same ids, hidden rows absent / shown rows exact, stock
+  rows kept, counts in limits, a DB with saved sounds on hidden engines and FX validates by name, an unknown name
+  fails): 124 pass. `src/slot/test/hold_check.py` (simulator: hold_test.c incl. every mask combination, 37 pass;
+  device hold.o reads `_feature_mask`); drumhooks_check, knobhook_check pass.
+- `firmware/images/PICK1.OP1` = `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum
+  --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+  --db-trim harmonic=6 --db-trim fm4=6 --without amp,crush --name PICK1` from commit 3fd47c7 in a clean `git archive`
+  (no `--svg-cost`): the bundle's apply.py applied to stock with `--without amp,crush`. Ids as CRUSH4: synth va 15 …
+  fm4 22, dprobe drum 23, fmdrum 24; all registered (amp 20, crush FX 11 included). 175 synth presets (amp's one left
+  out), 28 drum presets; te-boot identical to stock; the interactive checklist (toggle 4 and 11) gives the same image.
+  sha256 19885b8a86c325c347b7aa4058ad866ddf447480389a8159eda33bf75cf4ff9f.
+- Checklist:
+  1. Boots. If the device has a saved sound using amp (synth) or crush (FX) in a slot, it loads at boot and plays
+     (amp with its screen; crush with its pyramid screen); no "error" or assert.
+  2. Synth preset browser and the engine (type) browser: no amp column / entry; va, wavetable, grain, harmonic, fm4
+     there and load. inprobe and sprobe not listed (no presets, as before).
+  3. FX list (synth, drum, master): no crush; ensemble, pingpong, distortion and TE's FX listed and work. On a sound
+     using crush, opening the FX list puts the cursor on the first entry (no assert).
+  4. Drum browser: the fmdrum column still there and its kits play; dbox and drum unchanged.
+  5. HOLD (SHIFT+T2) and CHORD (SHIFT + notes) work as before (both installed here).
+  6. Optional, for the off path: `python3 apply.py op1_246.op1 HOLDOFF.OP1 --without hold,chord` (from the zip in
+     `dist/`): SHIFT+T2 does nothing, SHIFT+notes play plain notes; everything else as PICK1.
+- Report: anything listed that shouldn't be (or missing), the saved amp/crush sounds, any assert text (photo).
+- Result: _pending user flash_.
