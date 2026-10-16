@@ -57,15 +57,18 @@ FX contract and slot mechanics: fx-slot.md. Confidence: **Confirmed** = read in 
 - Fixed point: delays are Q15 samples (56448 << 15 < 2³¹); taps are linearly interpolated. There is no runtime division (only `/ BLOCK`) and no 64-bit maths.
 
 ## Screen (2026-10-16: paddles; `design/fx/pingpong.svg` from `design/fx/gen_pingpong.py`, ui.c `draw_tennis`)
-- The players are gone: two flat paddles, L blue and R pink (round blade with its rim showing as the thickness, a
-  sheen arc, a flared purplegrey handle with a grip band, a floor shadow), one at each table end; mono (synth/drum
-  FX) keeps squash: the L paddle against the brick wall. Table, net, barrier, scoreboard, ball, arches unchanged.
+- The players are gone: two flat table-tennis bats, L blue and R pink, one at each table end, leaning 19 deg toward
+  the net. Blade 25 x 29 (taller than wide: an ellipse on top, a flatter superellipse base), its rim showing as the
+  thickness, a sheen arc; a light throat flaring into the blade; a long purplegrey handle (two grip bands) with a
+  flared end; a floor shadow. Mono (synth/drum FX) keeps squash: the L bat against the brick wall. Table, net,
+  barrier, scoreboard, ball, arches unchanged. (First version 2026-10-16: round blades; the user found them too
+  round, so bigger, real bat shapes.)
 - gen_pingpong.py is the generator again (the SVG is reproducible): it writes the file, bridges multi-piece fills
   (strictify.py), makes the recoloured fills unique (uniquify.py) and runs check_svg.py and svg_cells.py --check.
-  65 drawable elements, every one one subpath of absolute M / L / C / Z; heaviest fill the barrier ~784 cells (20 %).
+  69 drawable elements, every one one subpath of absolute M / L / C / Z; heaviest fill the barrier ~784 cells (20 %).
 - Motion: the ball flies blade face to blade face once per delay (or a whole multiple >= 0.25 s), clocked by the
-  line's write index; the hitter (group `batL` / `batR`) follows through about its handle end (30, 98) / (290, 98)
-  and settles, the receiver cocks back over the last 40 % of the flight; a lightblue swoosh for 0.12 s after a hit.
+  line's write index (the generator places each blade so the ball at x 54 / 266 touches it); the hitter (group
+  `batL` / `batR`) follows through 24 deg about its handle end (24, 109) / (296, 109) and settles, the receiver cocks back over the last 40 % of the flight; a lightblue swoosh for 0.12 s after a hit.
 - Blue: the table length now follows the delay played (log2 of the DSP's glided delay: 20 ms … 1.48 s = half length
   40 … 104), so it moves with the tape glide and with tempo changes; padL / padR, legs and the wall follow the ends.
 - Readout (immediate, after the SVG): top left in blue the division played ("1/8.", "1/8T", "1/4") or the free time

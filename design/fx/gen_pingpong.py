@@ -29,10 +29,13 @@ FLOOR = 132       # floor line
 HREF = 104        # table half-length the asset is drawn at (= blue's longest); the runtime scales / translates from it
 HMIN = 40         # half-length at the shortest delay
 BAT_Y = 70        # where the ball meets the paddles (blade centre height)
-BLADE_R = 10      # blade radius
-BLADE_X = 120     # blade centre offset from the table centre at HREF (the ball, r 4.6, touches the blade's face)
-HANDLE = (-8, 23)  # handle direction from the blade centre (left paddle; mirrored on the right)
-GRIP_END = 30     # pivot: the handle's end, this far from the blade centre
+BLADE_W = 12.5    # blade half-width
+BLADE_TOP = 16.5  # blade extent from its centre away from the handle (rounded) ...
+BLADE_BASE = 12.5  # ... and toward it (flatter: a superellipse half, where the throat meets it)
+TILT = 19         # the paddle leans toward the net, degrees from upright (left paddle; mirrored on the right)
+GRIP_END = 41     # pivot: the handle's flared end, this far from the blade centre along the handle
+BALL_R = 4.6
+CONTACT_X = CX - HREF - 2   # where the ball's centre is at a hit (ui.c xl = 158 - half), at HREF
 NPIP = 11         # scoreboard: game to 11
 PADDLES = {"L": dict(face="blue", rim="darkblue", sheen="lightblue"),
            "R": dict(face="pink", rim="purple", sheen="lightorange")}
@@ -138,41 +141,77 @@ def wall():
     ])
 
 
+def blade_pts(w, top, base, n=40):
+    """The blade outline in its own frame (v across, h along: + toward the top), shortest first: an ellipse on the
+    top half, a flatter superellipse (exponent 3) on the base half."""
+    pts = []
+    for i in range(n):
+        t = 2 * math.pi * i / n
+        c, sn = math.cos(t), math.sin(t)
+        if sn >= 0:
+            pts.append((w * c, top * sn))
+        else:
+            e = 2 / 3
+            pts.append((w * math.copysign(abs(c) ** e, c), -base * abs(sn) ** e))
+    return pts
+
+
 def paddle_geom(side):
-    """Blade centre, handle unit vector and the pivot (handle end) of one paddle at the reference table length."""
-    bx, by = CX + side * BLADE_X, BAT_Y
-    hx, hy = HANDLE[0] * -side, HANDLE[1]
-    n = math.hypot(hx, hy)
-    ux, uy = hx / n, hy / n
-    return (bx, by), (ux, uy), (round(bx + GRIP_END * ux), round(by + GRIP_END * uy))
+    """Blade centre, the unit vector from it down the handle, and a point mapper, for one paddle at HREF. The blade
+    centre is placed so the ball (r BALL_R) at CONTACT_X, BAT_Y just touches the blade's face."""
+    a = math.radians(TILT) * -side
+    ux, uy = -math.sin(a), math.cos(a)          # down the handle (left paddle: down and to the left)
+    hx, hy = -ux, -uy                           # toward the blade top
+    vx, vy = -hy, hx
+
+    def mapper(bx, by):
+        return lambda v, h: (bx + v * vx + h * hx, by + v * vy + h * hy)
+    m0 = mapper(0, BAT_Y)
+    ext = max(side * -1 * x for x, y in (m0(v, h) for v, h in blade_pts(BLADE_W, BLADE_TOP, BLADE_BASE))
+              if abs(y - BAT_Y) < 3)            # the face's reach toward the net at the contact height
+    cx = 320 - CONTACT_X if side > 0 else CONTACT_X
+    bx = cx + side * (BALL_R + ext - 0.4)       # 0.4 overlap: touching
+    pv = (bx + GRIP_END * ux, BAT_Y + GRIP_END * uy)
+    return (bx, BAT_Y), (ux, uy), mapper(bx, BAT_Y), (round(pv[0]), round(pv[1]))
 
 
 def paddle(side):
-    """A flat, face-on paddle: a round blade (its rim showing as the thickness, a sheen arc) on a flared handle.
-    Group pad<S> moves with the table end; inside it bat<S> turns about the handle's end (the pivot)."""
+    """A flat, face-on table-tennis bat: an elongated rounded blade (taller than wide, flatter at the base) with its
+    rim showing as the thickness and a sheen, a throat flaring into the blade, a long handle with a flared end, a
+    floor shadow. Group pad<S> moves with the table end; inside it bat<S> turns about the handle's end (the pivot)."""
     s = "L" if side < 0 else "R"
     c = PADDLES[s]
-    (bx, by), (ux, uy), pv = paddle_geom(side)
-    nx, ny = -uy, ux
-    at = lambda u, v: (bx + u * ux + v * nx, by + u * uy + v * ny)
-    # handle outline: neck under the blade, a flare, the grip with a rounded end (one cubic)
-    prof = [(6, 2.1), (13, 2.3), (16, 3.1), (26.5, 3.1)]
-    right = [at(u, v) for u, v in prof]
-    left = [at(u, -v) for u, v in reversed(prof)]
-    e0, e1, e2 = at(28.6, 3.1), at(28.6, -3.1), at(29.8, 0)
-    d = (P(*right) + f" C{f(e0[0])} {f(e0[1])} {f(e1[0])} {f(e1[1])} {f(left[0][0])} {f(left[0][1])} "
-         + " ".join(f"L{f(x)} {f(y)}" for x, y in left[1:]) + " Z")
-    b0, b1 = at(16.6, 3.3), at(16.6, -3.3)
-    rim = (bx - side * 1.3, by + 1.1)
+    (bx, by), (ux, uy), at, pv = paddle_geom(side)
+    # at(v, h): v across, h toward the blade top; the handle runs to h = -GRIP_END
+    hand = [(-2.2, -BLADE_BASE + 1), (-2.3, -BLADE_BASE - 6), (-2.9, -GRIP_END + 9), (-3.4, -GRIP_END + 3),
+            (-4.6, -GRIP_END + 0.6)]                                # one side, blade to the flared end
+    right = [at(v, h) for v, h in hand]
+    left = [at(-v, h) for v, h in reversed(hand)]
+    e0, e1 = at(-4.6, -GRIP_END - 1.6), at(4.6, -GRIP_END - 1.6)  # the end, slightly domed
+    handle = P(*right) + f" C{f(e0[0])} {f(e0[1])} {f(e1[0])} {f(e1[1])} {f(left[0][0])} {f(left[0][1])} " + \
+        " ".join(f"L{f(x)} {f(y)}" for x, y in left[1:]) + " Z"
+    # the throat: a wedge flaring from the handle into the blade's base (lighter, over the rubber)
+    th = [at(-2.3, -BLADE_BASE - 4), at(-6.5, -BLADE_BASE + 2.2), at(-3.5, -BLADE_BASE + 4.5), at(0, -BLADE_BASE + 5.2),
+          at(3.5, -BLADE_BASE + 4.5), at(6.5, -BLADE_BASE + 2.2), at(2.3, -BLADE_BASE - 4)]
+    grips = [(at(-3.1, h), at(3.1, h)) for h in (-GRIP_END + 13, -GRIP_END + 7)]
+    outline = blade_pts(BLADE_W, BLADE_TOP, BLADE_BASE)
+    off = (-side * 1.4, 1.2)                                       # the rim: the blade's edge, seen as its thickness
+    rim = [at(v, h) for v, h in outline]
+    # sheen: an arc along the inner outline, upper outer quarter (away from the net)
+    inner = blade_pts(BLADE_W - 3.4, BLADE_TOP - 3.4, BLADE_BASE - 3.4, 48)
+    idx = range(14, 21) if side < 0 else range(4, 11)              # 105 .. 150 deg (left) / 30 .. 75 deg (right)
+    sh = [at(*inner[i]) for i in idx]
     bat = N("g", f"bat{s}", [
-        N("path", f"handle{s}", d=d, fill=C["purplegrey"]),
-        N("line", f"grip{s}", x1=f(b0[0]), y1=f(b0[1]), x2=f(b1[0]), y2=f(b1[1]), **A(stroke=C["grey"], stroke_width="1.2")),
-        N("circle", f"rim{s}", cx=f(rim[0]), cy=f(rim[1]), r=f(BLADE_R), fill=C[c["rim"]]),
-        N("circle", f"blade{s}", cx=f(bx), cy=f(by), r=f(BLADE_R), fill=C[c["face"]]),
-        N("path", f"sheen{s}", d=arc_d(bx, by, BLADE_R - 3, 200, 255) if side < 0 else arc_d(bx, by, BLADE_R - 3, 285, 340),
-          fill="none", **A(stroke=C[c["sheen"]], stroke_width="1.6", stroke_linecap="round")),
+        N("path", f"handle{s}", d=handle, fill=C["purplegrey"]),
+        *[N("line", f"grip{s}{j + 1}", x1=f(p0[0]), y1=f(p0[1]), x2=f(p1[0]), y2=f(p1[1]),
+            **A(stroke=C["grey"], stroke_width="1.1")) for j, (p0, p1) in enumerate(grips)],
+        N("path", f"rim{s}", d=P(*[(x + off[0], y + off[1]) for x, y in rim], close=True), fill=C[c["rim"]]),
+        N("path", f"blade{s}", d=P(*rim, close=True), fill=C[c["face"]]),
+        N("path", f"throat{s}", d=P(*th, close=True), fill=C["lpg"]),
+        N("path", f"sheen{s}", d=P(*sh), fill="none",
+          **A(stroke=C[c["sheen"]], stroke_width="1.8", stroke_linecap="round", stroke_linejoin="round")),
     ])
-    shadow = N("path", f"padshadow{s}", d=ellipse_d(bx - side * 4, FLOOR - 2.5, 8, 1.6), fill=C["darkblue"])
+    shadow = N("path", f"padshadow{s}", d=ellipse_d(bx - side * 6, FLOOR - 2.5, 11, 1.8), fill=C["darkblue"])
     return N("g", f"pad{s}", [shadow, bat])
 
 
@@ -216,13 +255,13 @@ def asset():
              viewBox="0 0 320 160")
 
 
-(_, _, PIV_L), (_, _, PIV_R) = paddle_geom(-1), paddle_geom(1)
+PIV_L, PIV_R = paddle_geom(-1)[3], paddle_geom(1)[3]
 HEADER = f"""
 pingpong.svg - "pingpong" FX screen (table tennis: two paddles, L and R, rally over the table). Our own artwork,
 generated by design/fx/gen_pingpong.py (do not edit by hand). TE's retained renderer draws it, then our immediate
 overlay (echo arches, swoosh, the time readout) goes on top. All ids are found once at load (find, assert=0).
-Reference geometry: table centre x = {CX}, top y = {TY}, drawn at half-length HREF = {HREF}; blades r {BLADE_R} at
-x = {CX} -+ {BLADE_X}, y = {BAT_Y}; handle pivots L {PIV_L}, R {PIV_R}; floor y = {FLOOR}.
+Reference geometry: table centre x = {CX}, top y = {TY}, drawn at half-length HREF = {HREF}; blades {2 * BLADE_W} x
+{BLADE_TOP + BLADE_BASE} leaning {TILT} deg toward the net, the ball meets them at x = {CONTACT_X} / {320 - CONTACT_X}, y = {BAT_Y}; handle pivots L {PIV_L}, R {PIV_R}; floor y = {FLOOR}.
 Knobs: half = {HMIN} + ({HREF} - {HMIN}) * blue's table position (ui.c); g = feedback; tone = white; mix = orange.
   tabletop          matrix = scale(half/{HREF}, 1) about ({CX}, {TY})                    [blue: table length = delay time]
   legL / legR       matrix = translate(+-({HREF} - half), 0)
