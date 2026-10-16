@@ -1115,6 +1115,7 @@
   in CRUSH5 (test image 73). Sound is unaffected; only opening the screen asserts.
 
 ## 2026-10-15 — Test image 73: PICK1.OP1 (install CLI: amp and crush left out)
+- **Superseded / do not flash:** PICK1 carries CRUSH4's oversized crush3d.svg (agg.cpp:339 on the crush FX screen, test 72). Rebuild the CLI test from CRUSH5 or later.
 - `tools/apply.py` is now the install CLI (commit 3fd47c7): one patch carries every feature, the user picks which to
   install (checklist with everything on, `--all`, `--without A,B`, `--only A,B`, `--list`). The feature list comes from
   patch.json (mkpatch.py `--features`, written by build.py): every non-probe engine and FX of the build, HOLD and CHORD.
@@ -1169,7 +1170,7 @@
 - Report: anything listed that shouldn't be (or missing), the saved amp/crush sounds, any assert text (photo).
 - Result: _pending user flash_.
 
-## 2026-10-15 — Test image 73: CRUSH5.OP1 (crush screen inside the AGG cell limit)
+## 2026-10-15 — Test image 74: CRUSH5.OP1 (crush screen inside the AGG cell limit)
 - CRUSH4 asserted `agg.cpp:339 alloc failed, too many blocks` on opening the crush FX screen. Cause (static analysis,
   notes/screen.md "AGG cell limit"): TE's AGG rasterizer asserts once one fill or one stroke needs more than 15 x 256
   cells (the block pool never shrinks); the default state's voxel-edge stroke (RATE level 2: one path of every block
