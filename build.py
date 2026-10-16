@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--no-hold", action="store_true", help="leave out HOLD (SHIFT+T2) and CHORD")
     ap.add_argument("--no-chord", action="store_true", help="leave out CHORD")
     ap.add_argument("--svg-cost", action="store_true", help="show the screen render cost on the FX screens (development)")
+    ap.add_argument("--staged-screens", action="store_true",
+                    help="bring the crush screen up layer by layer on its first open, labelled (device diagnosis)")
     ap.add_argument("--debug-ui", action="store_true", help="show profiler lines on the engine screens (development)")
     ap.add_argument("--db-trim", action="append", default=[], metavar="FOLDER=N",
                     help="keep only the first N presets of a folder (e.g. to stay within MAX_SYNTH_PRESETS in a test image)")
@@ -102,7 +104,7 @@ def main():
     cmd += [x for t in a.db_trim for x in ("--db-trim", t)]
     cmd += [] if a.no_hold else ["--hold"] + ([] if a.no_chord else ["--chord"])
     cmd += ["--fx", fj] if fxs else []
-    cmd += ["--svg-cost"] * a.svg_cost + ["--debug-ui"] * a.debug_ui
+    cmd += ["--svg-cost"] * a.svg_cost + ["--debug-ui"] * a.debug_ui + ["--staged-screens"] * a.staged_screens
     run(*cmd)
 
     # every SVG screen within AGG's per-path cell budget (notes/screen.md: over it, the OP-1 asserts on the screen)

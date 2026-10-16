@@ -90,7 +90,9 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   - RATE: voxel levels from the RATE detents 4 / 10 / 18 / 25 (SP-1200, 11 kHz, ~3.6 kHz, 1.4 kHz), tiers 8 / 6 / 4 / 3,
     the first level without fine vertical edges (they moire on the OLED);
   - RATE, SQUASH, GRIT: the DSP's smoothed knobs `k[]`, so the picture moves with the sound's glide;
-  - `gr` drives the squash pump (q = s (0.45 + 0.55 gr), at least 60 % of the height) and the dust puff (gr > 0.55);
+  - SQUASH (CRUSH6; the press, dust and squat are gone, the user's call): the sun is SQUASH's white indicator while
+    SQUASH >= 0.02, shrinking (x 1 - 0.45 gr) and dimming (white x 1 - 0.55 gr) with the gain reduction, so it pumps
+    with the audio; with SQUASH off it takes the BITS row's colour (darkblue / grey);
   - GRIT: cracks (o >= .1 .25 .5 .6 .75 .9) and notches (.5, .75) show the amount, statically; the shake (clock
     jitter) needs a signal (`level` > 33, ~ -60 dBFS: still when nothing plays); `flips` since the last frame drive
     the XOR slices (1 / 2 / 3 for < 3 / < 7 / more flip events per frame; at most 2 at 3 bits or less with GRIT > 0.6)
@@ -101,8 +103,7 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
     once crushed); green is BITS's accent (the 1-bit rim, rubble, mu-law courses); pure white belongs only to SQUASH's
     press, stem and puff.
   - Readout: a raw knob change of 512 or more shows its value for 45 frames (~1.5 s) at the title position (8, 7) in
-    the knob's colour, size 1.5 (1.25 above 13 characters), so every string ends by x 122, left of the press plate
-    (~128 at that height) and the stem (160), above the sun: `RATE 11.0KHZ`, `BITS 8`, `BITS 7.5`, `BITS 8 MU-LAW`
+    the knob's colour, at title size 2 (y 7 .. 19, above the sun at 24; the longest, 15 characters, ends at x 184): `RATE 11.0KHZ`, `BITS 8`, `BITS 7.5`, `BITS 8 MU-LAW`
     (only on the full mu-law plateau; the font has no mu), `BITS 8 MU 50%` / `BITS 7.5 MU 75%` (morphing),
     `SQUASH 4.0:1` / `20:1` / `OFF`, `JITTER 40%` (lower half), `FLIP 25%` (upper half), `GRIT OFF`. Not on entering
     the screen or switching sound / mode.
@@ -120,8 +121,10 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   stroke was ~4861 cells, over the ~3840 one fill or stroke may use. gen_crush3d.py now splits every compound path over
   1400 estimated cells into parts under its id (`chunked()`: ve1..4 into 2..4 parts, vt1, vl1, vt2, c4 and cmu into
   2..3; recoloured parts are their own leaves, ui.c's table names them); the worst over 144 states is now ~1431 (37 %).
-  The file carries an empty `<g id="cells2">`: ui.c draws the pyramid only if it finds it (an older crush3d.svg left on
-  the disk falls back to the line screen).
+  The file carries an empty `<g id="cells3">` (CRUSH6; `cells2` in CRUSH5): ui.c draws the pyramid only if it finds
+  it (an older crush3d.svg left on the disk falls back to the line screen). CRUSH5 still asserted (notes/screen.md
+  "Open"); CRUSH6 splits at 900 (heaviest element faceL's stroke ~1052, 27 %), generates ui.c's recolour table
+  (`src/slot/crush3d_ids.h`) from the file's leaves, and has the staged bring-up.
 - Cost (Hypothesis until read on the device with `--svg-cost`; CRUSH5 shows it): 10 visible shape elements
   (voxel levels, mu-law) to ~59 (everything at max) of 86; pedals has 66 shapes and read 17.6 M cycles per frame on the device, choir 2 .. 11 M.
   The large fills are the two faces, the shadow and the sun (smaller than pedals' bodies). The per-frame C work is a

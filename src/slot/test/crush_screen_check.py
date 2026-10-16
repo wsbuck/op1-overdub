@@ -113,12 +113,20 @@ def main():
                 dark.append((d, kr, int(lum)))
     check(not dark, "BITS detents 0..29 (down to 2 bits), RATE 0 and 11 kHz: the shade face stays visible (median "
           f"luminance >= 25 near the base){'; black at ' + str(dark) if dark else ''}")
-    # every readout ends left of the press plate's corner at text height (x ~128) and the stem (160): size 1.5 up to
-    # 13 characters (x 8 + 12 x 9 + 6 = 122), 1.25 above (15: x 8 + 14 x 7.5 + 5 = 118)
-    ends = {t: 8 + (len(t) - 1) * (9 if len(t) <= 13 else 7.5) + (6 if len(t) <= 13 else 5)
-            for t in ("RATE 11.0KHZ", "BITS 8 MU 50%", "BITS 7.5 MU 75%", "SQUASH 20.0:1", "JITTER 100%", "FLIP 100%")}
-    check(max(ends.values()) < 127, "readout: the longest strings end at x = " + ", ".join(f"{t!r} {v:g}" for t, v in
-          ends.items()) + " (press plate corner ~128, stem 160; the sun is below the text)")
+    # every readout (title size 2: 12 high, y 7 .. 19) stays above the sun (y >= 24) and ends above the apex
+    ends = {t: 8 + (len(t) - 1) * 12 + 8 for t in ("RATE 11.0KHZ", "BITS 8 MU 50%", "BITS 7.5 MU 75%", "SQUASH 20:1",
+                                                   "JITTER 100%", "FLIP 100%")}
+    check(max(ends.values()) <= 200 and 7 + 12 < 24, "readout at title size 2: y 7 .. 19 (the sun starts at 24); the "
+          "longest strings end at x = " + ", ".join(f"{t!r} {v}" for t, v in ends.items()))
+    # SQUASH: the sun pumps: smaller and dimmer with the gain reduction, white while SQUASH is on
+    def sun(img):
+        a = img[int(18 * S):int(58 * S), int(38 * S):int(78 * S)]
+        return (a > 40).sum(), a.max()
+    s0 = sun(c_path("sun_gr0", (0, 0, 32767, 0), FRAMES=9, CRUSH_GR=0)[1])
+    s1 = sun(c_path("sun_gr1", (0, 0, 32767, 0), FRAMES=9, CRUSH_GR=32767)[1])
+    soff = sun(c_path("sun_off", (0, 0, 0, 0), FRAMES=9)[1])
+    check(s1[0] < 0.5 * s0[0] and s1[1] < s0[1] - 60 and s0[1] > soff[1] + 60, f"SQUASH sun: lit area {s0[0]} -> "
+          f"{s1[0]} px, peak {s0[1]:.0f} -> {s1[1]:.0f} from gain reduction 0 to max (SQUASH off: peak {soff[1]:.0f})")
     n_mu = c_path("ro_mu", (0, 16384, 1000, 0), FRAMES=10, CRUSH_TURN="5:1:17408")[0]
     check(n_mu > 0, f"readout while mu-law morphs out (BITS detent 17: 'BITS 7.5 MU 75%'): {n_mu} segments")
 
@@ -136,16 +144,16 @@ def main():
     check(worst[0] <= cells.LIMIT // 2, f"AGG cells: the heaviest fill or stroke over 144 states is {worst[1]} "
           f"({worst[2]}, knobs {worst[3]}) ~{worst[0]} cells, {100 * worst[0] / cells.LIMIT:.0f} % of the {cells.LIMIT} "
           "that fit (bound 50 %)")
-    # ui.c's recoloured ids are leaves with that style (TE's style getters assert on a group or a missing style)
-    ui = open(os.path.join(ROOT, "src", "slot", "ui.c")).read()
-    tab = ui[ui.index("pyr_rc_ids[] = {"):ui.index("#define PYR_RC")]
+    # ui.c's recolour table (src/slot/crush3d_ids.h, generated) names leaves with that style (TE's style getters assert
+    # on a group or a missing style)
+    tab = open(os.path.join(ROOT, "src", "slot", "crush3d_ids.h")).read()
     ids = re.findall(r'\{ "(\w+)", (\d), RL_', tab)
     import xml.etree.ElementTree as ET
     els = {e.get("id"): e for e in ET.parse(svg).iter() if e.get("id")}
     bad = [i for i, st in ids if i not in els or els[i].tag.endswith("}g") or els[i].get("stroke" if st == "1" else "fill",
                                                                                          "none") == "none"]
-    check(not bad and els.get("cells2") is not None, f"ui.c recolours {len(ids)} styles: all leaves with that style in "
-          f"crush3d.svg{'; bad: ' + str(bad) if bad else ''}; the cell-budget marker 'cells2' is there")
+    check(not bad and els.get("cells3") is not None, f"ui.c recolours {len(ids)} styles: all leaves with that style in "
+          f"crush3d.svg{'; bad: ' + str(bad) if bad else ''}; the cell-budget marker 'cells3' is there")
 
     print(f"\n{len(fails)} failed" if fails else "\nall passed")
     sys.exit(1 if fails else 0)

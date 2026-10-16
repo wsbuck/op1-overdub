@@ -1882,9 +1882,9 @@ static void draw_crush(void *r, const int16_t *k, int stereo)
  * id, threshold, matrix and recolour; gen_crush3d.py runtime_state() is the reference, followed here). Inputs from
  * the DSP (crush_state): the smoothed knobs, the real bit depth (bits_q12) and mu-law share, the compressor's gain
  * reduction (the pump); the frame counter is the clock (30 fps). Knobs Q15, matrices Q10. */
-enum { P_SUN, P_FARG, P_PYR, P_SMOOTH, P_CMU, P_CAP1, P_CAP2, P_PILE, P_PRESS, P_PUFF, P_CH1, P_CH2, P_CHR, P_SINGLE };
-static const char *const pyr_single[P_SINGLE] = { "sun", "farg", "pyr", "smooth", "cmu", "cap1", "cap2", "pile", "press",
-                                                  "puff", "ch1", "ch2", "chr" };
+enum { P_SUN, P_FARG, P_PYR, P_SMOOTH, P_CMU, P_CAP1, P_CAP2, P_PILE, P_CH1, P_CH2, P_CHR, P_SINGLE };
+static const char *const pyr_single[P_SINGLE] = { "sun", "farg", "pyr", "smooth", "cmu", "cap1", "cap2", "pile", "ch1",
+                                                  "ch2", "chr" };
 enum { PA_VOX, PA_C = 4, PA_H = 8, PA_HW = 11, PA_HF = 14, PA_K = 17, PA_G = 23, PA_GS = 26, PA_D = 29, PA_DS = 33,
        PA_N = 37 };
 static const char *const pyr_multi[PA_N] = {
@@ -1896,16 +1896,8 @@ static const char *const pyr_multi[PA_N] = {
  * crush_screen_check checks this table against the file. */
 enum { RL_L, RL_R, RL_RS, RL_T, RL_CORE, RL_COURSE, RL_SUN, RL_FARL, RL_FARR, RL_SHADOW, RL_HORIZON, RL_SAND, RL_N };
 static const struct { const char *id; uint8_t stroke, role; } pyr_rc_ids[] = {
-    { "faceL", 0, RL_L }, { "faceL", 1, RL_L }, { "faceR", 0, RL_R }, { "faceR", 1, RL_RS },
-    { "vl1a", 0, RL_L }, { "vl1b", 0, RL_L }, { "vl2", 0, RL_L }, { "vl3", 0, RL_L }, { "vl4", 0, RL_L },
-    { "vr1", 0, RL_R }, { "vr2", 0, RL_R }, { "vr3", 0, RL_R }, { "vr4", 0, RL_R },
-    { "vt1a", 0, RL_T }, { "vt1b", 0, RL_T }, { "vt2a", 0, RL_T }, { "vt2b", 0, RL_T }, { "vt3", 0, RL_T }, { "vt4", 0, RL_T },
-    { "hf1", 0, RL_T }, { "hf2", 0, RL_T }, { "hf3", 0, RL_T }, { "hw1", 0, RL_CORE }, { "hw2", 0, RL_CORE },
-    { "hw3", 0, RL_CORE }, { "gl1", 0, RL_R }, { "gl2", 0, RL_R }, { "gl3", 0, RL_R },   /* XOR slices: shades swap */
-    { "gr1", 0, RL_L }, { "gr2", 0, RL_L }, { "gr3", 0, RL_L },
-    { "c1", 1, RL_COURSE }, { "c2", 1, RL_COURSE }, { "c3", 1, RL_COURSE }, { "c4a", 1, RL_COURSE }, { "c4b", 1, RL_COURSE },
-    { "sun", 0, RL_SUN }, { "farL", 0, RL_FARL }, { "farR", 0, RL_FARR }, { "shadow", 0, RL_SHADOW },
-    { "horizon", 1, RL_HORIZON }, { "sand", 1, RL_SAND } };
+#include "crush3d_ids.h"
+};
 #define PYR_RC (sizeof pyr_rc_ids / sizeof pyr_rc_ids[0])
 /* BITS posterise rows: A nb >= 9, B 5..9, C 2..5, D < 2 (colors.svg values) */
 #define CP_PURPLEGREY 0xAEB1DC
@@ -1954,7 +1946,7 @@ static int pyramid_ready(void)
         return pyramid.state > 0;
     if (!svg_open(&pyramid, "/yaffs2/content/display/crush3d.svg", "crush3d.svg"))
         return 0;
-    if (!te_node_find(pyramid.doc, "cells2", 0)) {                 /* not the cell-budgeted file (notes/screen.md): an */
+    if (!te_node_find(pyramid.doc, "cells3", 0)) {                 /* not the cell-budgeted file (notes/screen.md): an */
         pyramid.state = -1;                                         /* older crush3d.svg could overflow AGG: lines */
         return 0;
     }
@@ -1968,7 +1960,7 @@ static int pyramid_ready(void)
 }
 
 /* "RATE 11.0KHZ", "BITS 8 MU-LAW" / "BITS 7.5 MU 50%", "SQUASH 4.0:1", "JITTER 40%" / "FLIP 25%": the knob's value as
- * the DSP has it (at most 15 characters; drawn so they end left of the press plate and stem, draw_pyramid). */
+ * the DSP has it (at most 15 characters, drawn at title size: draw_pyramid). */
 static char *put_frac(char *p, uint32_t v, uint32_t div)     /* v / div with log10(div) decimals, v already rounded */
 {
     uint32_t w = udiv(v, div), f = v - w * div;
@@ -2082,18 +2074,10 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
             recol_set(&pyr_rc[i], pyr_pal[row][pyr_rc_ids[i].role], 256);
     }
 
-    /* white SQUASH: squat (at least 60 % of the height) and widen about the base centre, pumping with the gain
-     * reduction; orange GRIT: the whole pyramid trembles with the clock jitter while something plays */
-    int32_t q = (s * (14746 + ((18022 * gr) >> 15))) >> 15;                  /* s (0.45 + 0.55 gr) */
-    int32_t sy = 1024 - ((q * 410) >> 15), sx = 1024 + ((q * 184) >> 15);
+    /* orange GRIT: the whole pyramid trembles with the clock jitter while something plays */
     int32_t dx = o > 1638 && live ? ((512 + ((1536 * o) >> 15)) * jit(f, 1, (10 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
     int32_t dy = o > 9830 && live ? (((614 * o) >> 15) * jit(f, 2, (14 << 8) + ((7680 * o) >> 15))) >> 15 : 0;
-    set_matrix(pyr_node[P_PYR], sx, 0, 0, sy, 160 * (1024 - sx) + dx, 104 * (1024 - sy) + dy);
-    show(pyr_node[P_PRESS], s >= 655);
-    int32_t top = nb <= 6144 ? 44616 : nb <= 3 << 12 ? 34303 : 23989;      /* what is left of the apex (Q10) */
-    translate(pyr_node[P_PRESS], dx, 106496 - (((106496 - top) * sy) >> 10) - 23989 + dy);
-    show(pyr_node[P_PUFF], s >= 655 && gr > 18022);
-    set_matrix(pyr_node[P_PUFF], sx, 0, 0, sy, 160 * (1024 - sx), 104 * (1024 - sy));
+    translate(pyr_node[P_PYR], dx, dy);
 
     /* orange GRIT: cracks and notches show the amount (static); the DSP's bit flips shed debris (a fall starts on a
      * frame with flips) and shift XOR slices (more flips, more slices) */
@@ -2137,19 +2121,65 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
         int32_t a = (amp * (13107 + ((19661 * an) >> 15))) >> 15;
         translate(pyr_multi_node[PA_GS + i], n >= 0 ? a : -a, 0);
     }
-    /* idle parallax: the far pyramids and the sun drift against the big one (16 s orbit) */
+    /* white SQUASH: the sun is its indicator, white, shrinking and dimming with the gain reduction (it pumps with the
+     * audio); with SQUASH off it takes the BITS row's colour. Idle parallax: the far pyramids and the sun drift
+     * against the big one (16 s orbit). */
     int32_t w = sin_t(f * 8947849u);                                        /* sin(2 pi t / 16), Q15 */
     translate(pyr_node[P_FARG], -((3 * w) >> 5), 0);
-    translate(pyr_node[P_SUN], -((3 * w) >> 6), 0);
+    int sq = s >= 655;
+    int32_t ks = sq ? 1024 - ((461 * gr) >> 15) : 1024;                    /* 1 - 0.45 gr, Q10 */
+    set_matrix(pyr_node[P_SUN], ks, 0, 0, ks, 58 * (1024 - ks) - ((3 * w) >> 6), 38 * (1024 - ks));
+    for (unsigned i = 0; i < PYR_RC; i++)
+        if (pyr_rc_ids[i].role == RL_SUN)
+            recol_set(&pyr_rc[i], sq ? CP_WHITE : pyr_pal[row][RL_SUN], sq ? 256 - ((141 * gr) >> 15) : 256);
+#ifdef CRUSH_STAGED
+    /* Device diagnosis (build.py --staged-screens): on the first open after boot the layers come up one by one, every
+     * 2 s, labelled; a stage that stops the OP-1 (agg.cpp:339) names the culprit layer. */
+    static const char *const stage_name[5] = { "STAGE 0 SKY", "STAGE 1 PYRAMID", "STAGE 2 RATE", "STAGE 3 BITS",
+                                                "STAGE 4 GRIT" };
+    static uint32_t first RAM = 0;
+    if (!first)
+        first = f;
+    uint32_t stage = (f - first) / 60;
+    if (stage < 5) {
+        if (stage < 1)
+            show(pyr_node[P_PYR], 0);
+        if (stage < 2) {
+            show(pyr_node[P_SMOOTH], 1);
+            for (int i = 0; i < 4; i++)
+                show(pyr_multi_node[PA_VOX + i], 0);
+        }
+        if (stage < 3) {
+            show(pyr_node[P_CMU], 0);
+            for (int i = 0; i < 9; i++)
+                show(pyr_multi_node[PA_H + i], 0);                     /* h, hw, hf */
+            show(pyr_node[P_CAP1], 0);
+            show(pyr_node[P_CAP2], 0);
+            show(pyr_node[P_PILE], 0);
+        }
+        if (stage < 4) {
+            for (int i = 0; i < 6; i++)
+                show(pyr_multi_node[PA_K + i], 0);
+            for (int i = 0; i < 3; i++)
+                show(pyr_multi_node[PA_G + i], 0);
+            for (int i = 0; i < 8; i++)
+                show(pyr_multi_node[PA_D + i], 0);                     /* d1..4, ds1..4 */
+            show(pyr_node[P_CH1], 0);
+            show(pyr_node[P_CH2], 0);
+            show(pyr_node[P_CHR], 0);
+        }
+        svg_render(pyramid.doc);
+        text(r, stage_name[stage], FP(8), FP(7), FP(2), WHITE);
+        svg_cost(r);
+        return;
+    }
+#endif
     svg_render(pyramid.doc);
     if ((int32_t)(pyr_until - f) > 0) {                             /* the value readout, title position */
         char buf[28];
         crush_readout(buf, pyr_shown, st, k);
-        int len = 0;
-        while (buf[len])
-            len++;
-        /* size 1.5 (1.25 above 13 characters): ends left of SQUASH's press plate (x ~128 at this height) and stem */
-        text(r, buf, FP(8), FP(7), len > 13 ? FP(5) >> 2 : FP(3) >> 1,
+        /* title size 2 (12 high: y 7 .. 19, above the sun at 24 .. 52; 15 characters end at x 184, above the apex) */
+        text(r, buf, FP(8), FP(7), FP(2),
              pyr_shown == 0 ? BLUE : pyr_shown == 1 ? GREEN : pyr_shown == 2 ? WHITE : ORANGE);
     }
     svg_cost(r);

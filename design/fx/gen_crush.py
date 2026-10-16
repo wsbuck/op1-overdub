@@ -258,9 +258,19 @@ def asset():
              width="320", height="160", viewBox="0 0 320 160")
 
 
-def render(n, S=None, ind=0):
+def colour(v):
+    """A palette name, or (name, brightness 0..1)."""
+    if isinstance(v, tuple):
+        rgb = [int(C[v[0]][j:j + 2], 16) for j in (1, 3, 5)]
+        return "#" + "".join(f"{int(c * v[1]):02X}" for c in rgb)
+    return C[v]
+
+
+def render(n, S=None, ind=0, inherit=None):
+    """inherit: a recolour set on a group whose parts are its leaves (split paths: id + a, b, ..)."""
     S = S or {}
     a = dict(n.a)
+    rc = dict(inherit or {})
     if n.id:
         a = {"id": n.id, **a}
         st = S.get(n.id, {})
@@ -268,15 +278,17 @@ def render(n, S=None, ind=0):
             a["display"] = "none"          # preview only; the device clears the node's visible flag
         if "m" in st:
             a["transform"] = "matrix(" + " ".join(f"{v:.4f}" for v in st["m"]) + ")"
-        if "fill" in st:
-            a["fill"] = C[st["fill"]]
-        if "stroke" in st:
-            a["stroke"] = C[st["stroke"]]
+        rc.update({k: st[k] for k in ("fill", "stroke") if k in st})
+    if n.tag != "g":
+        for k, v in rc.items():
+            if a.get(k, "none") != "none":
+                a[k] = colour(v)
     attrs = " ".join(f'{k}="{v}"' for k, v in a.items())
     pad = "  " * ind
     if not n.ch:
         return f"{pad}<{n.tag} {attrs}/>\n"
-    return f"{pad}<{n.tag} {attrs}>\n" + "".join(render(c, S, ind + 1) for c in n.ch) + f"{pad}</{n.tag}>\n"
+    return f"{pad}<{n.tag} {attrs}>\n" + "".join(render(c, S, ind + 1, rc if n.tag == "g" else None) for c in n.ch) \
+        + f"{pad}</{n.tag}>\n"
 
 
 def walk(n):

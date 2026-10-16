@@ -189,6 +189,7 @@ def main():
     ap.add_argument("--hold", action="store_true", help="install the HOLD hooks (SHIFT+T2 on the synth screen)")
     ap.add_argument("--chord", action="store_true", help="install the CHORD note-on hook (needs --hold)")
     ap.add_argument("--svg-cost", action="store_true", help="show the SVG render cost (kilocycles) on SVG FX screens")
+    ap.add_argument("--staged-screens", action="store_true", help="crush screen: layer-by-layer bring-up (CRUSH_STAGED)")
     ap.add_argument("--debug-ui", action="store_true", help="show the profiler/diagnostic lines on our screens")
     ap.add_argument("--db-enable-filter", action="store_true",
                     help="add TE's hidden 'filter' FX (fx_types id 2, as op1repacker's 'filter' mod)")
@@ -383,7 +384,7 @@ def main():
          "-v", f"{os.path.abspath(a.build)}:/out", "op1-bfin", "sh", "-c",
          "set -e; bfin-elf-as -I /out -I /src -o /out/slot.o /src/slot.S; "
          "bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
-         f"-I /engine {'-DUI_DEBUG ' if a.debug_ui else ''}{'-DSVG_COST ' if a.svg_cost else ''}-c -o /out/ui.o /src/ui.c; "
+         f"-I /engine {'-DUI_DEBUG ' if a.debug_ui else ''}{'-DSVG_COST ' if a.svg_cost else ''}{'-DCRUSH_STAGED ' if a.staged_screens else ''}-c -o /out/ui.o /src/ui.c; "
          "bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
          "-c -o /out/hold.o /src/hold.c; "
          + ("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "

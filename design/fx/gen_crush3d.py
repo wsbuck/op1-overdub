@@ -126,7 +126,7 @@ def box(x0, x1, y0, y1, z0, z1):
 # runtime's visibility still works; a recoloured part is its own leaf: id + "a", "b", ..).
 import xml.etree.ElementTree as _ET
 import svg_cells as _cells
-BUDGET = 1400
+BUDGET = 900
 
 
 def _est(d, a):
@@ -361,7 +361,7 @@ def asset():
         farL.append(pd([q(-1, 0, -1), q(1, 0, -1), q(0, H, 0)]))
         farR.append(pd([q(1, 0, -1), q(1, 0, 1), q(0, H, 0)]))
     sky = N("g", "sky", [
-        N("circle", "sun", cx="58", cy="38", r="14", fill=uniq("darkblue")),
+        N("circle", "sun", cx=f(SUN[0]), cy=f(SUN[1]), r="14", fill=uniq("darkblue")),
         N("g", "farg", [path("farL", " ".join(farL), fill=uniq("darkblue")), path("farR", " ".join(farR), fill=uniq("offblue"))]),
         N("line", "horizon", x1="6", y1=f(HORIZON), x2="314", y2=f(HORIZON), stroke=uniq("grey"), stroke_width="1"),
         path("sand", "M14 104 H44 M22 122 H70 M84 136 H118 M250 128 H286 M268 112 H306 M200 138 H228", fill="none",
@@ -394,20 +394,8 @@ def asset():
       + [cap(1, 2), cap(2, 4), pile()]
       + [slice_group(i + 1, *s) for i, s in enumerate(SLICES)]
       + [e for i, d in enumerate(DEBRIS) for e in debris(i + 1, *d)])
-    pr = 0.42
-    top, left, right = box(-pr, pr, H + 0.04, H + 0.12, -pr, pr)
-    sx, sy = P(0, H + 0.12, 0)
-    press = N("g", "press", [
-        N("line", "stem", x1=f(sx), y1="-60", x2=f(sx), y2=f(sy), stroke=C["white"], stroke_width="2"),
-        path("plt", pd(top), fill=C["white"]),
-        path("pll", pd(left), fill=C["lpg"]),
-        path("plr", pd(right), fill=C["purplegrey"]),
-    ])
-    pf = lambda p, dx, dy: f"M{f(p[0] + dx * 0.4)} {f(p[1] + dy * 0.4)} L{f(p[0] + dx)} {f(p[1] + dy)}"
-    puff = path("puff", " ".join([pf(LC, -9, -5), pf(LC, -10, 1), pf(FC, -5, 5), pf(FC, 5, 5), pf(RC, 9, -5), pf(RC, 10, 1)]),
-                fill="none", stroke=C["white"], stroke_width="1", stroke_linecap="round")
-    marker = N("g", "cells2")            # the runtime draws this file only if it finds this id: cell-budgeted (v2)
-    return N("svg", None, [sky, pyr, press, puff, marker], version="1.1", xmlns="http://www.w3.org/2000/svg", x="0", y="0",
+    marker = N("g", "cells3")            # the runtime draws this file only if it finds this id: cell-budgeted (v3)
+    return N("svg", None, [sky, pyr, marker], version="1.1", xmlns="http://www.w3.org/2000/svg", x="0", y="0",
              width="320", height="160", viewBox="0 0 320 160")
 
 
@@ -440,6 +428,7 @@ def bits_dsp(b):
 
 
 RATE_DETENTS = (4, 10, 18, 25)    # voxel levels 1..4 start on these RATE detents (26 kHz, 11 kHz, ~3.6 kHz, 1.4 kHz)
+SUN = (58, 38)                    # the sun: SQUASH's indicator
 CRACK_AT = (0.1, 0.25, 0.5, 0.6, 0.75, 0.9)   # GRIT: jitter is audible from ~0.1, flips start at 0.5
 
 
@@ -472,7 +461,7 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True, level=1.0, flips=None):
     hide("cap2", nb > 1.5)
     hide("pile", nb > 3)
     # posterise inside the neutral family: lit face lpg / purplegrey, shade face offgrey / black, a grey sun; green is
-    # BITS's accent (rims, rubble, mu-law courses); pure white is only SQUASH's (press, stem, puff)
+    # BITS's accent (rims, rubble, mu-law courses); pure white is only SQUASH's (the sun while SQUASH is on)
     row = 0 if nb >= 9 else 1 if nb >= 5 else 2 if nb >= 2 else 3
     pal = [dict(L="purplegrey", R="grey", RS="grey", T="lpg", core="offgrey", course="darkblue", sun="darkblue",
                 farL="darkblue", farR="offblue", shadow="offblue", horizon="grey", sand="offgrey"),
@@ -498,22 +487,16 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True, level=1.0, flips=None):
         st(i)["fill"] = pal[i]
     for i in ("horizon", "sand"):
         st(i)["stroke"] = pal[i]
-    # SQUASH (capped: at least 60 % of the height)
-    q = s * (0.45 + 0.55 * gr)
-    sy, sx = 1 - 0.4 * q, 1 + 0.18 * q
-    m_ = (sx, 0, 0, sy, CX * (1 - sx), B0 * (1 - sy))
     # GRIT: the clock jitter shakes the pyramid, only while something plays
     live = level > 0.001
     dx = (0.5 + 1.5 * o) * jit(t, 1, 10 + 30 * o) if o > 0.05 and live else 0
     dy = 0.6 * o * jit(t, 2, 14 + 30 * o) if o > 0.3 and live else 0
-    st("pyr")["m"] = mul((1, 0, 0, 1, dx, dy), m_)
-    hide("press", s < 0.02)
-    rows_gone = 4 if nb <= 1.5 else 2 if nb <= 3 else 0          # the press rests on what is left (cap1 / cap2)
-    top_y = P(0, H * (1 - rows_gone / ROWS), 0)[1]
-    apex_y = B0 - (B0 - top_y) * sy
-    st("press")["m"] = (1, 0, 0, 1, dx, apex_y - APEX[1] + dy)
-    hide("puff", not (s > 0.02 and gr > 0.55))
-    st("puff")["m"] = m_
+    st("pyr")["m"] = (1, 0, 0, 1, dx, dy)
+    # SQUASH: the sun is its white indicator, shrinking and dimming with the gain reduction (it pumps with the audio)
+    ks = 1.0
+    if s >= 0.02:
+        ks = 1 - 0.45 * gr
+        st("sun")["fill"] = ("white", 1 - 0.55 * gr)            # white x brightness
     for i, th in enumerate(CRACK_AT):                 # static: how much GRIT
         hide(f"k{i + 1}", o < th)
     hide("ch1", o < 0.5)
@@ -548,7 +531,9 @@ def runtime_state(k, t=0.0, gr=0.0, parallax=True, level=1.0, flips=None):
     if parallax:
         w = math.sin(2 * math.pi * t / 16)
         st("farg")["m"] = (1, 0, 0, 1, -3 * w, 0)
-        st("sun")["m"] = (1, 0, 0, 1, -1.5 * w, 0)
+        st("sun")["m"] = (ks, 0, 0, ks, SUN[0] * (1 - ks) - 1.5 * w, SUN[1] * (1 - ks))
+    else:
+        st("sun")["m"] = (ks, 0, 0, ks, SUN[0] * (1 - ks), SUN[1] * (1 - ks))
     return St
 
 
@@ -583,19 +568,14 @@ VISIBILITY (hide = clear the flag; everything not listed is static and always sh
   cap2                   shown iff nb <= 1.5 (top 4 rows gone)                                           [green]
   k1..k6                 k{i} shown iff o >= .1 .25 .5 .6 .75 .9 (static: how much GRIT)                 [orange GRIT]
   ch1 / ch2, chr         shown iff o >= 0.5 / 0.75 (edge notches; chr = broken front-edge facets, with ch2)
-  press                  shown iff s >= 0.02                                                             [white SQUASH]
-  puff                   shown iff s >= 0.02 and gr > 0.55 (dust at the base corners)
   g1..g3, d1..d4, ds1..ds4   see GRIT below
 
 MATRICES
-  pyr    (whole pyramid + damage): translate(dx, dy) * scale(sx, sy) about (160, 104):
-           q = s (0.45 + 0.55 gr); sy = 1 - 0.4 q (never below 0.6 of the height); sx = 1 + 0.18 q
-           M = {sx, 0, 0, sy, 160 (1 - sx) + dx, 104 (1 - sy) + dy}
+  pyr    (whole pyramid + damage): translate(dx, dy) (the GRIT shake):
            dx = (0.5 + 1.5 o) jit(t, 1, 10 + 30 o) if o > 0.05 and level > 0.001 else 0;
            dy = 0.6 o jit(t, 2, 14 + 30 o) if o > 0.3 and level > 0.001 else 0
-  press  translate(dx, top' - 23.43 + dy): top' = 104 - (104 - top) sy, top = 23.43 (apex) / 33.5 with cap1 / 43.57 with
-         cap2 shown (the press rests on what is left)
-  puff   {sx, 0, 0, sy, 160 (1 - sx), 104 (1 - sy)} (pyr's scale, no jitter)
+  sun    SQUASH's indicator: {k, 0, 0, k, 58 (1 - k) - 1.5 w, 38 (1 - k)}, k = 1 - 0.45 gr while s >= 0.02 (else 1);
+         its fill is then white x (1 - 0.55 gr) (shrinks and dims as the compressor pumps), else the BITS row's colour
   gs1..gs3   translate(A, 0), A = (4 + 14 o) sign(n) (0.4 + 0.6 |n|), n = jit(t, 20 + i, 7 + 9 i)   (i = 0, 1, 2 for gs1..gs3)
   d1..d4, ds1..ds4   (i = 0..3 for d1..d4) T = 1.0 + 0.17 i; u = frac((t + 0.41 i) / T) * 1.25
          d{i}  translate(DX u, DY u^2);  ds{i} = {k, 0, 0, k, X - k GX, Y - k GY}, k = 0.35 + 0.65 u,
@@ -605,7 +585,7 @@ MATRICES
            1  5.6     40.47   214.09  100     219.69  108.25
            2  -30.67  22.44   96.89   108.66  66.22   106.93
            3  5.6     64.64   187.05  102     192.64  110.25
-  farg, sun  (optional idle parallax) translate(-3 w, 0) and translate(-1.5 w, 0), w = sin(2 pi t / 16); else identity
+  farg   (optional idle parallax) translate(-3 w, 0), w = sin(2 pi t / 16) (the sun takes -1.5 w, above); else identity
 
 GRIT VISIBILITY (driven by the DSP's flips; the design preview stands in a steady stream while o > 0.5)
   g{i}   ns = 0 (no flips this frame) 1 (< 3) 2 (< 7) 3 slices, at most 2 when nb <= 3 and o > 0.6; shown: (start + j) mod 3
@@ -617,7 +597,7 @@ GRIT VISIBILITY (driven by the DSP's flips; the design preview stands in a stead
 
 RECOLOURS (BITS posterise; colours are colors.svg / palette 0x01BAAF50 names). Pick the row by nb:
            A: nb >= 9 (pristine)  B: 5 <= nb < 9   C: 2 <= nb < 5   D: nb < 2 (1 bit)
-  Neutral family only; green is BITS's accent (rim, rubble, mu-law courses); white belongs to SQUASH (press, puff).
+  Neutral family only; green is BITS's accent (rim, rubble, mu-law courses); white belongs to SQUASH (the sun).
   The shade face is black only at 1 bit (D), where the green rim outlines it; above, it never meets the black ground.
   L  faceL fill+stroke, vl1..vl4 fill, gr1..gr3 fill   purplegrey   lpg        lpg        lpg
   R  faceR fill, vr1..vr4 fill, gl1..gl3 fill          grey         offgrey    offgrey    black
@@ -625,7 +605,7 @@ RECOLOURS (BITS posterise; colours are colors.svg / palette 0x01BAAF50 names). P
   T  vt1..vt4 fill, hf1..hf3 fill                      lpg          lpg        lpg        lpg
      hw1..hw3 fill                                     offgrey      black      offgrey    offgrey
      c1..c4 stroke                                     darkblue     black      black      black
-     sun fill                                          darkblue     grey       grey       grey
+     sun fill (SQUASH off; on: white x (1 - 0.55 gr)) darkblue     grey       grey       grey
      farL fill                                         darkblue     darkblue   offgrey    offgrey
      farR fill                                         offblue      darkblue   offgrey    offgrey
      shadow fill                                       offblue      black      black      black
@@ -639,7 +619,8 @@ IDS (style each recoloured node owns)
         vox1..4 { vt (fill), vl (fill), vr (fill), ve (blue edges) }; h1..3, hw1..3 (fill), hf1..3 (fill); k1..k6;
         ch1 ch2 chr; cap1/cap2 { capf, capt, capb }; pile { pt, pm, pk }; g1..g3 { gx, gs { gl (fill), gr (fill), go } };
         ds1..ds4; d1..d4 { dt, dl } }
-  press { stem, plt, pll, plr }; puff
+  cells3 (an empty group: the runtime draws the file only if it finds it; long paths are split into id + a, b, ..
+          parts so no fill or stroke exceeds the AGG cell budget, notes/screen.md)
 """
 
 
@@ -657,8 +638,31 @@ def composite(out, name, k, t=0.3, gr=0.0, w=640, level=1.0, flips=None):
     return count(asset(), St)
 
 
+# recoloured styles: (base id, stroke?, role in ui.c's palette rows); split ids expand to their leaves
+RECOLOUR = ([("faceL", 0, "L"), ("faceL", 1, "L"), ("faceR", 0, "R"), ("faceR", 1, "RS")]
+            + [(f"vl{i}", 0, "L") for i in range(1, 5)] + [(f"vr{i}", 0, "R") for i in range(1, 5)]
+            + [(f"vt{i}", 0, "T") for i in range(1, 5)] + [(f"hf{i}", 0, "T") for i in range(1, 4)]
+            + [(f"hw{i}", 0, "CORE") for i in range(1, 4)] + [(f"gl{i}", 0, "R") for i in range(1, 4)]
+            + [(f"gr{i}", 0, "L") for i in range(1, 4)] + [(f"c{i}", 1, "COURSE") for i in range(1, 5)]
+            + [("sun", 0, "SUN"), ("farL", 0, "FARL"), ("farR", 0, "FARR"), ("shadow", 0, "SHADOW"),
+               ("horizon", 1, "HORIZON"), ("sand", 1, "SAND")])
+
+
+def ids_header(a):
+    """src/slot/crush3d_ids.h: ui.c's recolour table, one entry per leaf (TE's style getters assert on a group)."""
+    byid = {n.id: n for n in g2.walk(a) if n.id}
+    rows = []
+    for base, stroke, role in RECOLOUR:
+        n = byid[base]
+        for leaf in ([n] if n.tag != "g" else [c for c in n.ch if c.id]):
+            rows.append(f'    {{ "{leaf.id}", {stroke}, RL_{role} }},')
+    return ("/* Generated by design/fx/gen_crush3d.py from crush3d.svg: the recoloured styles (id, stroke?, role), one\n"
+            " * per leaf. Do not edit. */\n" + "\n".join(rows) + "\n")
+
+
 if __name__ == "__main__":
     a = asset()
+    open(os.path.join(HERE, "..", "..", "src", "slot", "crush3d_ids.h"), "w").write(ids_header(a))
     svg_path = os.path.join(HERE, "crush3d.svg")
     open(svg_path, "w").write('<?xml version="1.0" encoding="utf-8"?>\n<!--' + HEADER.replace("--", "-") + '-->\n' + render(a))
     print(svg_path, os.path.getsize(svg_path), "bytes,", count(a), "elements")

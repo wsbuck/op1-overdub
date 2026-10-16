@@ -154,6 +154,28 @@ def cells(path, state=None):
     return out
 
 
+def totals(path, state=None):
+    """(whole drawn tree, heaviest group id, its total): the wider scopes, for comparison (notes/screen.md: the device
+    is per element; pedals renders with a 15.7 k group and a 24 k tree)."""
+    state, gt = state or {}, {}
+
+    def walk(el, m):
+        tag = el.tag.split("}")[-1]
+        i = el.get("id")
+        st = state.get(i, {}) if i else {}
+        if st.get("hide"):
+            return 0
+        m = mat(m, st["m"] if "m" in st else parse_transform(el.get("transform")))
+        t = sum(element_cells(el, tag, m)) if tag not in ("svg", "g") else 0
+        t += sum(walk(c, m) for c in el)
+        if tag == "g" and i:
+            gt[i] = t
+        return t
+    tot = walk(ET.parse(path).getroot(), (1, 0, 0, 1, 0, 0))
+    g = max(gt.items(), key=lambda kv: kv[1], default=("", 0))
+    return int(tot), g[0], int(g[1])
+
+
 def worst(path, state=None):
     c = cells(path, state)
     return max(((max(f, s), i, "fill" if f >= s else "stroke") for i, f, s in c), default=(0, "", ""))
@@ -167,7 +189,9 @@ if __name__ == "__main__":
         if w[0] > SAFE * LIMIT:
             bad.append(f"{p}: {w[1]} {w[2]} ~{w[0]} cells > {int(SAFE * LIMIT)} ({int(100 * SAFE)} % of AGG's {LIMIT})")
         if chk:
-            print(f"{p}: heaviest {w[1]} ({w[2]}) ~{w[0]} cells, {100 * w[0] / LIMIT:.0f} % of {LIMIT}")
+            t = totals(p)
+            print(f"{p}: heaviest {w[1]} ({w[2]}) ~{w[0]} cells, {100 * w[0] / LIMIT:.0f} % of {LIMIT}; heaviest group "
+                  f"{t[1]} ~{t[2]}, whole tree ~{t[0]} (all drawn)")
             continue
         c = sorted(cells(p), key=lambda e: -max(e[1], e[2]))
         print(f"{p}: heaviest " + ", ".join(f"{i} {max(f, s)} ({'fill' if f >= s else 'stroke'})" for i, f, s in c[:6])

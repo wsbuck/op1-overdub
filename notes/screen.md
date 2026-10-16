@@ -80,6 +80,16 @@ Found 2026-10-15 after CRUSH4 stopped on opening the crush FX screen (LOG 72). S
   screens that render peak at 22 .. 66 % of the limit (pingpong 827, choir 1142, pedals 1465, fm4's gears 2530);
   crush3d.svg (CRUSH4) had 4861 for its default state (RATE level 2's voxel-edge stroke, one path of every block edge
   with round caps) and asserted on the first frame.
+- **Per node** (Verified 2026-10-15, after CRUSH5 also asserted): `0x01A066F4` / `0x01A0674C` return the node's own
+  fill / stroke rasterizer (`[node + 0x1C]` / `[node + 0x20]`), allocating and constructing one (`0x019140B4`, 0x40 B)
+  on first use and keeping it; each has its own block pool. Group visibility is honoured (group render returns at
+  `0x019EB82C` when +0x50 is 0; pedals and choir hide groups). So the scope is one element's fill or stroke, not a
+  group or the frame.
+- **Open (unresolved):** CRUSH5 split every crush3d.svg path under ~1430 estimated cells and still asserted on opening
+  the screen, while pedals (heaviest element ~1465, heaviest group ~15.7 k, whole tree ~24 k) and fm4 (~2530 per
+  element) render. No scope (element, group, frame) explains both with the cell model, so the model misses something
+  crush3d.svg has (Hypothesis). CRUSH6 brings the crush screen up layer by layer on its first open (build.py
+  `--staged-screens`, labelled STAGE 0 SKY .. 4 GRIT, 2 s each) to find the layer that asserts.
 - Rules: split long compound paths and long strokes (many short stroked subpaths cost two sides plus two caps
   each); `build.py` runs `svg_cells.py --check` on every published SVG and fails above 70 % of the limit; crush's own
   check holds every state to 50 %. A fill's interior costs nothing here (only its edges): large fills cost render
