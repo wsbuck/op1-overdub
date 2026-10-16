@@ -1049,6 +1049,11 @@ static void diagnostics(void *r, uint32_t now, const int16_t *k, int live)
 
 /* ---- our FX (fx.json): drawn instead of the filter FX screen they borrow (slot.S _fx_ui_update) ---- */
 
+static int32_t clamp_i(int32_t x, int32_t lo, int32_t hi)
+{
+    return x < lo ? lo : x > hi ? hi : x;
+}
+
 static int32_t knob_pos(int16_t k)
 {
     return k < 0 ? 0 : k;
@@ -1857,9 +1862,9 @@ static void draw_crush(void *r, const int16_t *k, int stereo)
     char buf[24], *p = buf;
     title(r, "CRUSH", WHITE);
     if (st) {
-        p = put_dec(p, (uint32_t)st->rate_hz);
+        p = put_dec(p, (uint32_t)clamp_i(st->rate_hz, 0, 99999));
         p = put_str(p, "HZ ");
-        p = put_dec(p, (uint32_t)st->bits_q12 >> 12);
+        p = put_dec(p, (uint32_t)clamp_i(st->bits_q12, 0, 16 << 12) >> 12);
         p = put_str(p, st->mu > 16384 ? "B MU" : "B");
         text(r, buf, FP(8), FP(30), FP(1), GREY);
     }
@@ -1872,7 +1877,7 @@ static void draw_crush(void *r, const int16_t *k, int stereo)
             line_fp(r, FP(16), y, FP(16) + w, y, FP(3), i == 0 ? BLUE : i == 1 ? GREEN : i == 2 ? WHITE : ORANGE);
     }
     vline_fast(r, FP(290), FP(40), FP(130), DARKBLUE);
-    int32_t g = st ? st->gr : 0;                             /* 0 .. 32767 = 0 .. 30 dB */
+    int32_t g = st ? clamp_i(st->gr, 0, 32767) : 0;          /* 0 .. 32767 = 0 .. 30 dB */
     fp32 top = FP(40) + (fp32)((g * 90) >> 5);               /* reduction grows down from the top */
     if (top > FP(41))
         line_fp(r, FP(290), FP(40), FP(290), top, FP(4), WHITE);
@@ -1974,7 +1979,7 @@ static char *put_frac(char *p, uint32_t v, uint32_t div)     /* v / div with log
 static void crush_readout(char *p, int knob, const struct crush *st, const int32_t *k)
 {
     if (knob == 0) {
-        uint32_t hz = st ? (uint32_t)st->rate_hz : 44100;
+        uint32_t hz = st ? (uint32_t)clamp_i(st->rate_hz, 0, 99999) : 44100;
         p = put_str(p, "RATE ");
         if (hz >= 10000)
             put_str(put_frac(p, udiv(hz + 50, 100), 10), "KHZ");          /* 11.0KHZ */
@@ -1983,7 +1988,7 @@ static void crush_readout(char *p, int knob, const struct crush *st, const int32
         else
             put_str(put_dec(p, hz), "HZ");
     } else if (knob == 1) {
-        int32_t nb = st ? st->bits_q12 : 16 << 12, w = (nb + 2048) >> 12, f = nb - (w << 12);
+        int32_t nb = st ? clamp_i(st->bits_q12, 4096, 16 << 12) : 16 << 12, w = (nb + 2048) >> 12, f = nb - (w << 12);
         p = put_str(p, "BITS ");
         if (f >= -204 && f <= 204)                                         /* on a whole bit (the plateaus) */
             p = put_dec(p, (uint32_t)w);
@@ -1992,7 +1997,7 @@ static void crush_readout(char *p, int knob, const struct crush *st, const int32
         if (st && st->mu >= 32768)
             put_str(p, " MU-LAW");                                      /* the full mu-law plateau (detent 16) */
         else if (st && st->mu > 327)                                    /* morphing: how far, 1 .. 99 % */
-            put_str(put_dec(put_str(p, " MU "), (uint32_t)((st->mu * 100 + 16384) >> 15)), "%");
+            put_str(put_dec(put_str(p, " MU "), (uint32_t)((clamp_i(st->mu, 0, 32768) * 100 + 16384) >> 15)), "%");
     } else if (knob == 2) {
         int32_t sq = k[2], c = (31130 * ((sq * (65536 - sq)) >> 15)) >> 15;   /* crush.c's slope 1 - 1 / ratio */
         p = put_str(p, "SQUASH ");
@@ -2013,14 +2018,15 @@ static void crush_readout(char *p, int knob, const struct crush *st, const int32
 static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
 {
     const struct crush *st = crush_state ? &crush_state[stereo] : 0;
+    /* every input clamped to what crush.c publishes (crush_fuzz_check.py: no state makes degenerate geometry) */
     int32_t k[4];
     for (int i = 0; i < 4; i++)
-        k[i] = st ? st->k[i] : knob_pos(kraw[i]);
+        k[i] = st ? clamp_i(st->k[i], 0, 32767) : knob_pos(kraw[i]);
     int32_t rr = k[0], s = k[2], o = k[3];
     /* bit depth (Q12) and mu-law as the DSP has them (without the DSP state: pristine) */
-    int32_t nb = st ? st->bits_q12 : 16 << 12;
+    int32_t nb = st ? clamp_i(st->bits_q12, 4096, 16 << 12) : 16 << 12;
     int mu = st && st->mu > 8192;
-    int32_t gr = st ? st->gr : 0;
+    int32_t gr = st ? clamp_i(st->gr, 0, 32767) : 0;
     int live = !st || st->level > 33;                            /* something is playing (> -60 dBFS) */
     uint32_t df = st ? st->flips - pyr_flips[stereo] : 0;        /* flips since the last frame (the DSP counts flip
                                                                   * events on its clock; they only act on sound) */

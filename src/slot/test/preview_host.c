@@ -394,6 +394,48 @@ int main(int argc, char **argv)
         }
         drum_ui_draw(0, 19);
     }
+    else if (e % 100 == 11 && getenv("CRUSH_FUZZ")) {
+        /* crush screen fuzz (crush_fuzz_check.py): frame 0 with the state as the image loads it (before any DSP
+         * block), then per frame extreme or random crush_state and raw knobs, mono and master alternating; after each
+         * frame "F i" and every node's visibility and matrix (te_line segments print as they are drawn). */
+        int n = atoi(getenv("CRUSH_FUZZ"));
+        uint32_t seed = 12345;
+        host_drawing = 1;
+        for (int i = 0; i < n; i++) {
+            printf("F %d\n", i);
+            int pat = i % 7;
+            for (int st = 0; st < 2 && i; st++) {
+                struct crush *c = &crush_state[st];
+                for (int j = 0; j < 4; j++) {
+                    seed = seed * 1103515245u + 12345u;
+                    c->k[j] = pat == 1 ? 0 : pat == 2 ? -1 : pat == 3 ? 32767 : pat == 4 ? -32768 : (int16_t)(seed >> 16);
+                }
+                int32_t v[5];
+                for (int j = 0; j < 5; j++) {
+                    seed = seed * 1103515245u + 12345u;
+                    v[j] = pat == 1 ? 0 : pat == 2 ? -1 : pat == 3 ? 0x7FFFFFFF : pat == 4 ? (int32_t)0x80000000 :
+                           pat == 5 ? (int32_t)seed : (int32_t)(seed >> 17);
+                }
+                c->gr = v[0], c->rate_hz = v[1], c->bits_q12 = v[2], c->mu = v[3], c->level = v[4];
+                if (getenv("CRUSH_FUZZ_REACHABLE")) {      /* only what crush.c can publish */
+                    for (int j = 0; j < 4; j++)
+                        c->k[j] &= 0x7FFF;
+                    c->gr = (uint32_t)v[0] % 32768, c->rate_hz = 399 + (uint32_t)v[1] % 43702;
+                    c->bits_q12 = 4097 + (uint32_t)v[2] % 61440, c->mu = (uint32_t)v[3] % 32769;
+                    c->level = (uint32_t)v[4] % 32768;
+                }
+                seed = seed * 1103515245u + 12345u;
+                c->flips += pat == 6 ? seed >> 8 : seed >> 28;
+            }
+            for (int j = 0; j < 4; j++) {
+                seed = seed * 1103515245u + 12345u;
+                host_knobs[j] = i % 11 == 3 ? (int16_t)(seed >> 16) : i % 11 == 5 ? -32768 : (int16_t)((seed >> 17) & 0x7FFF);
+            }
+            fx_ui_draw(11, i & 1 ? 3 : 0, 0);
+            dump_nodes();
+        }
+        return 0;
+    }
     else if (e >= 100) {
         if (e % 100 == 11)
             crush_settle();
