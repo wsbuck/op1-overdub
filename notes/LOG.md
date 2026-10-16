@@ -1034,3 +1034,47 @@
 - Report: the cost numbers (pristine, busy, everything max), smoothness, whether the pump reads with the music, any
   colour or element that looks wrong (photo), any assert text.
 - Result: _pending user flash_.
+
+## 2026-10-15 — Test image 71: CRUSH3.OP1 (crush after the UX review)
+- The seven approved review fixes (commit 9e984b4; notes/fx-crush.md):
+  1. BITS on detents (1 detent = 1024): 16 -> 12 at 0..4, 12 -> 8 at 4..12, 8-bit mu-law morph in at 12..16 (full at
+     16), out to 6 bits at 20, 6 -> 1 at 20..32 (4 on 25); +-200 raw plateaus. Quiet tails keep the linear step through
+     the mu-law stretch, the 2..1-bit dead zone stays at 1/8 FS: the quietest step never gets finer clockwise (checked
+     per detent; loud SNR rises once, +1.7 dB, at full mu-law).
+  2. Value readout ~1.5 s after a raw change >= 512, size 1.5 at (8, 7) in the knob's colour (`RATE 11.0KHZ`,
+     `BITS 8 MU-LAW`, `SQUASH 4.0:1`, `GRIT FLIP`; MU-LAW: the font has no mu).
+  3. GRIT: flips counted down from the code's top bit (audible at 16 bits: 3.2 % of samples glitch > 6000 LSB at max),
+     jitter both ways at RATE 0 (holds up to twice as fast). Screen: slices and debris from the DSP's flip events,
+     shake only with a signal, cracks at GRIT .1 .25 .5 .6 .75 .9.
+  4. Neutral posterise colours (white only for SQUASH's press and puff; green only as BITS's accent).
+  5. RATE 5 detents per octave (22.05 k at 5 … 1.38 k at 25, 400 Hz at the end), SP-1200 plateau 26.04 kHz at 4; voxel
+     levels at detents 4 / 10 / 18 / 25. Level tables refit (BITS x RATE grid -2.7 .. +1.8 dB).
+  6. Default `[10240, 12288, 10240, 0]`: 11.025 kHz, 8-bit linear, mild SQUASH: a stepped but intact pyramid.
+  7. Voxel tiers 8 / 6 / 4 / 3, the first without fine edges; at most 2 slices at <= 3 bits with GRIT > 0.6; mu-law
+     courses from mu 0.25.
+- Checks: crush_check all pass (new: RATE/BITS detent landings and +-180 raw off, monotonic damage, flips at 16 bits);
+  crush_screen_check all pass (9 GRIT-free states match the reference within anti-aliasing; readout 512 yes / 400 no /
+  gone; shake still on silence; flips bring slices and debris, none on silence); fx_abi 12/12. Cycles per stereo call:
+  typical 9.5 .. 17.9 k, worst 31.0 k mean / 36.3 k peak (RATE 0 + two-way jitter + mu-law + SQUASH; was 27.8 k; the
+  jitter fix costs it; distortion's worst 44.5 k).
+- `firmware/images/CRUSH3.OP1` = CRUSH2's command (`--svg-cost`, all engines and trims, all FX) with `--name CRUSH3`,
+  from commit 9e984b4 in a clean `git archive`; te-boot identical to stock; slot block 137 KB; crush3d.svg 28 KB.
+  sha256 e9aaeb1c87eca446c882a8d104f8f51ea5c4b0dd1de0a92187cb1b951676d255.
+- Checklist (crush as synth FX on a held pad or a loop; headphones; then as master FX):
+  1. First view (fx.json default): a stepped, intact pyramid with the press resting on it, not wrecked. Sound: 11 kHz,
+     8 bits, light squash.
+  2. Readout: turn each knob one detent: its value appears top left in its colour for ~1.5 s and fades; it never
+     covers the sun or the press. RATE: detents read 22.0 / 11.0 / 5.51 / 2.76 / 1.38 KHZ at 5 / 10 / 15 / 20 / 25
+     and 26.0KHZ at 4. BITS: 12 at 4, 8 at 12, 8 MU-LAW at 16, 6 at 20, 4 at 25 (no decimals on those detents).
+  3. BITS from 0 clockwise on a decaying note: every detent sounds rougher, the tail never gets cleaner (also through
+     the MU-LAW stretch).
+  4. GRIT at RATE 0, 16 bits: below half a sizzle (jitter) that is audible; above half clear glitches. Screen: slices
+     and falling blocks come with the glitches and stop when the sound stops; the pyramid is still when nothing plays.
+  5. Colours: no pure white except the press, stem and dust; green only on the 1-bit rim, rubble and mu-law lines.
+  6. SQUASH on drums: pumps with the hits.
+  7. `--svg-cost` readings (kilocycles, bottom right): crush clean (all knobs 0), crush busy (default plus GRIT 0.8
+     while playing), crush everything at max while playing; and pedals on the distortion screen for comparison. Note
+     any UI lag, knob lag or audio crackle.
+- Report: the four cost numbers, detent readouts that are off, any step that sounds cleaner clockwise, colours or
+  elements that look wrong (photo), any assert text.
+- Result: _pending user flash_.
