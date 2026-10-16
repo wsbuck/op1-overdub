@@ -1891,17 +1891,19 @@ static const char *const pyr_multi[PA_N] = {
     "vox1", "vox2", "vox3", "vox4", "c1", "c2", "c3", "c4", "h1", "h2", "h3", "hw1", "hw2", "hw3", "hf1", "hf2", "hf3",
     "k1", "k2", "k3", "k4", "k5", "k6", "g1", "g2", "g3", "gs1", "gs2", "gs3", "d1", "d2", "d3", "d4",
     "ds1", "ds2", "ds3", "ds4" };
-/* Recoloured styles: (id, stroke?, role). Roles index the palette rows below. */
+/* Recoloured styles: (id, stroke?, role). Roles index the palette rows below. Every id is a leaf with that style
+ * (TE's style getters assert on a group): the SVG splits long paths into parts a, b, .. (AGG's cell limit), and
+ * crush_screen_check checks this table against the file. */
 enum { RL_L, RL_R, RL_RS, RL_T, RL_CORE, RL_COURSE, RL_SUN, RL_FARL, RL_FARR, RL_SHADOW, RL_HORIZON, RL_SAND, RL_N };
 static const struct { const char *id; uint8_t stroke, role; } pyr_rc_ids[] = {
     { "faceL", 0, RL_L }, { "faceL", 1, RL_L }, { "faceR", 0, RL_R }, { "faceR", 1, RL_RS },
-    { "vl1", 0, RL_L }, { "vl2", 0, RL_L }, { "vl3", 0, RL_L }, { "vl4", 0, RL_L },
+    { "vl1a", 0, RL_L }, { "vl1b", 0, RL_L }, { "vl2", 0, RL_L }, { "vl3", 0, RL_L }, { "vl4", 0, RL_L },
     { "vr1", 0, RL_R }, { "vr2", 0, RL_R }, { "vr3", 0, RL_R }, { "vr4", 0, RL_R },
-    { "vt1", 0, RL_T }, { "vt2", 0, RL_T }, { "vt3", 0, RL_T }, { "vt4", 0, RL_T },
+    { "vt1a", 0, RL_T }, { "vt1b", 0, RL_T }, { "vt2a", 0, RL_T }, { "vt2b", 0, RL_T }, { "vt3", 0, RL_T }, { "vt4", 0, RL_T },
     { "hf1", 0, RL_T }, { "hf2", 0, RL_T }, { "hf3", 0, RL_T }, { "hw1", 0, RL_CORE }, { "hw2", 0, RL_CORE },
     { "hw3", 0, RL_CORE }, { "gl1", 0, RL_R }, { "gl2", 0, RL_R }, { "gl3", 0, RL_R },   /* XOR slices: shades swap */
     { "gr1", 0, RL_L }, { "gr2", 0, RL_L }, { "gr3", 0, RL_L },
-    { "c1", 1, RL_COURSE }, { "c2", 1, RL_COURSE }, { "c3", 1, RL_COURSE }, { "c4", 1, RL_COURSE },
+    { "c1", 1, RL_COURSE }, { "c2", 1, RL_COURSE }, { "c3", 1, RL_COURSE }, { "c4a", 1, RL_COURSE }, { "c4b", 1, RL_COURSE },
     { "sun", 0, RL_SUN }, { "farL", 0, RL_FARL }, { "farR", 0, RL_FARR }, { "shadow", 0, RL_SHADOW },
     { "horizon", 1, RL_HORIZON }, { "sand", 1, RL_SAND } };
 #define PYR_RC (sizeof pyr_rc_ids / sizeof pyr_rc_ids[0])
@@ -1952,6 +1954,10 @@ static int pyramid_ready(void)
         return pyramid.state > 0;
     if (!svg_open(&pyramid, "/yaffs2/content/display/crush3d.svg", "crush3d.svg"))
         return 0;
+    if (!te_node_find(pyramid.doc, "cells2", 0)) {                 /* not the cell-budgeted file (notes/screen.md): an */
+        pyramid.state = -1;                                         /* older crush3d.svg could overflow AGG: lines */
+        return 0;
+    }
     for (int i = 0; i < P_SINGLE; i++)
         pyr_node[i] = te_node_find(pyramid.doc, pyr_single[i], 0);
     for (int i = 0; i < PA_N; i++)

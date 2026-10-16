@@ -116,7 +116,13 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   |diff| 0.3 .. 0.7 of 255); GRIT states differ by randomness. Then the readout trigger (512 yes, 400 no, gone after
   55 frames), the shake gate (still on silence), flips (slices and debris with flips, none on silence), the shade face
   visible at every BITS detent down to 2 bits (with and without voxels) and the readout lengths.
-- Cost (Hypothesis until read on the device with `--svg-cost`; CRUSH2 / CRUSH3 show it): 10 visible shape elements
+- **AGG cell limit** (notes/screen.md): CRUSH4 asserted (agg.cpp:339) on the first frame: RATE level 2's voxel-edge
+  stroke was ~4861 cells, over the ~3840 one fill or stroke may use. gen_crush3d.py now splits every compound path over
+  1400 estimated cells into parts under its id (`chunked()`: ve1..4 into 2..4 parts, vt1, vl1, vt2, c4 and cmu into
+  2..3; recoloured parts are their own leaves, ui.c's table names them); the worst over 144 states is now ~1431 (37 %).
+  The file carries an empty `<g id="cells2">`: ui.c draws the pyramid only if it finds it (an older crush3d.svg left on
+  the disk falls back to the line screen).
+- Cost (Hypothesis until read on the device with `--svg-cost`; CRUSH5 shows it): 10 visible shape elements
   (voxel levels, mu-law) to ~59 (everything at max) of 86; pedals has 66 shapes and read 17.6 M cycles per frame on the device, choir 2 .. 11 M.
   The large fills are the two faces, the shadow and the sun (smaller than pedals' bodies). The per-frame C work is a
   few thousand cycles (no loops over pixels; matrices and ~90 flag writes).

@@ -105,6 +105,12 @@ def main():
     cmd += ["--svg-cost"] * a.svg_cost + ["--debug-ui"] * a.debug_ui
     run(*cmd)
 
+    # every SVG screen within AGG's per-path cell budget (notes/screen.md: over it, the OP-1 asserts on the screen)
+    svgs = [os.path.join(ROOT, "design", "fx", FX_SVGS[f["source"]]) for f in fxs if f["source"] in FX_SVGS]
+    svgs += [os.path.join(ROOT, "design", "synth", ENGINE_SVGS[e["source"]]) for e in engines if e["source"] in ENGINE_SVGS]
+    if svgs:
+        run(sys.executable, os.path.join(ROOT, "design", "fx", "svg_cells.py"), "--check", *svgs)
+
     image = os.path.join(ROOT, "firmware", "images", f"{a.name}.OP1")
     os.makedirs(os.path.dirname(image), exist_ok=True)
     cmd = [sys.executable, os.path.join(ROOT, "tools", "op1pack.py"), "build", a.stock, image,

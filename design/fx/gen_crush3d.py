@@ -119,6 +119,39 @@ def box(x0, x1, y0, y1, z0, z1):
     return top, left, right
 
 
+
+# ------------------------------------------------------------------ AGG cell budget (notes/screen.md "AGG cell limit")
+# TE's rasterizer asserts (agg.cpp:339) once one fill or one stroke needs more than 15 x 256 cells; long compound
+# paths are split into parts of at most BUDGET estimated cells (svg_cells.py), grouped under the original id (so the
+# runtime's visibility still works; a recoloured part is its own leaf: id + "a", "b", ..).
+import xml.etree.ElementTree as _ET
+import svg_cells as _cells
+BUDGET = 1400
+
+
+def _est(d, a):
+    el = _ET.Element("path", {k.replace("_", "-"): str(v) for k, v in dict(a, d=d).items()})
+    return max(_cells.element_cells(el, "path", (1, 0, 0, 1, 0, 0)))
+
+
+def chunked(id, pieces, **a):
+    """One path (id) of the pieces, or a group id of paths id+a, id+b, .. each within BUDGET. Colour names in fill /
+    stroke get a unique value per part (C[name] via uniq)."""
+    probe = {k: ("#000000" if k in ("fill", "stroke") and v in C else v) for k, v in a.items()}
+    parts, cur = [], []
+    for p in pieces:
+        if cur and _est(" ".join(cur + [p]), probe) > BUDGET:
+            parts.append(cur)
+            cur = []
+        cur.append(p)
+    parts.append(cur)
+
+    def attrs():
+        return {k: (uniq(v) if k in ("fill", "stroke") and v in C else v) for k, v in a.items()}
+    if len(parts) == 1:
+        return path(id, " ".join(parts[0]), **attrs())
+    return N("g", id, [path(f"{id}{chr(97 + j)}", " ".join(pp), **attrs()) for j, pp in enumerate(parts)])
+
 # ------------------------------------------------------------------ layers
 RATE_N = [8, 6, 4, 3]            # voxel tiers per RATE level (block = 1/N of the half base); level 1 without the
                                  # fine vertical edges (they moire on the OLED)
@@ -142,19 +175,19 @@ def voxel(i, n):
             c = -r + j * 2 * r / nb
             lines.append(vert(c, -r) + " " + vert(r, c))
     return N("g", f"vox{i}", [
-        path(f"vt{i}", " ".join(tops), fill=uniq("lpg")),
-        path(f"vl{i}", " ".join(lefts), fill=uniq("purplegrey")),
-        path(f"vr{i}", " ".join(rights), fill=uniq("grey")),
-        path(f"ve{i}", " ".join(lines), fill="none", stroke=C["blue"], stroke_width="0.6", stroke_linecap="round")])
+        chunked(f"vt{i}", tops, fill="lpg"),
+        chunked(f"vl{i}", lefts, fill="purplegrey"),
+        chunked(f"vr{i}", rights, fill="grey"),
+        chunked(f"ve{i}", lines, fill="none", stroke=C["blue"], stroke_width="0.6", stroke_linecap="round")])
 
 
 def course_d(rows):
-    return " ".join(pd([F("L", -1, i / ROWS), F("L", 1, i / ROWS), F("R", 1, i / ROWS)], False) for i in rows)
+    return [pd([F("L", -1, i / ROWS), F("L", 1, i / ROWS), F("R", 1, i / ROWS)], False) for i in rows]
 
 
 def mu_d():
     vs = [((1 + MU) ** (k / 8) - 1) / MU for k in range(1, 8)]
-    return " ".join(pd([F("L", -1, v), F("L", 1, v), F("R", 1, v)], False) for v in vs)
+    return [pd([F("L", -1, v), F("L", 1, v), F("R", 1, v)], False) for v in vs]
 
 
 DEPTH = 0.13
@@ -344,11 +377,11 @@ def asset():
         N("g", "smooth", [
             path("faceL", pd(faceL), fill=uniq("purplegrey"), stroke=uniq("purplegrey"), stroke_width="0.6", stroke_linejoin="round"),
             path("faceR", pd(faceR), fill=uniq("grey"), stroke=uniq("grey"), stroke_width="0.6", stroke_linejoin="round"),
-            path("c1", course_d([8]), fill="none", stroke=uniq("darkblue"), stroke_width="0.7", stroke_linejoin="round"),
-            path("c2", course_d([4, 12]), fill="none", stroke=uniq("darkblue"), stroke_width="0.7", stroke_linejoin="round"),
-            path("c3", course_d([2, 6, 10, 14]), fill="none", stroke=uniq("darkblue"), stroke_width="0.7", stroke_linejoin="round"),
-            path("c4", course_d([1, 3, 5, 7, 9, 11, 13, 15]), fill="none", stroke=uniq("darkblue"), stroke_width="0.7", stroke_linejoin="round"),
-            path("cmu", mu_d(), fill="none", stroke=C["green"], stroke_width="0.7", stroke_linejoin="round"),
+            chunked("c1", course_d([8]), fill="none", stroke="darkblue", stroke_width="0.7", stroke_linejoin="round"),
+            chunked("c2", course_d([4, 12]), fill="none", stroke="darkblue", stroke_width="0.7", stroke_linejoin="round"),
+            chunked("c3", course_d([2, 6, 10, 14]), fill="none", stroke="darkblue", stroke_width="0.7", stroke_linejoin="round"),
+            chunked("c4", course_d([1, 3, 5, 7, 9, 11, 13, 15]), fill="none", stroke="darkblue", stroke_width="0.7", stroke_linejoin="round"),
+            chunked("cmu", mu_d(), fill="none", stroke=C["green"], stroke_width="0.7", stroke_linejoin="round"),
             N("line", "ridge", x1=f(FC[0]), y1=f(FC[1]), x2=f(APEX[0]), y2=f(APEX[1]), stroke=C["lpg"], stroke_width="0.8"),
         ]),
     ] + [voxel(i + 1, n) for i, n in enumerate(RATE_N)]
@@ -373,7 +406,8 @@ def asset():
     pf = lambda p, dx, dy: f"M{f(p[0] + dx * 0.4)} {f(p[1] + dy * 0.4)} L{f(p[0] + dx)} {f(p[1] + dy)}"
     puff = path("puff", " ".join([pf(LC, -9, -5), pf(LC, -10, 1), pf(FC, -5, 5), pf(FC, 5, 5), pf(RC, 9, -5), pf(RC, 10, 1)]),
                 fill="none", stroke=C["white"], stroke_width="1", stroke_linecap="round")
-    return N("svg", None, [sky, pyr, press, puff], version="1.1", xmlns="http://www.w3.org/2000/svg", x="0", y="0",
+    marker = N("g", "cells2")            # the runtime draws this file only if it finds this id: cell-budgeted (v2)
+    return N("svg", None, [sky, pyr, press, puff, marker], version="1.1", xmlns="http://www.w3.org/2000/svg", x="0", y="0",
              width="320", height="160", viewBox="0 0 320 160")
 
 

@@ -12,6 +12,7 @@ DSP's flips bring slices and debris (none without flips). Writes side-by-side PN
 OUTDIR (default: a temp folder).
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, os.path.join(ROOT, "design", "fx"))
 import gen_crush as g2      # noqa: E402
 import gen_crush3d as g3    # noqa: E402
+import svg_cells as cells   # noqa: E402
 
 W, H = 640, 320
 
@@ -119,6 +121,31 @@ def main():
           ends.items()) + " (press plate corner ~128, stem 160; the sun is below the text)")
     n_mu = c_path("ro_mu", (0, 16384, 1000, 0), FRAMES=10, CRUSH_TURN="5:1:17408")[0]
     check(n_mu > 0, f"readout while mu-law morphs out (BITS detent 17: 'BITS 7.5 MU 75%'): {n_mu} segments")
+
+    # AGG's cell limit (notes/screen.md): every fill and stroke of every state within half of 15 x 256 cells
+    svg = os.path.join(ROOT, "design", "fx", "crush3d.svg")
+    worst = (0, "", "", None)
+    for r_ in (0, 4096, 10240, 18432, 25600, 32767):
+        for b_ in (0, 12288, 16384, 22528, 28672, 32767):
+            for s_ in (0, 32767):
+                for o_ in (0, 32767):
+                    k = tuple(v / 32768 for v in (r_, b_, s_, o_))
+                    w = cells.worst(svg, g3.runtime_state(k, 0.3, 1.0))
+                    if w[0] > worst[0]:
+                        worst = w + ((r_, b_, s_, o_),)
+    check(worst[0] <= cells.LIMIT // 2, f"AGG cells: the heaviest fill or stroke over 144 states is {worst[1]} "
+          f"({worst[2]}, knobs {worst[3]}) ~{worst[0]} cells, {100 * worst[0] / cells.LIMIT:.0f} % of the {cells.LIMIT} "
+          "that fit (bound 50 %)")
+    # ui.c's recoloured ids are leaves with that style (TE's style getters assert on a group or a missing style)
+    ui = open(os.path.join(ROOT, "src", "slot", "ui.c")).read()
+    tab = ui[ui.index("pyr_rc_ids[] = {"):ui.index("#define PYR_RC")]
+    ids = re.findall(r'\{ "(\w+)", (\d), RL_', tab)
+    import xml.etree.ElementTree as ET
+    els = {e.get("id"): e for e in ET.parse(svg).iter() if e.get("id")}
+    bad = [i for i, st in ids if i not in els or els[i].tag.endswith("}g") or els[i].get("stroke" if st == "1" else "fill",
+                                                                                         "none") == "none"]
+    check(not bad and els.get("cells2") is not None, f"ui.c recolours {len(ids)} styles: all leaves with that style in "
+          f"crush3d.svg{'; bad: ' + str(bad) if bad else ''}; the cell-budget marker 'cells2' is there")
 
     print(f"\n{len(fails)} failed" if fails else "\nall passed")
     sys.exit(1 if fails else 0)

@@ -1109,7 +1109,10 @@
      crush everything at max while playing, and pedals (distortion) for comparison; any UI lag or audio crackle.
 - Report: the four cost numbers, readouts that are off, the BITS 20..29 right face, any step that sounds cleaner
   clockwise, anything that looks wrong (photo), any assert text.
-- Result: _pending user flash_.
+- Result (2026-10-15, device): **stops on opening the crush FX screen** (before any knob is turned), assert
+  `agg.cpp:339 alloc failed, too many blocks`. Cause (notes/screen.md "AGG cell limit"): TE's AGG asserts when one
+  fill or stroke needs more than 15 x 256 cells; the default state's voxel-edge stroke (RATE level 2) was ~4861. Fixed
+  in CRUSH5 (test image 73). Sound is unaffected; only opening the screen asserts.
 
 ## 2026-10-15 — Test image 73: PICK1.OP1 (install CLI: amp and crush left out)
 - `tools/apply.py` is now the install CLI (commit 3fd47c7): one patch carries every feature, the user picks which to

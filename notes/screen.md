@@ -52,3 +52,35 @@ Spot-checked items are marked **Verified**; the rest is Confirmed/Hypothesis as 
   cap, spray bracket, ruler, grains as white 2-px runs (light blue for octave shimmer); va oscillator shape
   (sampled, one segment per unit), detune ghost, the sub's square over four faint oscillator periods, animated noise.
 - About 50–80 AA lines per screen (was 126–168 plus diagnostics); dense detail uses the fast framebuffer lines.
+
+## AGG cell limit (agg.cpp:339 "alloc failed, too many blocks") — a constraint for every SVG screen
+Found 2026-10-15 after CRUSH4 stopped on opening the crush FX screen (LOG 72). Static analysis of the decrypted app
+(`firmware/work/elf/OP1_vdk_246_dec.dis`). **Verified** = read in the disassembly, **Hypothesis** = inferred.
+- The assert is TE's change to AGG's `rasterizer_cells_aa::add_curr_cell` at `0x0191412C` (string `0x018C2880`,
+  assert call `0x019141F4`). **Verified**:
+  - a cell is stored only when it has area or cover; at a block boundary (low byte of the cell count `[obj + 0x0C]`
+    is 0) it checks the number of blocks allocated so far (`[obj + 0]`) and **asserts if it is >= 16** (stock AGG
+    silently drops cells at its limit of 1024 blocks);
+  - otherwise it reuses block `curr_block` (`[obj + 8]`) or allocates a new one (`malloc(0x800)` = 256 cells of 8
+    bytes; the block pointer array `[obj + 0x10]` grows by 16 at a time).
+  - So 16 blocks x 256 = 4096 cells; blocks are never freed and `num_blocks` never decreases.
+- Reset `0x019140F2` clears the cell count and `curr_block` (and the bounds) but **not** `num_blocks`. **Verified**.
+- Scope: the only callers of reset are TE's fill (`~0x01A25512`) and stroke (`~0x01A2734A`) element renderers, which
+  fetch the shared rasterizer, reset it, feed the element's vertices (`0x01914904` line_to) and render. So the
+  count is **per fill or per stroke of one element** (all subpaths of a compound path together), not per frame or
+  per tree. **Verified** (call sites); that this is one global rasterizer: **Hypothesis**.
+- Consequence: an element whose fill or stroke needs a 16th block (more than 15 x 256 = 3840 cells) makes the pool
+  reach 16 blocks, and the next block boundary of any later element (even its first cell) asserts. Effective rule:
+  **every single fill and stroke must stay below ~3840 cells.** Hidden nodes are not rendered (early return,
+  svg-route.md "Cost"), so they cost nothing. No clip paths exist in TE's subset. Loading or parsing does not use
+  the rasterizer (rapidxml pool, svg-route.md), so file size and node count are not limited by this.
+- What a cell is (AGG): one per panel pixel an edge passes through (both sides of a stroke's outline, plus joins and
+  caps). Model: `design/fx/svg_cells.py` (an edge costs |dx| + |dy| + 1 panel pixels at 1.175 per SVG unit; a stroke
+  twice its segments plus about a stroke width per join and cap). **Hypothesis**, consistent with the device: the
+  screens that render peak at 22 .. 66 % of the limit (pingpong 827, choir 1142, pedals 1465, fm4's gears 2530);
+  crush3d.svg (CRUSH4) had 4861 for its default state (RATE level 2's voxel-edge stroke, one path of every block edge
+  with round caps) and asserted on the first frame.
+- Rules: split long compound paths and long strokes (many short stroked subpaths cost two sides plus two caps
+  each); `build.py` runs `svg_cells.py --check` on every published SVG and fails above 70 % of the limit; crush's own
+  check holds every state to 50 %. A fill's interior costs nothing here (only its edges): large fills cost render
+  time (svg-route.md), not cells.

@@ -105,6 +105,8 @@ Marks: **Verified** = read at the call site or in the disassembly; **Confirmed**
 - **Delay** (`0x01984F3C`): 4 text nodes, `+0x50` toggles for the tempo and mode marks, one `FUN_019ead58`.
 
 ## Cost (Hypothesis; measure before relying on it)
+- **Hard limit, not cost: every fill and every stroke must stay under ~3840 AGG cells** (notes/screen.md "AGG cell
+  limit"); over it the OP-1 asserts (agg.cpp:339). `design/fx/svg_cells.py --check` estimates it (build.py runs it).
 - No raster cache: the whole visible tree is re-rasterised (AGG, AA) every frame after the clear. Hidden groups cost almost nothing (early return).
 - An element costs about one AGG rasterisation, like one `te_line` call (~20–35 k cycles, LOG 2026-10-08). A polyline/path of k segments is one pass, so it is cheaper than k `te_line`s. Fills cost in proportion to the covered area, so avoid large filled regions.
 - TE renders 24–70 elements per frame on iter/delay/mmmf/tombola (ptch 390) without trouble. A 50–100 element document is in our current budget (we drew 600 AA segments at ~70 % of the frame).
