@@ -1314,3 +1314,34 @@
   three dashes become an "E"), 5 (the H / V pieces joined), 8 (the triangle joined to the V). **Verified rule: every
   M after the first closes the current subpath and draws a line to the new point; the subpaths of one element are
   always connected** (notes/svg-route.md "Path quirks"). Next: every published SVG one subpath per element (79).
+
+## 2026-10-16 — Test image 79: SVG9.OP1 (every SVG screen one subpath per element)
+- From test 78's card (Verified: every M after the first closes the subpath and draws a line to the new point),
+  every published SVG is now one subpath per element (check_svg.py, run by build.py; notes/svg-route.md "Path
+  quirks"). `design/fx/strictify.py` converted the files in place, look unchanged (rsvg and the C-path previews
+  match the old files within anti-aliasing, 0 .. 164 px of 1280 x 640):
+  - pedals.svg 66 -> 72 elements: ribs (wah grip, 9 bars) and grooves (9 bars) bridged into one fill each; the 4 knob
+    scales (16 ticks each) as one fill of rectangles each; plugL / plugR and rays (5) as groups of leaves (ui.c
+    recolours plugL_1/2, plugR_1/2, rays_1..5). Heaviest element grooves ~1561 cells (41 %).
+  - pingpong.svg 68 -> 89: bricks (18), legs, hair as groups; barrier_seams, netmesh as fills of rectangles; shoes,
+    eyes, cheeks bridged. Heaviest barrier ~784 cells (20 %).
+  - choir.svg 59 -> 70: pleats (6), ties, eyes, hair2 / hair3 as groups (ui.c fades hair2_1/2, hair3_1/2); hair1,
+    cheeks, sparks and the six notes bridged. Heaviest floor ~742 cells (19 %).
+  - fm4.svg 78 -> 102 (12 gear tick sets as groups of 3; one size per gear is shown, so ~8 more drawn). Heaviest
+    gd2body ~2530 cells (66 %, unchanged).
+  - crush3d.svg as CRUSH9 (298 elements). The crush test card is out of release builds (`build.py --test-card`).
+- Baseline cost (`--svg-cost`, kcycles per frame): crush ~3,000 idle / ~12,000 heavy (78), pedals 17,599 (LOG 592).
+- `firmware/images/SVG9.OP1` (SVG1 .. SVG8 exist) = CRUSH9's command (`--svg-cost`, all engines and trims, all FX),
+  `--name SVG9`, from commit 85acb4b in a clean `git archive`; te-boot identical to stock. sha256
+  27415f7c9f7773ee210d1135635f3fffd36b164917a2cdb978ac45c6ad6c2236.
+- Checklist (compare each screen with its preview gallery; note anything that differs, and the `--svg-cost` number
+  bottom right at rest and at the busiest state):
+  1. Distortion (pedals): knob scales are clean ticks, the wah grip bars and the grooves are straight, no frayed
+     or joined lines; the plugs at the cable ends and the LED rays look right in each mode (TUBE .. CRUSH).
+  2. Pingpong: the brick wall (squash, synth FX), barrier seams, net mesh, legs, hair, shoes, eyes, cheeks: no stray
+     lines between pieces.
+  3. Ensemble (choir): curtains' pleats and ties, the singers' eyes and hair, sparks and notes; the backing singers'
+     hair still fades in from black with white.
+  4. fm4: the gear tick marks (three per gear) with no lines joining them.
+  5. Crush: as in 78 (no test card now); cost idle and heavy.
+- Result: _pending user flash_.
