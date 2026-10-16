@@ -2221,9 +2221,9 @@ static int draw_card(void *r)
     for (int i = 0; i < CARD_N; i++) {
         char buf[4];
         int n = i + 1, j = 0;
-        if (n >= 10)
-            buf[j++] = (char)('0' + n / 10);
-        buf[j++] = (char)('0' + n % 10);
+        if (n >= 10)                                                /* 1 .. 18: no division (no libgcc) */
+            buf[j++] = '1', n -= 10;
+        buf[j++] = (char)('0' + n);
         buf[j] = 0;
         text_fast(r, buf, FP(card_num[i][0]), FP(card_num[i][1]), FP(1), WHITE);
     }
