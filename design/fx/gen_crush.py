@@ -57,6 +57,9 @@ def pd(P, close=True):
 
 # ---- unique colour values for every recoloured element (TE may share a style entry between equal colours)
 _used = {}
+_R = (-2, -1, 0, 1, 2)
+_OFFS = sorted(((a, b, c) for a in _R for b in _R for c in _R if (a, b, c) != (0, 0, 0)),
+               key=lambda o: (max(map(abs, o)), sum(map(abs, o)), [-v for v in o]))   # 124 neighbours, +-2 per channel
 
 
 def uniq(name):
@@ -66,8 +69,7 @@ def uniq(name):
     if n == 0:
         return base
     rgb = [int(base[j:j + 2], 16) for j in (1, 3, 5)]
-    offs = [(0, 0, 1), (0, 1, 0), (1, 0, 0), (0, 0, -1), (0, -1, 0), (-1, 0, 0), (0, 1, 1), (1, 1, 0), (1, 0, 1),
-            (0, -1, -1), (-1, -1, 0), (-1, 0, -1), (1, 1, 1), (-1, -1, -1)][n - 1]
+    offs = _OFFS[(n - 1) % len(_OFFS)]
     return "#" + "".join(f"{min(255, max(0, c + o)):02X}" for c, o in zip(rgb, offs))
 
 
@@ -125,9 +127,30 @@ def te_safe_d(d, stroked):
     return " ".join("M" + " L".join(f"{f(px)} {f(py)}" for px, py in pts) + (" Z" if closed else "") for pts, closed in subs)
 
 
+def reuniq(v):
+    """The next unique value of the palette colour v is (or v itself if it is not a palette colour)."""
+    if not (isinstance(v, str) and v.startswith("#")):
+        return v
+    rgb = [int(v[j:j + 2], 16) for j in (1, 3, 5)]
+    for name, base in C.items():
+        q = [int(base[j:j + 2], 16) for j in (1, 3, 5)]
+        if all(abs(a - b) <= 1 for a, b in zip(rgb, q)):
+            return uniq(name)
+    return v
+
+
 def path(id, d, **a):
+    """One element per subpath (TE's parser closes or joins subpaths, notes/svg-route.md "Path quirks"): a d with
+    several subpaths becomes a group id of paths id_1, id_2, .. (each with its own unique colour value)."""
     stroked = a.get("stroke", "none") != "none"
-    return N("path", id, d=te_safe_d(d, stroked), **a)
+    subs = [x.strip() for x in re.split(r"(?=M)", te_safe_d(d, False)) if x.strip()]
+    if len(subs) <= 1:
+        return N("path", id, d=subs[0] if subs else "", **a)
+    kids = []
+    for j, sp in enumerate(subs):
+        aa = dict(a) if j == 0 else {k: (reuniq(v) if k in ("fill", "stroke") else v) for k, v in a.items()}
+        kids.append(N("path", f"{id}_{j + 1}" if id else None, d=sp, **aa))
+    return N("g", id, kids)
 
 
 # ------------------------------------------------------------------ geometry builders

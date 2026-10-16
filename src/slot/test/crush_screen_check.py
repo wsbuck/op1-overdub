@@ -152,8 +152,29 @@ def main():
     els = {e.get("id"): e for e in ET.parse(svg).iter() if e.get("id")}
     bad = [i for i, st in ids if i not in els or els[i].tag.endswith("}g") or els[i].get("stroke" if st == "1" else "fill",
                                                                                          "none") == "none"]
-    check(not bad and els.get("cells3") is not None, f"ui.c recolours {len(ids)} styles: all leaves with that style in "
-          f"crush3d.svg{'; bad: ' + str(bad) if bad else ''}; the cell-budget marker 'cells3' is there")
+    check(not bad and els.get("cells4") is not None, f"ui.c recolours {len(ids)} styles: all leaves with that style in "
+          f"crush3d.svg{'; bad: ' + str(bad) if bad else ''}; the cell-budget marker 'cells4' is there")
+
+    # the boot test card (crushcard.svg, ui.c draw_card): up for 360 frames, case 17 at half size, case 18 green,
+    # the expected outlines and numbers drawn by the C; then the pyramid
+    n1, c1 = c_path("card1", base, FRAMES=1, CRUSH_CARD=1)
+    n2, c2 = c_path("card360", base, FRAMES=360, CRUSH_CARD=1)
+    n3, c3 = c_path("card361", base, FRAMES=361, CRUSH_CARD=1)
+    p0 = c_path("nocard", base, FRAMES=1)[1]
+    rgb = np.asarray(Image.open(os.path.join(cdir, "card1.png")).convert("RGB"), int)
+    ys, xs = rgb.shape[0] / 160, rgb.shape[1] / 320
+    def at(x, y):
+        return rgb[int(y * ys), int(x * xs)]
+    x17, y17 = (4 + 4 * 52 + 2, 2 + 2 * 46 + 12)                    # case 17's box origin
+    x18, y18 = (4 + 5 * 52 + 2, 2 + 2 * 46 + 12)
+    g18 = at(x18 + 11, y18 + 15)
+    in17, out17 = at(x17 + 11, y17 + 15), at(x17 + 4, y17 + 6)
+    check(n1 >= 65 and np.abs(c1 - c2).mean() < 1 and np.abs(c3 - p0).mean() < 1 and np.abs(c1 - p0).mean() > 5  # frame 361 = the pyramid's first frame
+          and g18[1] > 200 and g18[0] < 60 and in17.mean() > 200 and out17.mean() < 60,
+          f"test card: up on frames 1 .. 360 ({n1} line segments), the pyramid on 361; case 18 green {tuple(int(v) for v in g18)}, "
+          f"case 17 half size (centre {tuple(int(v) for v in in17)}, corner {tuple(int(v) for v in out17)}); "
+          f"change 1 -> 360 {np.abs(c1 - c2).mean():.2f}, card vs pyramid {np.abs(c1 - p0).mean():.1f}, "
+          f"361 vs pyramid {np.abs(c3 - p0).mean():.1f}")
 
     print(f"\n{len(fails)} failed" if fails else "\nall passed")
     sys.exit(1 if fails else 0)

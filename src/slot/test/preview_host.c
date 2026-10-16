@@ -202,7 +202,7 @@ static void host_tick(int i)
  * visible/fill/stroke act on a node table; after drawing, every node's state is printed as
  * "N doc id visible a b c d e f fill stroke" (matrix Q10, -1 = untouched; colours rrggbb or -) for preview.py to
  * apply to the SVG and rasterise. SVG_IDS lines: "doc id fill stroke" (the SVG's own colours). */
-#define NODES 512
+#define NODES 4096
 struct hnode { uint8_t raw[0x60]; char doc[24], id[24]; int32_t m[6]; int has_m; uint8_t fill[4], stroke[4]; int has_f, has_s; };
 static struct hnode nodes[NODES];
 static int n_nodes;
@@ -228,6 +228,10 @@ static void load_ids(void)
             n->fill[0] = v >> 16, n->fill[1] = v >> 8, n->fill[2] = v, n->fill[3] = 255;
         if ((n->has_s = sscanf(st, "%x", &v) == 1 && st[0] != '-'))
             n->stroke[0] = v >> 16, n->stroke[1] = v >> 8, n->stroke[2] = v, n->stroke[3] = 255;
+    }
+    if (n_nodes == NODES) {                         /* a silently short table hides nodes the C looks for */
+        fprintf(stderr, "preview_host: more than %d SVG ids, raise NODES\n", NODES);
+        exit(1);
     }
     if (f)
         fclose(f);
@@ -283,7 +287,8 @@ void te_node_matrix(void *node, const int32_t *m)
     n->m[0] = m[0], n->m[1] = m[1], n->m[2] = m[3], n->m[3] = m[4], n->m[4] = m[6], n->m[5] = m[7];
     n->has_m = 1;
 }
-void te_svg_render(void *screen) { (void)screen; }
+static int rendered = -1;                   /* the document of the last render (one screen per frame) */
+void te_svg_render(void *screen) { rendered = (int)((intptr_t)*(void **)screen - 0x1000); }
 /* Like TE's getters (FUN_01a3b854 / FUN_01a3b96c): assert when the element has no such style. */
 uint8_t *te_svg_stroke(void *screen, const char *id)
 {
@@ -308,10 +313,7 @@ static void dump_nodes(void)
 {
     for (int i = 0; i < n_nodes; i++) {
         struct hnode *n = &nodes[i];
-        int loaded = 0;
-        for (int d = 0; d < n_docs; d++)
-            loaded |= !strcmp(n->doc, docs[d]);
-        if (!loaded)
+        if (rendered < 0 || rendered >= n_docs || strcmp(n->doc, docs[rendered]))
             continue;
         printf("N %s %s %d", n->doc, n->id, n->raw[0x50]);
         for (int j = 0; j < 6; j++)

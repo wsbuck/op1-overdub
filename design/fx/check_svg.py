@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Check an SVG against TE's retained-renderer subset (notes/svg-route.md). Usage: check_svg.py file.svg [colors.svg]"""
+"""Check an SVG against TE's retained-renderer subset and its path quirks (notes/svg-route.md).
+Usage: check_svg.py file.svg [colors.svg] [--strict: one subpath per element] [--card: the test card, quirks allowed]"""
 import os, re, sys
 import xml.etree.ElementTree as ET
 
@@ -14,7 +15,7 @@ DEFAULT_COLORS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", 
 
 
 def near_palette(v, pal):
-    """A colors.svg colour, or one within +-1 per channel (unique values keep TE from sharing a style entry)."""
+    """A colors.svg colour, or one within +-2 per channel (unique values keep TE from sharing a style entry)."""
     if not (len(v) == 7 and v.startswith("#")):
         return False
     try:
@@ -23,14 +24,19 @@ def near_palette(v, pal):
         return False
     for p in pal:
         q = [int(p[j:j + 2], 16) for j in (1, 3, 5)]
-        if all(abs(a - b) <= 1 for a, b in zip(rgb, q)):
+        if all(abs(a - b) <= 2 for a, b in zip(rgb, q)):
             return True
     return False
 
 
+STRICT = "--strict" in sys.argv     # one subpath per element (crush3d.svg)
+CARD = "--card" in sys.argv         # the test card: exercises the parser quirks on purpose (subset rules still apply)
+
+
 def main():
-    path = sys.argv[1]
-    cpath = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_COLORS
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    path = args[0]
+    cpath = args[1] if len(args) > 1 else DEFAULT_COLORS
     pal = {c.upper() for c in re.findall(r'fill="(#[0-9A-Fa-f]{6})"', open(cpath).read())}
     errs, n_el, ids = [], 0, set()
     root = ET.parse(path).getroot()
@@ -57,7 +63,7 @@ def main():
                     if abs(float(num)) >= 2 ** 21:
                         errs.append(f"{where}: |value| >= 2^21 in {k}")
             if k in ("fill", "stroke") and v != "none" and not near_palette(v, pal):
-                errs.append(f"{where}: colour {v} not in colors.svg (within +-1 per channel)")
+                errs.append(f"{where}: colour {v} not in colors.svg (within +-2 per channel)")
             if k == "d":
                 bad = set(re.findall(r"[A-Za-z]", v)) - set("MLHVCSZmlhvcsz")
                 if bad:
@@ -69,12 +75,14 @@ def main():
                 if rel:
                     errs.append(f"{where}: relative path commands {sorted(rel)}: use absolute ones")
                 subs = [x for x in re.split(r"(?=M)", v.strip()) if x.strip()]
-                if any(re.search(r"[HV]", sp) and "Z" not in sp for sp in subs[:-1]):
+                if STRICT and len(subs) > 1:
+                    errs.append(f"{where}: {len(subs)} subpaths (strict: one subpath per element)")
+                if not CARD and any(re.search(r"[HV]", sp) and "Z" not in sp for sp in subs[:-1]):
                     errs.append(f"{where}: an open subpath with H / V followed by M: TE joins it to the next subpath "
                                 "(CRUSH7); use L, or close it (pedals' closed H / V shapes are fine)")
-                if el.get("stroke", "none") != "none":
+                if el.get("stroke", "none") != "none" and not CARD:
                     if len(subs) > 1:
-                        for sp in subs:
+                        for sp in subs[:-1]:            # the last subpath is not closed
                             if "Z" not in sp and len(re.findall(r"[LC]", sp)) + len(re.findall(r"[HV]", sp)) > 1:
                                 errs.append(f"{where}: stroked open subpath of several segments followed by M (TE "
                                             f"closes it with a chord): {sp[:40].strip()}..")

@@ -127,6 +127,24 @@ Found 2026-10-15 from CRUSH7's photo (stray lines) and the parser. **Verified** 
 - The cell model (svg_cells.py) counts the implicit close. With the observed joins, crush3d.svg's heaviest stroke was
   ~22.6 k cells in CRUSH4, ~7.2 k in CRUSH5 (both asserted) and ~3.8 k in CRUSH6/7 (just under 3840: drawn, no
   assert): the device results line up.
+- CRUSH8 (M / L / Z only, stroked polylines split into segments) still showed diagonal lines and black triangles on
+  the device: the model above is incomplete. **From CRUSH9 we stop relying on path semantics**:
+  - `check_svg.py --strict`: one subpath per element (one M; build.py requires it of crush3d.svg). gen_crush.py
+    `path()` turns a d with several subpaths into a group of single-subpath paths (`id_1`, `id_2`, ..); recolours
+    name the leaves (generated `src/slot/crush3d_ids.h`), each with a colour value no other element uses (±2 per
+    channel of the palette; check_svg accepts ±2).
+  - Other SVGs that would fail `--strict` (not converted): pedals.svg 9 elements, pingpong.svg 13, choir.svg 19,
+    fm4.svg 12. They render right on the device so far.
+  - Limits for the element count (static): no node or pool count assert in the parser or Screen (their assert
+    strings name only the subset errors); TE's own `lander.svg` has 885 elements / 171 KB and parses at boot.
+    crush3d.svg (CRUSH9): 298 drawable elements, 362 ids, 46 KB; 23 .. 133 drawn per frame over the 14 gallery states (73 at the default; before the split 10 .. ~59 compound elements). Heap ~144 B per shape
+    (above): ~45 KB. **Hypothesis** until CRUSH9 runs.
+  - Ground truth: `crushcard.svg` (design/fx/gen_card.py), 18 numbered cases (polylines with one and several
+    subpaths, H / V open and closed, Z then M, two closed subpaths filled, a hole, polygon / polyline / line / rect,
+    miter / round / belvel on an acute angle, widths 0.5 and 0.8, a group matrix, a recolour), each with its expected
+    result drawn beside it in 1-px grey lines by the C (no parser). ui.c shows it for 360 frames (~12 s) on the first
+    open of the crush screen after boot (`draw_card`), then the pyramid. `check_svg.py --card`: the subset rules
+    only (the card breaks the quirk rules on purpose).
 
 ## Cost (Hypothesis; measure before relying on it)
 - **Hard limit, not cost: every fill and every stroke must stay under ~3840 AGG cells** (notes/screen.md "AGG cell

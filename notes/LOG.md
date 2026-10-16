@@ -1277,4 +1277,6 @@
   4. `--svg-cost` readings: crush clean, busy, max (everything up while playing); pedals for comparison.
   5. Other screens (pedals, pingpong, choir, fm4): do any lines or angles look different from their previews? Note
      which (the parser quirks above may explain them).
-- Result: _pending user flash_.
+- Result (2026-10-16, device): no assert, but still diagonal lines and some black triangles on the crush screen. The
+  parser model above is incomplete; CRUSH9 (78) stops relying on path semantics (one subpath per element) and adds a
+  test card for ground truth.

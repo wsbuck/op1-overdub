@@ -22,6 +22,8 @@ from PIL import Image, ImageDraw
 
 DESIGN = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "design")
 SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "crush3d.svg": "fx", "fm4.svg": "synth"}   # name -> design/ subfolder
+if os.environ.get("CRUSH_CARD"):        # the crush screen's boot test card (ui.c draw_card); off: straight to the pyramid
+    SVG_PATHS["crushcard.svg"] = "fx"
 SVGS = tuple(SVG_PATHS)
 SVG_DIR = None                       # main(): a temp folder holding every document (preview_host looks there by name)
 NS = "{http://www.w3.org/2000/svg}"

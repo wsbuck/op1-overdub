@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- crushcard.svg: TE SVG-route test card (design/fx/gen_card.py; cases in its docstring). Shown ~12 s on the first open of the crush FX screen after boot. -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" x="0" y="0" width="320" height="160" viewBox="0 0 320 160">
+  <path id="k1" d="M8 40 L16 18 L26 40" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <path id="k2" d="M59 42 L63 26 L67 42 M70 42 L74 26 L78 42" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <path id="k3" d="M112 18 L130 18 M112 28 L130 28 M112 38 L130 38" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <path id="k4" d="M164 18 H182 V40" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <path id="k5" d="M216 20 H234 M216 30 H234 M225 35 V44" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <path id="k6" d="M268 18 H286 V40 H268 Z" fill="#E6E7FF"/>
+  <path id="k7" d="M8 62 L16 62 L16 72 L8 72 ZM18 76 L26 76 L26 88 L18 88 Z" fill="#E6E7FF"/>
+  <path id="k8" d="M60 62 L78 62 L69 72 ZM60 78 L69 88 L78 78" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <path id="k9" d="M112 62 L130 62 L130 88 L112 88 ZM117 68 L117 82 L125 82 L125 68 Z" fill="#E6E7FF"/>
+  <polygon id="k10" points="164,86 173,64 182,86" fill="#E6E7FF"/>
+  <polyline id="k11" points="216,64 225,86 234,64" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <line id="k12" x1="268" y1="64" x2="286" y2="70" stroke="#E6E7FF" stroke-width="1"/><rect id="k12r" x="268" y="74" width="18" height="12" fill="none" stroke="#E6E7FF" stroke-width="1"/>
+  <path id="k13" d="M10 134 L17 109 L24 134" fill="none" stroke="#E6E7FF" stroke-width="3" stroke-linejoin="miter"/>
+  <path id="k14" d="M62 134 L69 109 L76 134" fill="none" stroke="#E6E7FF" stroke-width="3" stroke-linejoin="round"/>
+  <path id="k15" d="M114 134 L121 109 L128 134" fill="none" stroke="#E6E7FF" stroke-width="3" stroke-linejoin="belvel"/>
+  <line id="k16" x1="164" y1="116" x2="182" y2="116" stroke="#E6E7FF" stroke-width="0.5"/><line id="k16b" x1="164" y1="126" x2="182" y2="126" stroke="#E6E7FF" stroke-width="0.8"/>
+  <g id="k17"><path id="k17s" d="M216 110 L234 110 L234 132 L216 132 Z" fill="#E6E7FF"/></g>
+  <path id="k18" d="M268 110 L286 110 L286 132 L268 132 Z" fill="#7C7990"/>
+</svg>

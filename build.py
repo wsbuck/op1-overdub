@@ -30,6 +30,9 @@ import op1pack  # noqa: E402
 STOCK_URL = "https://teenage.engineering/_software/op-1/op1_246.op1"
 STOCK_SHA256 = "c5315218f825f143b415ca554516541898abee843d3a236df0b54c04e1fb13a9"
 FX_SVGS = {"ensemble": "choir.svg", "pingpong": "pingpong.svg", "distortion": "pedals.svg", "crush": "crush3d.svg"}   # by source
+FX_EXTRA_SVGS = {"crush": ["crushcard.svg"]}     # also published: crush's boot test card (ui.c draw_card)
+SVG_FLAGS = {"crush3d.svg": ["--strict"], "crushcard.svg": ["--card"]}   # check_svg.py modes (one subpath per element;
+                                                                        # the card exercises the path quirks on purpose)
 ENGINE_SVGS = {"fm4": "fm4.svg"}   # by source: engine screens drawn through the SVG route (design/synth/)
 
 
@@ -108,13 +111,15 @@ def main():
     run(*cmd)
 
     # every SVG screen within AGG's per-path cell budget (notes/screen.md: over it, the OP-1 asserts on the screen)
-    svgs = [os.path.join(ROOT, "design", "fx", FX_SVGS[f["source"]]) for f in fxs if f["source"] in FX_SVGS]
+    svgs = [os.path.join(ROOT, "design", "fx", v) for f in fxs if f["source"] in FX_SVGS
+            for v in [FX_SVGS[f["source"]]] + FX_EXTRA_SVGS.get(f["source"], [])]
     svgs += [os.path.join(ROOT, "design", "synth", ENGINE_SVGS[e["source"]]) for e in engines if e["source"] in ENGINE_SVGS]
     if svgs:
         colors = os.path.join(build, "colors.svg")
         open(colors, "wb").write(stock["content/display/colors.svg"])
         for svg in svgs:                                    # TE's subset and its path quirks (notes/svg-route.md)
-            run(sys.executable, os.path.join(ROOT, "design", "fx", "check_svg.py"), svg, colors)
+            run(sys.executable, os.path.join(ROOT, "design", "fx", "check_svg.py"), svg, colors,
+                *SVG_FLAGS.get(os.path.basename(svg), []))
         run(sys.executable, os.path.join(ROOT, "design", "fx", "svg_cells.py"), "--check", *svgs)
 
     image = os.path.join(ROOT, "firmware", "images", f"{a.name}.OP1")
@@ -123,8 +128,8 @@ def main():
            "--replace", f"content/op1_factory.db={db}", "--replace", f"OP1_vdk.ldr={out_ldr}"]
     for f in fxs:
         if f["source"] in FX_SVGS:
-            svg = FX_SVGS[f["source"]]
-            cmd += ["--add", f"content/display/{svg}={os.path.join(ROOT, 'design', 'fx', svg)}"]
+            for svg in [FX_SVGS[f["source"]]] + FX_EXTRA_SVGS.get(f["source"], []):
+                cmd += ["--add", f"content/display/{svg}={os.path.join(ROOT, 'design', 'fx', svg)}"]
     for e in engines:
         if e["source"] in ENGINE_SVGS:
             svg = ENGINE_SVGS[e["source"]]

@@ -1951,7 +1951,7 @@ static int pyramid_ready(void)
         return pyramid.state > 0;
     if (!svg_open(&pyramid, "/yaffs2/content/display/crush3d.svg", "crush3d.svg"))
         return 0;
-    if (!te_node_find(pyramid.doc, "cells3", 0)) {                 /* not the cell-budgeted file (notes/screen.md): an */
+    if (!te_node_find(pyramid.doc, "cells4", 0)) {                 /* not the cell-budgeted file (notes/screen.md): an */
         pyramid.state = -1;                                         /* older crush3d.svg could overflow AGG: lines */
         return 0;
     }
@@ -2190,6 +2190,46 @@ static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
     svg_cost(r);
 }
 
+/* Device ground truth for TE's SVG route (CRUSH9): on the first open of the crush screen after boot, crushcard.svg
+ * (design/fx/gen_card.py: 18 numbered cases) for 360 frames (~12 s), each case's expected result beside it in 1-px
+ * grey lines (not through TE's parser). Case 17 is a group the C scales to half about its centre, case 18 a grey
+ * square the C recolours green. Returns 1 while the card is up. */
+#include "crushcard.h"
+
+#define CARD_FRAMES 360
+static struct svgdoc card RAM = { 0, 0 };
+static uint32_t card_frame RAM = 0;
+
+static int draw_card(void *r)
+{
+    if (card_frame >= CARD_FRAMES)
+        return 0;
+    if (!svg_open(&card, "/yaffs2/content/display/crushcard.svg", "crushcard.svg")) {
+        card_frame = CARD_FRAMES;
+        return 0;
+    }
+    if (!card_frame++) {
+        set_matrix(te_node_find(card.doc, "k17", 0), 512, 0, 0, 512, CARD_GM_CX * 512, CARD_GM_CY * 512);
+        struct recol g;
+        recol_init(&g, card.doc, "k18", 0);
+        recol_set(&g, CP_GREEN, 256);
+    }
+    svg_render(card.doc);
+    for (int i = 0; i < CARD_SEGS; i++)                             /* SVG units x 4 -> Q10 */
+        line_fast(r, (fp32)card_seg[i][0] << 8, (fp32)card_seg[i][1] << 8, (fp32)card_seg[i][2] << 8,
+                  (fp32)card_seg[i][3] << 8, GREY);
+    for (int i = 0; i < CARD_N; i++) {
+        char buf[4];
+        int n = i + 1, j = 0;
+        if (n >= 10)
+            buf[j++] = (char)('0' + n / 10);
+        buf[j++] = (char)('0' + n % 10);
+        buf[j] = 0;
+        text_fast(r, buf, FP(card_num[i][0]), FP(card_num[i][1]), FP(1), WHITE);
+    }
+    return 1;
+}
+
 /* FX screen: id = our FX id (8..), mode = edit mode (0 synth, 1 drum, 3 master), slot = sound slot. */
 void fx_ui_draw(int id, int mode, int slot)
 {
@@ -2215,7 +2255,9 @@ void fx_ui_draw(int id, int mode, int slot)
             draw_distortion(r, k);
     }
     else if (kind == FX_CRUSH) {
-        if (pyramid_ready())
+        if (draw_card(r))
+            ;
+        else if (pyramid_ready())
             draw_pyramid(r, k, mode == 3, mode << 4 | slot);
         else
             draw_crush(r, k, mode == 3);

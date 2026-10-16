@@ -80,7 +80,7 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
 ## Screen
 - **The 3D pyramid** (design/fx/crush3d.svg, generator design/fx/gen_crush3d.py, which imports gen_crush.py's helpers;
   the SVG header documents every id, threshold, matrix and recolour; `runtime_state()` is the reference). Published as
-  `content/display/crush3d.svg` (build.py `FX_SVGS`). ui.c `pyramid_ready()` / `draw_pyramid()`: loaded lazily, every
+  `content/display/crush3d.svg` (build.py `FX_SVGS`, with the test card `crushcard.svg`). ui.c `pyramid_ready()` / `draw_pyramid()`: loaded lazily, every
   id found once with must = 0 (13 single nodes, 37 numbered ones, 38 recoloured styles); per frame visibility,
   matrices, recolours (only when the posterise row changes), one `svg_render`. Falls back to `draw_crush()` (the line
   placeholder) when the file is missing.
@@ -101,7 +101,7 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   - Colours: BITS posterises inside the neutral family (lit face purplegrey -> lpg, shade face grey -> offgrey, black
     only at 1 bit where the green rim outlines it: above, the shade face never melts into the black ground; a grey sun
     once crushed); green is BITS's accent (the 1-bit rim, rubble, mu-law courses); pure white belongs only to SQUASH's
-    press, stem and puff.
+    sun.
   - Readout: a raw knob change of 512 or more shows its value for 45 frames (~1.5 s) at the title position (8, 7) in
     the knob's colour, at title size 2 (y 7 .. 19, above the sun at 24; the longest, 15 characters, ends at x 184): `RATE 11.0KHZ`, `BITS 8`, `BITS 7.5`, `BITS 8 MU-LAW`
     (only on the full mu-law plateau; the font has no mu), `BITS 8 MU 50%` / `BITS 7.5 MU 75%` (morphing),
@@ -125,6 +125,16 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
   it (an older crush3d.svg left on the disk falls back to the line screen). CRUSH5 still asserted (notes/screen.md
   "Open"); CRUSH6 splits at 900 (heaviest element faceL's stroke ~1052, 27 %), generates ui.c's recolour table
   (`src/slot/crush3d_ids.h`) from the file's leaves, and has the staged bring-up.
+- **One subpath per element (CRUSH9)**: CRUSH8 still drew diagonals and black triangles (TE's path parser closes or
+  joins subpaths, notes/svg-route.md "Path quirks"), so crush3d.svg has no compound paths: every multi-subpath d
+  became a group of single-subpath paths (`id_1`, `id_2`, ..; ids_header lists the leaves, 127 recoloured styles,
+  each with its own colour value). Voxel edges simplified: per tier one outline polyline and one front vertical, block
+  joints only every second one from RATE level 2. 298 drawable elements (362 ids, 46 KB), heaviest element faceL's
+  stroke ~1052 cells (27 %). Marker `cells4`. `check_svg.py --strict` (build.py) enforces it.
+- **Test card (CRUSH9)**: on the first open of the crush screen after boot ui.c `draw_card()` shows
+  `content/display/crushcard.svg` (design/fx/gen_card.py) for 360 frames (~12 s), then the pyramid; numbers and
+  expected outlines (grey) drawn by the C beside each case; case 17 is scaled to half by the C, case 18 recoloured
+  green. Missing file: straight to the pyramid. crush_screen_check checks it (`CRUSH_CARD=1` in preview.py).
 - Cost (Hypothesis until read on the device with `--svg-cost`; CRUSH5 shows it): 10 visible shape elements
   (voxel levels, mu-law) to ~59 (everything at max) of 86; pedals has 66 shapes and read 17.6 M cycles per frame on the device, choir 2 .. 11 M.
   The large fills are the two faces, the shadow and the sun (smaller than pedals' bodies). The per-frame C work is a
