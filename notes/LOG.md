@@ -1187,4 +1187,41 @@
 - Checklist: first open the crush FX screen at the default (synth FX, then master FX): it must draw, no assert.
   Then CRUSH4's checklist (test image 72), including the four `--svg-cost` readings (crush clean, busy, max, pedals)
   and every RATE detent's voxel level (4 / 10 / 18 / 25) with BITS at 0 and at 25.
+- Result (2026-10-15, device): **still stops on opening the crush FX screen** with `agg.cpp:339 alloc failed, too many
+  blocks`. Splitting did not help: the cell model or its scope misses something (notes/screen.md "Open"); CRUSH6
+  (test image 75) adds a staged bring-up to find the layer.
+
+## 2026-10-15 — Test image 75: CRUSH6.OP1 (crush: sun as SQUASH, staged screen bring-up for the AGG assert)
+- CRUSH5 (74) still asserted `agg.cpp:339` on opening the crush FX screen. Static analysis since (notes/screen.md):
+  every SVG element owns its fill and stroke rasterizer (`0x01A066F4` / `0x01A0674C`, kept per node), group
+  visibility is honoured, so the limit is per element. Yet no crush3d.svg element is heavier than pedals' heaviest by
+  the cell model, and pedals' groups (15.7 k) and tree (24 k) exceed crush's (9.3 k / 11 k at the default), so no
+  scope explains it with the model: something crush3d.svg has is not in the model. Open.
+- Changes (commit b8cedb6):
+  - the user's direction: SQUASH's press, stem, dust and the pyramid squat are gone; the sun is SQUASH's indicator:
+    white while SQUASH is on, shrinking (x 1 - 0.45 gr) and dimming (x 1 - 0.55 gr) with the gain reduction, so it
+    pumps with the audio; with SQUASH off it is the BITS row's darkblue / grey. RATE, BITS, GRIT, readout unchanged
+    (the readout now at title size 2, above the sun);
+  - every path split at 900 estimated cells (heaviest element now faceL's stroke ~1052, 27 %); ui.c's recolour table
+    generated from the file (src/slot/crush3d_ids.h); marker `cells3`;
+  - **staged bring-up (this image only, `build.py --staged-screens`)**: on the first open of the crush screen after
+    boot the layers come up one by one, 2 s each, labelled top left: `STAGE 0 SKY` (sun, far pyramids, ground),
+    `STAGE 1 PYRAMID` (shadow, smooth faces, courses), `STAGE 2 RATE` (voxel levels), `STAGE 3 BITS` (holes, collapsed
+    top, rubble, mu-law courses), `STAGE 4 GRIT` (cracks, notches, slices, debris); then the normal screen. A stage that
+    asserts names the layer.
+- Checks: crush_screen_check all pass (C path = reference on the GRIT-free states, sun pumps, readout, shade face,
+  cells <= 27 % per element over 144 states, recolour leaves); build.py's cell check on every SVG (per element; group
+  and tree totals reported: choir 5.0 k / 15.3 k, pingpong 4.0 k / 18.4 k, pedals 15.7 k / 23.9 k, fm4 10.4 k / 42.9 k).
+- `firmware/images/CRUSH6.OP1` = CRUSH5's command plus `--staged-screens` (`--svg-cost`, all engines and trims, all FX),
+  `--name CRUSH6`, from commit b8cedb6 in a clean `git archive`; te-boot identical to stock; replaces
+  content/display/crush3d.svg. sha256 19b3cff903b570b231d561f5a8f7660e7a43de2202449db60188764fbc712e15.
+- Test (do this first, it may stop the OP-1):
+  1. Boot; select crush as synth FX at the default knobs; open the FX screen and **watch the STAGE label**: note the
+     last stage shown before an assert, or that all five passed and the normal screen came up. Photo of any assert.
+  2. If it survives: power-cycle, repeat with RATE at 4, 10, 18, 25 detents (the stages run once per boot, so a
+     power-cycle reruns them), then BITS at 25 and 32, then GRIT at max while playing.
+  3. If all is fine: CRUSH4's checklist (72), with the sun pumping on drums instead of the press, and the four
+     `--svg-cost` readings (crush clean, busy, max; pedals).
+- Recovery if it asserts: power-cycle; playing works, only opening the crush screen asserts. CRUSH1 (69) is the safe
+  fallback (no SVG screen); do not flash CRUSH2..5.
 - Result: _pending user flash_.
