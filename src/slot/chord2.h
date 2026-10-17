@@ -109,6 +109,7 @@ struct c2_diag {
     uint32_t shift_up;              /* SHIFT releases our release wrapper saw */
     uint32_t sheds;                 /* notes or chords the voice budget let go */
     uint32_t shift_dn;              /* SHIFT presses our press wrapper saw */
+    uint32_t purges;                /* tracked keys released because their key-up could no longer come */
     int32_t voices;                 /* sounding notes we track (after the last key event) */
     int32_t load;                   /* C2_LOAD_* */
     int32_t load_seq;
@@ -120,10 +121,11 @@ enum { C2_LOAD_PENDING, C2_LOAD_NONE, C2_LOAD_A, C2_LOAD_B, C2_LOAD_BAD };
 enum { C2_SAVE_NONE, C2_SAVE_OK, C2_SAVE_OPEN, C2_SAVE_WRITE, C2_SAVE_CLOSE, C2_SAVE_TORN };
 
 enum { MSG_NONE, MSG_CLEARED, MSG_COPIED, MSG_PASTED, MSG_UNDONE, MSG_LEARNED, MSG_MAX4, MSG_EMPTY_CLIP, MSG_LATER,
-       MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_REDONE, MSG_PINNED, MSG_UNPINNED, MSG_COUNT };
+       MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_REDONE, MSG_PINNED, MSG_UNPINNED, MSG_WALL, MSG_LEARN_CANCEL, MSG_GREEN_FIRST, MSG_COUNT };
 
 #define C2_LEARN_MAX 8
-#define C2_FREEZE 64                /* frames (~2 s) the edited key stays fixed after a knob turn */
+#define C2_FREEZE 128               /* frames (~4 s) the edited key stays fixed after a knob turn */
+#define C2_GROUP 64                 /* frames (~2 s): turns of the same knob within this are one undo gesture */
 #define C2_FLASH 72                 /* frames a message shows */
 
 /* The whole state. Writers: the KeyHandler thread (keys, knobs: every edit) and the GUI thread (the file load,
@@ -257,8 +259,10 @@ C2_FN int c2_voice(const struct c2_quality *q, int fam, int top, int8_t *out)
 
 C2_FN int c2_valid_q(int q) { return q == Q_CUSTOM || (q > Q_NONE && q < Q_COUNT); }
 
-/* Intervals from the key, as the player plays them, ascending; bass adds the root an octave under the chord's root
- * (and under its lowest note) as a 5th voice (*bass_at = its index, else -1). Returns the count (0 = plays its note).
+/* Intervals from the key, as the player plays them, ascending. bass 1 (the map's BASS) adds the root under the chord as
+ * a 5th voice; bass 0 adds it only for a rootless quality (MAJ9, MIN11 ... keep their root, as on the Cycles); bass -1
+ * neither (the raw voicing, for recognition). *bass_at = the index of that added root (shed first), else -1. A slash
+ * bass (structured, or a learned chord's 5th note) is part of the chord. Returns the count (0 = plays its note).
  * Defensive: anything out of range (a torn read while the GUI loads the file) gives 0. */
 C2_FN int c2_notes(const struct c2_chord *c, int bass, int8_t *out, int *bass_at)
 {
@@ -273,6 +277,15 @@ C2_FN int c2_notes(const struct c2_chord *c, int bass, int8_t *out, int *bass_at
             out[i] = c->iv[i];
         n = c->n;
         c2_sort(out, n);
+        if (c->has_slash) {        /* a learned 5-note voicing: its bass */
+            int b = c->slash, guard = 0;
+            while (b >= out[0] && guard++ < 8)
+                b -= 12;
+            for (int i = n; i > 0; i--)
+                out[i] = out[i - 1];
+            out[0] = (int8_t)b;
+            n++;
+        }
         return n;
     }
     n = c2_voice(&c2_q[c->q], c->fam < F_COUNT ? c->fam : F_CLOSE, c->top, out);
@@ -282,8 +295,11 @@ C2_FN int c2_notes(const struct c2_chord *c, int bass, int8_t *out, int *bass_at
     if (c->has_slash) {            /* G/B: B under the chord */
         b = c->slash;
         add = 1;
-    } else if (bass) {
+    } else if (bass > 0) {         /* BASS: the root an octave under */
         b = c->root - 12;
+        add = 1;
+    } else if (bass == 0 && c2_q[c->q].rootless) {
+        b = c->root;               /* a rootless colour chord gets its root right under it */
         add = 1;
     }
     if (add && n) {
@@ -389,6 +405,8 @@ C2_FN char *c2_name(char *p, const struct c2_chord *c, int key, int flats, int s
         low = c->iv[0];
         for (int i = 1; i < c->n; i++)
             low = c->iv[i] < low ? c->iv[i] : low;
+        if (c->has_slash)
+            low = c->slash;
         has = q != Q_CUSTOM;
     } else if (c->has_slash) {
         low = c->slash;
@@ -422,6 +440,8 @@ C2_FN void c2_structure(struct c2_chord *c, int q)
     int root = 0, low = c->iv[0];
     for (int i = 1; i < c->n; i++)
         low = c->iv[i] < low ? c->iv[i] : low;
+    if (c->has_slash)
+        low = c->slash;            /* a learned bass under the four upper notes */
     int8_t v[C2_MAX];
     for (int i = 0; i < c->n; i++)
         v[i] = c->iv[i];

@@ -65,11 +65,18 @@ extern void te_line(void *raster, const fp32 *a, const fp32 *b, fp32 width, cons
 extern const int16_t wt_data[] __attribute__((weak));         /* wt engine's tables (build_slot.py: --defsym _wt_data) */
 extern uint8_t voice_ram[];               /* engines' per-voice RAM (FREE region 0, 0x00810000) */
 extern uint32_t hold_on;                  /* hold.c */
+extern uint32_t hold_keys __attribute__((weak));   /* hold.c (weak: the host previews don't define it) */
 extern uint32_t chord_on, chord_learning; /* hold.c: CHORD mode and its learned shape */
 /* CHORD v2 (hold.c, chord2_impl.h; weak: the host previews link without it) */
 extern struct c2_state c2 __attribute__((weak));
 extern void c2_gui_tick(void) __attribute__((weak));
 extern const volatile uint32_t feature_mask __attribute__((weak));   /* slot.S: bit 1 CHORD, bit 2 CHORD v2 */
+#ifndef __bfin__                          /* host previews (macOS ld has no undefined weak data): CHORD v2 absent */
+struct c2_state __attribute__((weak)) c2;
+const volatile uint32_t __attribute__((weak)) feature_mask = 0;
+uint32_t __attribute__((weak)) hold_keys = 0;
+void __attribute__((weak)) c2_gui_tick(void) {}
+#endif
 extern int32_t chord_n, chord_iv[];
 extern const uint8_t ui_kind[];           /* screen kind per engine id 15.. (build_slot.py, from engines.json) */
 enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4, KIND_INPROBE = 5, KIND_SPROBE = 6, KIND_AMP = 7,
@@ -325,6 +332,7 @@ static void c2_view_now(struct c2_view *v)
     int32_t o = v->slot >= 0 ? C2_OCTAVE(v->slot) : 0;
     v->octave = o >= -4 && o <= 4 ? (int)o : 0;
     v->hold = hold_on != 0;
+    v->held = &hold_keys ? hold_keys : 0;
     v->shift = C2_SHIFT != 0;
     v->now = c2.clock;
 }

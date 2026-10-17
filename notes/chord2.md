@@ -381,7 +381,7 @@ new hook calls TE's function with the same arguments (simulator-checked).
 | where | control | does |
 |---|---|---|
 | synth screen | SHIFT + SPLIT | open / close the CHORD page (T1..T4 also close it and go to their page) |
-| page | press a key | plays as normal and becomes the edited key (unless frozen: padlock, 2 s after a knob turn; SHIFT and DROP still take the last key tapped) |
+| page | press a key | plays as normal and becomes the edited key (unless frozen: padlock, ~4 s after a knob turn; a plain note over a sounding chord never takes it; a learn's first note and DROP take the last key tapped) |
 | page | SPLIT tapped alone | pin / unpin the edited key (blue padlock): play the song, keep editing one chord |
 | page | blue | ROOT (semitones from the key; a learned chord transposes) |
 | page | green | TYPE: the scan (below); left past the first = the key plays its note |
@@ -390,10 +390,10 @@ new hook calls TE's function with the same arguments (simulator-checked).
 | page | SHIFT + blue | MODE of this synth slot: OFF, SHAPE, MAP 1..8 |
 | page | SHIFT + orange | BASS on / off for the map (the root an octave under, a 5th voice; shed first) |
 | page | SHIFT + green / white | STRUM / SMOOTH: "NOT IN THIS VERSION" (phase 2/3) |
-| page | hold SHIFT, play, let go of SHIFT | learn into the edited key (held notes; none held = all played; > 4 = the bass and the top 3, MAX 4) |
+| page | hold SHIFT, play, let go of SHIFT | learn into the last key tapped (held notes; none held = all played; 5 notes = 4 + its bass; more = the bass and the top 4, MAX 5). A SHIFT combo during a learn (LIFT, DROP, SPLIT, T2) cancels it |
 | page | SPLIT + key | clear that key (the press plays nothing; afterwards the key plays its own note) |
 | page | LIFT / DROP | copy the edited key's chord / paste it onto the last key tapped |
-| page | SHIFT + LIFT | undo the last gesture (again = redo) |
+| page | SHIFT + LIFT | undo the last gesture (again = redo); turns of one knob within ~2 s are one gesture |
 | page | SHIFT + DROP | WRITE: "NOT IN THIS VERSION" (phase 2) |
 | anywhere (synth) | SHIFT + notes (page closed) | slot OFF or SHAPE: CHORD1's gesture, learn a SHAPE (one note = slot OFF); MAP: just plays (never drops MAP mid-song) |
 | anywhere (synth) | SHIFT + T2 | HOLD: latches chords only (everything when the slot is OFF); a new chord replaces the held one |
@@ -409,7 +409,10 @@ three knobs stay for precision.
   6, MIN6, MIN^7 | SUS4, SUS2, 5, 7SUS4, 9SUS4 | ADD9, 6/9, MAJ9, 9, MIN9, MIN11, 13 | 7#11, 7b9, 7#9, 7b13, AUG. The
   everyday triads and sevenths are within 8 detents of NOTE (MAJ <-> MIN is one detent); then sixths, the open (no
   third) group, the colour chords, the altered ones. Leaving MAJ for NOTE takes two detents within ~1 s (a wall), so a
-  scan can't clear a key by accident.
+  scan can't clear a key by accident: the second detent counts only after resting at MAJ for ~0.3 s ("AGAIN = NOTE"),
+  so a fast left spin stops at MAJ.
+- Rootless colour qualities (MAJ9, 9, MIN9, MIN11, 13, 7b9, 7b13, 9SUS4) add their root right under them when the map's
+  BASS is off (shed first, like BASS), so every scan step sounds its root, as on the Cycles.
 - Audition: on a held (or HOLD-latched) key the chord changes as the knob turns. Only the notes that change retrigger,
   so a scan is a smooth morph, not a stream of re-attacks. Nothing sounds from a knob alone (no stray notes on stage).
 - The title shows the full name; while green turns, a 29-tick strip replaces the green underline (taller ticks mark the
@@ -461,10 +464,10 @@ three knobs stay for precision.
 - Re-voicing a sounding key (knob audition) goes through the same budget.
 
 ### Diagnostics (page, SHIFT held): what the morning test reads
-- Line 1: `HOOK F<frames> K<knob turns> D<last raw delta> SP<SPLIT> LI<LIFT> DR<DROP> UP<SHIFT releases> DN<SHIFT
-  presses> CT[0]`.
-- Line 2: `FILE <-|NONE|A|B|BAD> <seq> SAVE <count> <-|OK|OPEN|WRITE|CLOSE|TORN> MK<mkdir> VOX <voices> SHED <n>
-  [FB]` (`FB` = the frame hook does not run, page drawn by our engine screen).
+- Line 1: `HOOK F:<frames> K:<knob turns> D:<last raw delta> SP:<SPLIT> LI:<LIFT> DR:<DROP> UP:<SHIFT releases>
+  DN:<SHIFT presses> CT|CT0`.
+- Line 2: `FILE <-|NONE|A|B|BAD> L:<load tries> <seq> SAVE <count> <-|OK|OPEN|WRITE|CLOSE|TORN> MK:<mkdir> VOX <voices>
+  H:<latched keys> SHED <n> PG:<purges> [FB]` (`FB` = the frame hook does not run, page drawn by our engine screen).
 
 ### Cut from the MVP (and why)
 - SMOOTH, STRUM, WRITE (scale fill, copy + transpose, factory restore): phase 2/3; user decision 2 puts these live
@@ -473,7 +476,7 @@ three knobs stay for precision.
 - Map names are fixed (factory names; empty maps show none).
 
 ### Factory maps as built
-- 1 DIATONIC C (close), 2 II-V-I with TOPs set so each group voice-leads (6 semitones of movement over its two
+- 1 DIATONIC C with TOPs that keep each octave's chords in one register (tops A4..B4 low, F5..G5 high), 2 II-V-I with TOPs set so each group voice-leads (6 semitones of movement over its two
   changes, found by search: e.g. G-7 TOP +2, C7 0, F^7 +2), 3 NEO SOUL on the lower octave only (F3..E4; the upper
   octave plays plain notes for a melody over a held pad), BASS on, 4 POP. Maps 5..8 empty.
 
@@ -522,6 +525,28 @@ three knobs stay for precision.
   - LEARN tag aligned;
   - the header baseline;
   - AS PLAYED in the VOICING slot.
+
+- **UX round 2** (a live performer: OP-1, Digitakt, Prophet; house, lo-fi, neo-soul; knows the Cycles). No blockers.
+  Adopted:
+  - a plain note over a sounding chord no longer takes the edit (a melody over a pad);
+  - a SHIFT combo during a learn cancels it;
+  - the wall needs a rest (a spin can't fall through), with a message;
+  - rootless qualities keep their root without BASS;
+  - a learned 5-note voicing keeps all 5 (the lowest as its bass);
+  - a learn over a latched pad sheds the pad before its own notes;
+  - SHIFT alone no longer moves the edited key (only the first learn note does);
+  - freeze ~4 s;
+  - undo groups per knob;
+  - the chip framed red while HOLD is on;
+  - the pin ends when the page closes; DROP pastes where you tapped;
+  - "TURN GREEN FIRST" for VOICING on an unrecognised learned chord;
+  - DIATONIC C's register;
+  - diagnostics: load tries `L`, latched keys `H`, stale purges `PG`, SHIFT presses `DN`.
+  Not adopted: SPLIT + key as select-and-pin (the user's scope has SPLIT + key = clear; a SPLIT tap pins instead);
+  group gaps on the II-V-I keys. To check on the device: TE stealing a kept common tone during long release tails
+  (morning test step).
+- Learned chords ignore the map's BASS (their own bass, if any, is the 5th note); a melody double-stop over a 5-voice pad
+  sheds the first melody note.
 
 ### Checks
 - `src/slot/test/chord2_check.py`: the engine test (`chord2_test.c`, 142 checks: model, factory maps, play, budget

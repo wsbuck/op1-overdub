@@ -190,6 +190,8 @@ static int is_on(int note) { return note >= 0 && note < 128 && sounding[note]; }
 static void fresh(uint32_t mask)
 {
     memcpy(&c2, &c2_boot, sizeof c2);
+    for (int k = 0; k < 24; k++)
+        c2.d.maps[0][k].top = 0;          /* the play tests count notes of DIATONIC C in close root position */
     features = mask;
     hold_on = hold_keys = 0;
     chord_on = chord_learning = 0;
@@ -227,7 +229,7 @@ static void t_model(void)
                 for (int rt = -5; rt <= 6; rt++) {
                     struct c2_chord c = { (int8_t)rt, (uint8_t)q, (uint8_t)f, (int8_t)top, { 0 }, 0, 0, 0, 0 };
                     int8_t iv[C2_NOTES];
-                    int bi, n = c2_notes(&c, 0, iv, &bi);
+                    int bi, n = c2_notes(&c, -1, iv, &bi);
                     int got = c2_recognise(iv, n, &root);
                     total++;
                     named += got != Q_CUSTOM && c2_mask(c2_q[got].iv, c2_q[got].n, root) == c2_mask(iv, n, 0);
@@ -543,7 +545,10 @@ static void t_page(void)
     knob(1, -1);
     CHECK(c2.d.maps[0][7].q == Q_MAJ, "a wall before NOTE: one detent stays on MAJ");
     knob(1, -1);
-    CHECK(c2.d.maps[0][7].q == Q_NONE && count_sounding() == 1, "a second detent: the key plays its note");
+    CHECK(c2.d.maps[0][7].q == Q_MAJ, "a fast second detent stays too (a spin can't fall through)");
+    frames(12);
+    knob(1, -1);
+    CHECK(c2.d.maps[0][7].q == Q_NONE && count_sounding() == 1, "after resting at the wall, one more: the key plays its note");
     knob(1, 2);
     CHECK(c2.d.maps[0][7].q == Q_MIN, "and up again from the note: MAJ, MIN");
     frames(40);
@@ -554,18 +559,19 @@ static void t_page(void)
     key_dn(9);
     key_up(9);
     CHECK(c2.sel == 7, "frozen after a knob turn: playing another key does not move the edit");
-    shift(1);
-    shift(0);
+    frames(C2_FREEZE + 2);
     key_dn(9);
     key_up(9);
-    CHECK(c2.sel == 9, "SHIFT ends the freeze");
+    CHECK(c2.sel == 9, "after the freeze a tap moves the edit");
     /* ROOT, TOP, VOICING */
     c2.sel = 7;
     frames(C2_FREEZE + 2);
     knob(0, 2);
     c2_name(b, &c2.d.maps[0][7], 7, 0, 0);
     knob(0, -2);
-    knob(1, -100);                        /* through the wall to NOTE */
+    knob(1, -100);
+    frames(12);
+    knob(1, -1);                          /* through the wall to NOTE */
     knob(1, Q_MAJ7);                      /* NOTE -> MAJ7 */
     CHECK(c2.d.maps[0][7].q == Q_MAJ7, "TYPE to ^7");
     knob(2, 2);
@@ -618,12 +624,29 @@ static void t_page(void)
     key_up(11);
     CHECK(c2.sel == 7, "frozen after a knob turn: the tap does not move the edit...");
     shift(1);
-    CHECK(c2.sel == 11, "...but SHIFT adopts the last tapped key (a learn goes there)");
+    CHECK(c2.sel == 7, "SHIFT alone keeps the edited key");
+    key_dn(14);
+    CHECK(c2.sel == 11 && c2.learning, "...the first learn note moves it to the last key tapped");
     shift(0);
+    key_up(14);
+    shift_key(KEY_LIFT);
+    shift_key(KEY_LIFT);
     shift_key(KEY_LIFT);
     CHECK(c2.msg == MSG_UNDONE, "undo says UNDONE");
     shift_key(KEY_LIFT);
     CHECK(c2.msg == MSG_REDONE, "undo again says REDONE");
+    /* a melody note over a sounding chord doesn't take the edit */
+    frames(C2_FREEZE + 2);
+    key_dn(4);                            /* A-7 sounding (edited) */
+    key_dn(13);                           /* F#4: plain */
+    CHECK(c2.sel == 4, "a plain key over a sounding chord leaves the edited key alone");
+    key_up(13);
+    key_up(4);
+    /* a rootless colour chord keeps its root without BASS */
+    struct c2_chord m9 = { 0, Q_MIN9, 0, 0, { 0 }, 0, 0, 0, 0 };
+    int8_t r9[C2_NOTES];
+    int rb, rn = c2_notes(&m9, 0, r9, &rb);
+    CHECK(rn == 5 && rb == 0 && c2_mod12(r9[0]) == 0, "MIN9 without BASS: its root under it, sheddable");
     /* T1..T4 close the page and go on */
     te_press_calls = 0;
     c2_press(0, 6);
@@ -685,8 +708,11 @@ static void t_learn(void)
     for (int k = 0; k < 6; k++)
         key_dn(k * 2);
     shift(0);
-    CHECK(c2.d.maps[0][7].n == 4 && c2.msg == MSG_MAX4 && c2.d.maps[0][7].iv[0] == -7 && c2.d.maps[0][7].iv[3] == 3,
-          "6 notes: the bass and the top 3 kept (melody kept), MAX 4 shown");
+    CHECK(c2.d.maps[0][7].n == 4 && c2.msg == MSG_MAX4 && c2.d.maps[0][7].has_slash && c2.d.maps[0][7].slash == -7 &&
+          c2.d.maps[0][7].iv[0] == -3 && c2.d.maps[0][7].iv[3] == 3, "6 notes: the bass and the top 4 kept, MAX shown");
+    int8_t lv[C2_NOTES];
+    int lb, ln = c2_notes(&c2.d.maps[0][7], 0, lv, &lb);
+    CHECK(ln == 5 && lv[0] == -7, "a learned 5-note voicing plays 5 notes, its bass included");
     all_up();
     /* one note maps a single note */
     shift(1);
@@ -702,6 +728,17 @@ static void t_learn(void)
     shift(0);
     all_up();
     CHECK(!memcmp(&keep, &c2.d.maps[0][7], sizeof keep), "SHIFT+T2 then a note under the same SHIFT: no learn");
+    /* SHIFT+LIFT during a learn cancels the learn and does not undo */
+    struct c2_chord keep2 = c2.d.maps[0][7];
+    int undo_before = (int)c2.undo_ok;
+    shift(1);
+    key_dn(0);
+    key_dn(4);
+    hold_shiftkey(0, KEY_LIFT);
+    shift(0);
+    all_up();
+    CHECK(!c2.learning && c2.msg == MSG_LEARN_CANCEL && !memcmp(&keep2, &c2.d.maps[0][7], sizeof keep2) &&
+          (int)c2.undo_ok == undo_before, "SHIFT+LIFT during a learn cancels it (nothing written, nothing undone)");
     /* knobs during a learn do nothing */
     shift(1);
     key_dn(4);
@@ -749,6 +786,7 @@ static void t_learn(void)
     key_dn(1);
     key_up(1);                            /* a plain key: no SHIFT combo pending */
     c2.sel = 7;
+    c2.last_tap = 7;
     shift_down = 1;
     key_dn(4); key_dn(7);
     shift_down = 0;

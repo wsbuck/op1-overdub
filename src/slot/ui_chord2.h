@@ -22,6 +22,7 @@ struct c2_view {                    /* what the screens need besides the state *
     int slot;                       /* synth slot 0..7, -1 unknown */
     int octave;                     /* TE's octave for the slot (-2..2): names and the ruler follow it */
     int hold;                       /* HOLD on */
+    uint32_t held;                  /* keys HOLD latches */
     int shift;                      /* SHIFT held */
     uint32_t now;                   /* c2.clock */
 };
@@ -365,8 +366,11 @@ static const char *c2u_msg(const struct c2_state *s, int mode, char *b)
     case MSG_REDONE: return "REDONE";
     case MSG_PINNED: return "KEY PINNED  \\ UNPINS";
     case MSG_UNPINNED: return "UNPINNED";
+    case MSG_WALL: return "AGAIN = NOTE";
+    case MSG_LEARN_CANCEL: return "LEARN CANCELLED";
+    case MSG_GREEN_FIRST: return "TURN GREEN FIRST";
     case MSG_LEARNED: return "LEARNED  SHIFT+[ UNDOES";
-    case MSG_MAX4: return "MAX 4: BASS + TOP 3";
+    case MSG_MAX4: return "MAX 5: BASS + TOP 4";
     case MSG_EMPTY_CLIP: return "[ COPIES FIRST";
     case MSG_LATER: return "NOT IN THIS VERSION";
     case MSG_TURN_GREEN: return mode ? "TURN GREEN FOR A CHORD" : "SHIFT+BLUE: MODE";
@@ -401,25 +405,31 @@ static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_v
         ctext(r, val[i], x, FP(33), FP(1) + (FP(1) >> 1), off ? GREY : c2u_knob_col[i], 1);
     }
     const struct c2_diag *g = &s->dg;
-    p = c2u_s(b, "HOOK F");
+    p = c2u_s(b, "HOOK F:");
     p = c2u_i(p, (int32_t)(g->frames & 0xFFFF));
-    p = c2u_i(c2u_s(p, " K"), (int32_t)g->knobs);
-    p = c2u_i(c2u_s(p, " D"), g->knob_delta);
-    p = c2u_i(c2u_s(p, " SP"), (int32_t)g->split);
-    p = c2u_i(c2u_s(p, " LI"), (int32_t)g->lift);
-    p = c2u_i(c2u_s(p, " DR"), (int32_t)g->drop);
-    p = c2u_i(c2u_s(p, " UP"), (int32_t)g->shift_up);
-    p = c2u_i(c2u_s(p, " DN"), (int32_t)g->shift_dn);
+    p = c2u_i(c2u_s(p, " K:"), (int32_t)g->knobs);
+    p = c2u_i(c2u_s(p, " D:"), g->knob_delta);
+    p = c2u_i(c2u_s(p, " SP:"), (int32_t)g->split);
+    p = c2u_i(c2u_s(p, " LI:"), (int32_t)g->lift);
+    p = c2u_i(c2u_s(p, " DR:"), (int32_t)g->drop);
+    p = c2u_i(c2u_s(p, " UP:"), (int32_t)g->shift_up);
+    p = c2u_i(c2u_s(p, " DN:"), (int32_t)g->shift_dn);
     c2u_s(p, g->ctl_synth ? " CT" : " CT0");
     c2u_diag_line(r, b, FP(48));
     p = c2u_s(b, "FILE ");
     p = c2u_s(p, c2u_load_name[g->load >= 0 && g->load < 5 ? g->load : 0]);
+    p = c2u_i(c2u_s(p, " L:"), (int32_t)s->load_tries);
     p = c2u_i(c2u_s(p, " "), g->load_seq);
     p = c2u_i(c2u_s(p, " SAVE "), (int32_t)g->saves);
     p = c2u_s(c2u_s(p, " "), c2u_save_name[g->save_err >= 0 && g->save_err < 6 ? g->save_err : 0]);
-    p = c2u_i(c2u_s(p, " MK"), g->mkdir_ret);
+    p = c2u_i(c2u_s(p, " MK:"), g->mkdir_ret);
     p = c2u_i(c2u_s(p, " VOX "), g->voices);
+    int held = 0;
+    for (int k = 0; k < C2_KEYS; k++)
+        held += (int)(v->held >> k & 1);
+    p = c2u_i(c2u_s(p, " H:"), held);
     p = c2u_i(c2u_s(p, " SHED "), (int32_t)g->sheds);
+    p = c2u_i(c2u_s(p, " PG:"), (int32_t)g->purges);
     if (g->fb_frames)
         c2u_s(p, " FB");
     c2u_diag_line(r, b, FP(57));
@@ -522,8 +532,8 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
     }
     const char *msg = v->now - s->msg_frame <= C2_FLASH ? c2u_msg(s, mode, b) : 0;
     int red = learning || s->msg == MSG_MAX4;
-    if (!msg && learning && s->learn_n > C2_MAX) {
-        msg = "MAX 4: BASS + TOP 3";
+    if (!msg && learning && s->learn_n > C2_NOTES) {
+        msg = "MAX 5: BASS + TOP 4";
         red = 1;
     }
     if (msg) {
@@ -641,10 +651,10 @@ static void c2_draw_chip(void *r, const struct c2_state *s, const struct c2_view
         return;
     }
     if (c2u_last(s, v, nm, &fresh)) {
-        c2u_tag(r, nm, FP(314), FP(3), FP(2), c2_mode_map(mode) >= 0 ? BLUE : WHITE, fresh ? WHITE : GREY, 1, 1);
+        c2u_tag(r, nm, FP(314), FP(3), FP(2), v->hold ? RED : c2_mode_map(mode) >= 0 ? BLUE : WHITE, fresh ? WHITE : GREY, 1, 1);
         return;
     }
-    c2u_tag(r, c2u_mode_name(mode, b), FP(314), FP(4), FP(1) + (FP(1) >> 2), GREY, GREY, 1, 3);   /* fast: 0 AA */
+    c2u_tag(r, c2u_mode_name(mode, b), FP(314), FP(4), FP(1) + (FP(1) >> 2), v->hold ? RED : GREY, GREY, 1, 3);   /* 0 AA */
 }
 
 /* The frame hook's bookkeeping (ui.c c2_frame): count the frame, and close the page once the synth screens are left

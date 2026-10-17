@@ -107,6 +107,7 @@ static void view(struct c2_view *v)
     v->slot = slot;
     v->octave = octave[slot];
     v->hold = hold_on != 0;
+    v->held = hold_keys;
     v->shift = shift_down;
     v->now = c2.clock;
 }
