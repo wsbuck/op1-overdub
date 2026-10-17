@@ -8,11 +8,13 @@
  * (`loading` set: the keys play plain notes meanwhile); every other write of `d` is ours, here.
  *
  * Hooks (build_slot.py --chord; addresses notes/chord2.md "MVP as built"):
- *   c2_press    synth controller press slot +0x14 (0x019119A8 -> 0x01A51058): SHIFT ends the edit freeze; with the page
- *               open SPLIT / LIFT / DROP are ours, T1..T4 close the page and go on to TE
+ *   c2_press    synth controller press slot +0x14 (0x019119A8 -> 0x01A51058), presses without SHIFT: with the page
+ *               open SPLIT / LIFT / DROP are ours, T1..T4 close the page and go on to TE; closed, all of them are TE's
  *   c2_release  release slot +0x24 (0x019119B8 -> 0x01A5056C, which always returns 0): SPLIT up, SHIFT up = learn ends
  *   c2_knob     encoder slot +0x2C (0x019119C0 -> 0x01A505BC): page open = ours (knob 0..3, SHIFT = 4..7), else TE's
- *   hold_shiftkey (shift slot +0x1C, CHORD1's): SHIFT+SPLIT opens / closes the page; on the page SHIFT+LIFT = undo
+ *   hold_shiftkey (shift slot +0x1C, CHORD1's): every press while SHIFT is down, note keys included (FUN_019b6c74
+ *               calls it before TE's global SHIFT handler FUN_019ac9b8, which then plays the note: FUN_019ac0b0);
+ *               SHIFT+SPLIT opens / closes the page; on the page SHIFT+LIFT = undo
  *   chord_keydown / hold_keyup (CHORD1's note-on / note-off CALLs): maps, the voice budget, HOLD chords-only, learn.
  */
 #include "chord2.h"
@@ -32,45 +34,51 @@
 #define FC(k, r, qq) [k] = { (r), (qq), 0, 0, { 0 }, 0, 0, 0, 0 }
 #define FT(k, r, qq, t) [k] = { (r), (qq), 0, (t), { 0 }, 0, 0, 0, 0 }
 #define SH { 0, Q_MAJ, 0, 0, { 0 }, 0, 0, 0, 0 }
+/* The factory maps 1..4 (5..8 empty): the boot state, and what SHIFT+DROP, DROP restores (c2_factory). */
+#define C2_FACTORY_MAPS \
+            /* 1 DIATONIC C: C major sevenths on the white keys, black keys plain; TOPs keep each octave's chords in \
+             * one register (tops A4..B4 on the lower keys, F5..G5 on the upper) instead of a root-position ladder */ \
+            [0] = { \
+                FT(0, 0, Q_MAJ7, 2), FT(2, 0, Q_7, 2), FT(4, 0, Q_MIN7, 1), FT(6, 0, Q_HDIM, 0), FT(7, 0, Q_MAJ7, 0), \
+                FT(9, 0, Q_MIN7, -1), FT(11, 0, Q_MIN7, -1), FT(12, 0, Q_MAJ7, 1), FT(14, 0, Q_7, 1), \
+                FT(16, 0, Q_MIN7, 0), FT(18, 0, Q_HDIM, -1), FT(19, 0, Q_MAJ7, -1), FT(21, 0, Q_MIN7, -2), \
+                FT(23, 0, Q_MIN7, -2), \
+            }, \
+            /* 2 II-V-I in F, Bb, Eb, C on groups of three white keys; D D# E = the minor ii-V-i to C minor. TOPs set so \
+             * each group voice-leads (6 semitones of movement over the two changes; SMOOTH is phase 2) */ \
+            [1] = { \
+                FT(0, 2, Q_MIN7, 2), FT(2, 5, Q_7, 0), FT(4, -4, Q_MAJ7, 2), \
+                FT(6, 1, Q_MIN7, 0), FT(7, 5, Q_7, -2), FT(9, -4, Q_MAJ7, 0), \
+                FT(11, 1, Q_MIN7, -1), FT(12, 5, Q_7, -3), FT(14, -4, Q_MAJ7, -1), \
+                FT(16, 5, Q_MIN7, -4), FT(18, -4, Q_7, -2), FT(19, 0, Q_MAJ7, -4), \
+                FT(21, 0, Q_HDIM, -4), FT(22, 4, Q_7B9, -7), FT(23, -4, Q_MIN6, -3), \
+            }, \
+            /* 3 NEO SOUL: m9 / maj9 / 13 / 7#9 colours around Eb major / C minor on the lower octave (flat roots on the \
+             * black keys); the upper octave plays plain notes for a melody over a held pad */ \
+            [2] = { \
+                FC(0, 0, Q_MIN9), FC(2, 0, Q_7S9), FC(3, 0, Q_MAJ9), FC(5, 0, Q_13), FC(7, 0, Q_MIN9), \
+                FC(8, 0, Q_MAJ9), FC(9, 0, Q_MIN7), FC(10, 0, Q_MAJ9), FC(11, 0, Q_HDIM), \
+            }, \
+            /* 4 POP: C major triads on the white keys, borrowed chords on the black ones */ \
+            [3] = { \
+                FC(0, 0, Q_MAJ), FC(2, 0, Q_MAJ), FC(4, 0, Q_MIN), FC(6, 0, Q_DIM), FC(7, 0, Q_MAJ), FC(9, 0, Q_MIN), \
+                FC(11, 0, Q_MIN), FC(12, 0, Q_MAJ), FC(14, 0, Q_MAJ), FC(16, 0, Q_MIN), FC(18, 0, Q_DIM), \
+                FC(19, 0, Q_MAJ), FC(21, 0, Q_MIN), FC(23, 0, Q_MIN), FC(1, -1, Q_MIN), FC(3, 0, Q_MAJ), \
+                FC(5, 0, Q_MAJ), FC(8, 1, Q_MAJ), FC(10, 0, Q_MAJ), FC(13, -1, Q_MIN), FC(15, 0, Q_MAJ), \
+                FC(17, 0, Q_MAJ), FC(20, 1, Q_MAJ), FC(22, 0, Q_MAJ), \
+            },
+#define C2_FACTORY_SET { { 0, 0, 0, 0, "DIATONIC C" }, { 0, 1, 1, 0, "II-V-I" }, { 1, 1, 1, 0, "NEO SOUL" }, { 0, 0, 1, 0, "POP" } }
+#define C2_FACTORY_N 4
+static const struct c2_chord c2_factory_maps[C2_FACTORY_N][C2_KEYS] = { C2_FACTORY_MAPS };
+static const struct c2_set c2_factory_set[C2_FACTORY_N] = C2_FACTORY_SET;
 struct c2_state c2 RAM = {
     .d = {
-        .maps = {
-            /* 1 DIATONIC C: C major sevenths on the white keys, black keys plain; TOPs keep each octave's chords in
-             * one register (tops A4..B4 on the lower keys, F5..G5 on the upper) instead of a root-position ladder */
-            [0] = {
-                FT(0, 0, Q_MAJ7, 2), FT(2, 0, Q_7, 2), FT(4, 0, Q_MIN7, 1), FT(6, 0, Q_HDIM, 0), FT(7, 0, Q_MAJ7, 0),
-                FT(9, 0, Q_MIN7, -1), FT(11, 0, Q_MIN7, -1), FT(12, 0, Q_MAJ7, 1), FT(14, 0, Q_7, 1),
-                FT(16, 0, Q_MIN7, 0), FT(18, 0, Q_HDIM, -1), FT(19, 0, Q_MAJ7, -1), FT(21, 0, Q_MIN7, -2),
-                FT(23, 0, Q_MIN7, -2),
-            },
-            /* 2 II-V-I in F, Bb, Eb, C on groups of three white keys; D D# E = the minor ii-V-i to C minor. TOPs set so
-             * each group voice-leads (6 semitones of movement over the two changes; SMOOTH is phase 2) */
-            [1] = {
-                FT(0, 2, Q_MIN7, 2), FT(2, 5, Q_7, 0), FT(4, -4, Q_MAJ7, 2),
-                FT(6, 1, Q_MIN7, 0), FT(7, 5, Q_7, -2), FT(9, -4, Q_MAJ7, 0),
-                FT(11, 1, Q_MIN7, -1), FT(12, 5, Q_7, -3), FT(14, -4, Q_MAJ7, -1),
-                FT(16, 5, Q_MIN7, -4), FT(18, -4, Q_7, -2), FT(19, 0, Q_MAJ7, -4),
-                FT(21, 0, Q_HDIM, -4), FT(22, 4, Q_7B9, -7), FT(23, -4, Q_MIN6, -3),
-            },
-            /* 3 NEO SOUL: m9 / maj9 / 13 / 7#9 colours around Eb major / C minor on the lower octave (flat roots on the
-             * black keys); the upper octave plays plain notes for a melody over a held pad */
-            [2] = {
-                FC(0, 0, Q_MIN9), FC(2, 0, Q_7S9), FC(3, 0, Q_MAJ9), FC(5, 0, Q_13), FC(7, 0, Q_MIN9),
-                FC(8, 0, Q_MAJ9), FC(9, 0, Q_MIN7), FC(10, 0, Q_MAJ9), FC(11, 0, Q_HDIM),
-            },
-            /* 4 POP: C major triads on the white keys, borrowed chords on the black ones */
-            [3] = {
-                FC(0, 0, Q_MAJ), FC(2, 0, Q_MAJ), FC(4, 0, Q_MIN), FC(6, 0, Q_DIM), FC(7, 0, Q_MAJ), FC(9, 0, Q_MIN),
-                FC(11, 0, Q_MIN), FC(12, 0, Q_MAJ), FC(14, 0, Q_MAJ), FC(16, 0, Q_MIN), FC(18, 0, Q_DIM),
-                FC(19, 0, Q_MAJ), FC(21, 0, Q_MIN), FC(23, 0, Q_MIN), FC(1, -1, Q_MIN), FC(3, 0, Q_MAJ),
-                FC(5, 0, Q_MAJ), FC(8, 1, Q_MAJ), FC(10, 0, Q_MAJ), FC(13, -1, Q_MIN), FC(15, 0, Q_MAJ),
-                FC(17, 0, Q_MAJ), FC(20, 1, Q_MAJ), FC(22, 0, Q_MAJ),
-            },
-        },
-        .set = { { 0, 0, 0, 0, "DIATONIC C" }, { 0, 1, 1, 0, "II-V-I" }, { 1, 1, 1, 0, "NEO SOUL" }, { 0, 0, 1, 0, "POP" } },
+        .maps = { C2_FACTORY_MAPS },
+        .set = C2_FACTORY_SET,
         .shape = { SH, SH, SH, SH, SH, SH, SH, SH },
     },
-    .sel = 7, .turned = -1, .last_key = -1, .file_slot = -1,
+    .sel = 7, .turned = -1, .last_key = -1, .last_tap = -1, .file_slot = -1,
+    .dg = { .learn_end = C2_LE_NONE, .combo_key = -1 },
 };
 #undef FC
 #undef FT
@@ -100,6 +108,13 @@ static void c2_copy(void *dst, const void *src, int n)
     const uint8_t *s = src;
     for (int i = 0; i < n; i++)
         d[i] = s[i];
+}
+
+static void c2_zero(void *dst, int n)
+{
+    volatile uint8_t *d = dst;         /* volatile: GCC must not turn this into a memset call */
+    for (int i = 0; i < n; i++)
+        d[i] = 0;
 }
 
 static void c2_flash(int msg, int arg)
@@ -160,7 +175,64 @@ static struct c2_chord *c2_target(void)
     return 0;
 }
 
-static int c2_frozen(void) { return c2.pinned || (c2.knob_frame && c2_now() - c2.knob_frame <= C2_FREEZE); }
+static void c2_revoice_all(void);
+
+/* Restore the map to its factory contents (maps 5..8: empty) after SHIFT+DROP armed it; one undo gesture. */
+static int c2_restore_armed(void)
+{
+    return c2.restore_frame && c2_now() + 1 - c2.restore_frame <= C2_ARM;
+}
+
+static void c2_disarm(void) { c2.restore_frame = 0; }
+
+static void c2_restore_ask(void)
+{
+    int m = c2_mode_map(c2_mode());
+    if (m < 0 || c2.loading) {
+        c2_disarm();
+        c2_flash(MSG_FACTORY_NOMAP, 0);
+        return;
+    }
+    c2.restore_frame = c2_now() + 1;   /* + 1: never 0 */
+    c2.restore_map = m;
+    c2_flash(MSG_FACTORY_ASK, m);
+}
+
+static void c2_restore(void)
+{
+    int m = c2.restore_map;
+    c2_disarm();
+    if (m < 0 || m >= C2_MAPS || c2.loading || c2_mode_map(c2_mode()) != m)
+        return;
+    c2_snapshot(0);
+    /* whole-map copies, one flat loop each (a per-key loop around the inlined copy came out wrong from the bfin
+     * GCC 4.3 at -O2 in the simulator: keys after the first left zero) */
+    if (m < C2_FACTORY_N) {
+        c2_copy(c2.d.maps[m], c2_factory_maps[m], sizeof c2.d.maps[m]);
+        c2_copy(&c2.d.set[m], &c2_factory_set[m], sizeof c2.d.set[m]);
+    } else {
+        c2_zero(c2.d.maps[m], sizeof c2.d.maps[m]);   /* Q_NONE = 0: every key plays its note */
+        c2_zero(&c2.d.set[m], sizeof c2.d.set[m]);
+    }
+    c2_touch();
+    c2_revoice_all();
+    c2_flash(MSG_FACTORY_DONE, m);
+}
+
+/* TE's note key codes (FUN_019c316c, table 0x018E0A80: 0x0D..0x0F, 0x16..0x20, 0x27..0x2A, 0x30..0x35). With SHIFT
+ * down they reach the SHIFT slot first, then TE's handler plays them: they are a learn's notes, not combos. */
+static int c2_note_code(int key)
+{
+    return (key >= 0x0D && key <= 0x0F) || (key >= 0x16 && key <= 0x20) || (key >= 0x27 && key <= 0x2A) ||
+           (key >= 0x30 && key <= 0x35);
+}
+
+/* This SHIFT press did a combo (`key`: the key code, 0x100 + knob): it no longer learns. */
+static void c2_combo(int key)
+{
+    c2.shift_used = 1;
+    c2.dg.combo_key = key;
+}
 
 /* ---- playing: our own voice tracking, by key ---- */
 
@@ -425,13 +497,14 @@ static void c2_learn_note(int key, int32_t note)
 {
     if (!c2.learning) {
         c2.learning = 1;
+        c2.dg.learn_starts++;
         c2.learn_frame = c2_now();
         c2.learn_n = 0;
         c2.learn_over = 0;
         c2.learn_page = (int32_t)c2.page;
         int32_t t[5];
         if (c2.page && !c2.pinned && c2.last_tap >= 0 && c2.last_tap < C2_KEYS)
-            c2.sel = c2.last_tap;      /* a learn goes to the last key tapped, even while frozen */
+            c2.sel = c2.last_tap;      /* a learn goes to the edited key: the last key tapped, unless pinned */
         if (c2.page && c2.sel >= 0 && c2.sel < C2_KEYS) {
             te_make_note(t, c2.sel, 0x7F);
             c2.learn_base = t[0];
@@ -481,15 +554,19 @@ static int c2_learn_take(int8_t *iv, int *over)
     return n;
 }
 
-static void c2_learn_commit(void)
+static void c2_learn_commit(int why)
 {
     if (!c2.learning || c2.loading)
         return;
     c2.learning = 0;
     int8_t iv[C2_NOTES];
     int over, n = c2_learn_take(iv, &over), s = c2_slot();
-    if (!n || s < 0)
+    if (!n || s < 0) {
+        c2.dg.learn_end = C2_LE_EMPTY;
         return;
+    }
+    c2.dg.learn_end = (uint32_t)why;
+    c2.dg.learn_ok++;
     c2_snapshot(0);
     struct c2_chord nc;
     c2_clear(&nc);
@@ -541,6 +618,7 @@ static void c2_keydown(int32_t *note)
         c2_release_key(key);           /* its key-up never came */
     c2.dead &= ~bit;
     if (c2.page && c2.split_down) {    /* SPLIT + key: clear that key's chord, play nothing */
+        int was = c2.sel;
         c2.sel = key;
         struct c2_chord *t = c2.loading ? 0 : c2_target();
         if (t) {
@@ -552,6 +630,10 @@ static void c2_keydown(int32_t *note)
         c2_flash(MSG_CLEARED, key);
         c2.split_used = 1;
         c2.dead |= bit;
+        if (c2.pinned)
+            c2.sel = was;              /* pinned: the cleared key does not take the edit */
+        else
+            c2.last_tap = key;
         return;
     }
     uint8_t rel[C2_NOTES];
@@ -559,8 +641,14 @@ static void c2_keydown(int32_t *note)
     if (!SHIFT_DOWN)
         c2.shift_used = 0;             /* also without the press hook: a plain key ends any SHIFT combo */
     int learn = SHIFT_DOWN && !c2.shift_used && (c2.page || c2_mode() <= 1);
-    if (SHIFT_DOWN && !learn)
-        c2.shift_used = 1;             /* SHIFT + note in MAP off the page, or after a combo: just play */
+    if (SHIFT_DOWN && !learn) {        /* SHIFT + note in MAP off the page, or after a combo: just play */
+        if (!c2.learning) {
+            c2.dg.learn_blocked++;
+            c2.dg.learn_end = c2.shift_used ? C2_LE_BLOCKED : C2_LE_MAP;
+        }
+        if (!c2.shift_used)
+            c2_combo(key + 0x200);     /* MAP off the page: this SHIFT press stays a plain one */
+    }
     if (learn) {                       /* learn: SHIFT + notes, which sound as played */
         c2_learn_note(key, note[0]);
         rel[0] = (uint8_t)(key + REL_OFS);
@@ -568,11 +656,11 @@ static void c2_keydown(int32_t *note)
         return;
     }
     if (c2.learning)
-        c2_learn_commit();             /* SHIFT's release was not seen: the first plain note ends the learn */
+        c2_learn_commit(C2_LE_NOTE);   /* SHIFT's release was not seen: the first plain note ends the learn */
     n = c2_key_notes(key, rel, &chord, &bass);
-    if (c2.page) {                     /* a melody note over a sounding chord doesn't take the edit from the pad */
+    if (c2.page) {                     /* the edited key = the last key pressed, unless pinned */
         c2.last_tap = key;
-        if (!c2_frozen() && (chord || !(c2.sounding & ~bit)))
+        if (!c2.pinned)
             c2.sel = key;
     }
     if (!n)
@@ -615,18 +703,22 @@ static int c2_learn_cancel(void)
     if (!c2.learning)
         return 0;
     c2.learning = 0;
+    c2.dg.learn_cancels++;
+    c2.dg.learn_end = C2_LE_CANCEL;
     c2_flash(MSG_LEARN_CANCEL, 0);
     return 1;
 }
 
 static int c2_shiftkey(int key)
 {
-    c2.shift_used = 1;                 /* any SHIFT + key combo: this SHIFT press no longer learns */
+    c2_disarm();                       /* any SHIFT combo drops a pending RESTORE FACTORY? (SHIFT+DROP asks again) */
+    if (c2_note_code(key))
+        return 0;                      /* SHIFT + a note: TE plays it next, and c2_keydown learns it */
     if ((key == KEY_LIFT || key == KEY_DROP || key == KEY_SPLIT) && c2_learn_cancel())
         return 1;                      /* a combo during a learn cancels it and does nothing else */
     if (key == KEY_SPLIT) {
         c2.page = !c2.page;
-        c2.pinned = 0;
+        c2.pinned = 0;                 /* the pin ends when the page closes (and a page opens unpinned) */
         c2.split_down = 0;
         c2.turned = -1;
         c2.msg = MSG_NONE;
@@ -641,8 +733,8 @@ static int c2_shiftkey(int key)
         c2_revoice_all();
         return 1;
     }
-    if (key == KEY_DROP) {
-        c2_flash(MSG_LATER, 0);        /* WRITE (scale fill, copy, factory) is phase 2 */
+    if (key == KEY_DROP) {             /* RESTORE FACTORY? (the full WRITE page is phase 2); a plain DROP confirms */
+        c2_restore_ask();
         return 1;
     }
     return 0;
@@ -651,13 +743,15 @@ static int c2_shiftkey(int key)
 static int c2_press_key(int key)
 {
     if (c2.learning && !SHIFT_DOWN)
-        c2_learn_commit();             /* SHIFT was let go where our release slot didn't see it */
+        c2_learn_commit(C2_LE_PRESS);  /* SHIFT was let go where our release slot didn't see it */
     if (key == KEY_SPLIT)
         c2.dg.split++;
     else if (key == KEY_LIFT)
         c2.dg.lift++;
     else if (key == KEY_DROP)
         c2.dg.drop++;
+    if (key != KEY_SHIFT && !(key == KEY_DROP && c2.page && c2_restore_armed()))
+        c2_disarm();
     if (key == KEY_SHIFT) {
         c2.dg.shift_dn++;
         c2.shift_used = 0;             /* the edited key moves only at the first learn note (c2_learn_note) */
@@ -668,11 +762,19 @@ static int c2_press_key(int key)
     if (key == KEY_SPLIT) {
         c2.split_down = 1;
         c2.split_used = 0;
+        c2.split_frame = c2_now();
         return 1;
     }
-    if (key == KEY_DROP && c2.last_tap >= 0 && c2.last_tap < C2_KEYS)
-        c2.sel = c2.last_tap;          /* LIFT on one key, tap another, DROP: pasted where you tapped */
+    if (key == KEY_DROP && c2_restore_armed()) {
+        c2_restore();                  /* SHIFT+DROP, then DROP: the map back to factory */
+        return 1;
+    }
     if (key == KEY_LIFT || key == KEY_DROP) {
+        /* LIFT copies the edited key; DROP pastes onto the last key tapped (the edited key unless pinned: pin a
+         * chord, LIFT, then tap and DROP to copy it around) */
+        int was = c2.sel;
+        if (key == KEY_DROP && c2.last_tap >= 0 && c2.last_tap < C2_KEYS)
+            c2.sel = c2.last_tap;
         struct c2_chord *t = c2.loading ? 0 : c2_target();
         if (!t)
             c2_flash(MSG_TURN_GREEN, 0);
@@ -688,17 +790,21 @@ static int c2_press_key(int key)
             c2_revoice_all();
             c2_flash(MSG_PASTED, c2.sel);
         }
+        c2.sel = was;                  /* the paste never moves the edited key */
         return 1;
     }
-    if (key >= KEY_T1 && key <= KEY_T4)
+    if (key >= KEY_T1 && key <= KEY_T4) {
         c2.page = 0;                   /* T1..T4 close the page and go on to TE's page */
+        c2.pinned = 0;
+    }
     return 0;
 }
 
 static void c2_release_key_ev(int key)
 {
     if (key == KEY_SPLIT) {
-        if (c2.split_down && !c2.split_used && c2.page) {   /* SPLIT tapped alone: pin / unpin the edited key */
+        if (c2.split_down && !c2.split_used && c2.page && c2_now() - c2.split_frame <= C2_TAP) {
+            /* SPLIT tapped alone (short: a SPLIT held to clear, then let go unused, does nothing): pin / unpin */
             c2.pinned = !c2.pinned;
             c2_flash(c2.pinned ? MSG_PINNED : MSG_UNPINNED, c2.sel);
         }
@@ -706,7 +812,7 @@ static void c2_release_key_ev(int key)
     }
     else if (key == KEY_SHIFT) {
         c2.dg.shift_up++;
-        c2_learn_commit();
+        c2_learn_commit(C2_LE_UP);
     }
 }
 
@@ -814,10 +920,11 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
 
 static void c2_knob_turn(int knob, int steps)
 {
+    c2_disarm();
     if (c2.loading || c2.learning || knob < 0 || knob > 7)
         return;                        /* knob turns during a learn do nothing (MODE can't change mid-learn) */
     if (knob >= 4)
-        c2.shift_used = 1;
+        c2_combo(0x100 + knob);
     int s = c2_slot();
     c2.turned = knob;
     if (knob >= 4) {                   /* SHIFT layer: the map's settings */

@@ -150,12 +150,15 @@ static void s_map_voicing(void)
     knob(3, 1);
     page();
 }
-static void s_frozen_playing(void)        /* C4 edited (frozen) while G7 is played */
+static void s_pinned_playing(void)        /* C4 pinned (SPLIT tapped) while G7 is played */
 {
     base(2);
     dn(7);
     up(7);
     knob(3, 1);
+    c2_press(0, KEY_SPLIT);
+    c2_release(0, KEY_SPLIT);
+    tick(80);
     dn(2);
     page();
 }
@@ -203,7 +206,41 @@ static void s_map_shift(void)             /* SHIFT held: MODE, BASS, the diagnos
     c2.dg.split = 2;
     c2.dg.lift = 1;
     c2.dg.shift_up = 5;
+    c2.dg.shift_dn = 5;
+    c2.dg.learn_starts = 3;
+    c2.dg.learn_ok = 2;
+    c2.dg.learn_cancels = 1;
+    c2.dg.learn_end = C2_LE_UP;
+    c2.dg.combo_key = KEY_SPLIT;
     shift_down = 1;
+    page();
+}
+static void s_unpinned(void)              /* SPLIT tapped again: UNPINNED, the open padlock */
+{
+    base(2);
+    dn(7);
+    up(7);
+    c2_press(0, KEY_SPLIT);
+    c2_release(0, KEY_SPLIT);
+    tick(80);
+    c2_press(0, KEY_SPLIT);
+    c2_release(0, KEY_SPLIT);
+    page();
+}
+static void s_notes_offkb(void)           /* D5 (top key), TOP up: notes past the keyboard's right edge, counted */
+{
+    base(2);
+    dn(21);
+    up(21);
+    tick(80);
+    knob(2, 3);
+    page();
+}
+static void s_factory_ask(void)           /* NEO SOUL, SHIFT+DROP (SHIFT still held): RESTORE FACTORY? */
+{
+    base(4);
+    shift(1);
+    hold_shiftkey(0, KEY_DROP);
     page();
 }
 static void s_cleared(void)
@@ -287,7 +324,9 @@ static void s_chip_idle(void)             /* silent: the slot's mode, dim */
 struct scene { const char *name; void (*fn)(void); };
 static const struct scene scenes[] = {
     { "map_play", s_map_play }, { "map_type_scan", s_map_type_scan }, { "map_top", s_map_top },
-    { "map_voicing", s_map_voicing }, { "frozen_playing", s_frozen_playing }, { "learn", s_learn },
+    { "map_voicing", s_map_voicing }, { "pinned_playing", s_pinned_playing },
+    { "unpinned", s_unpinned }, { "factory_ask", s_factory_ask },
+    { "notes_offkb", s_notes_offkb }, { "learn", s_learn },
     { "learned", s_learned }, { "learned_slash", s_learned_slash }, { "map_shift", s_map_shift },
     { "cleared", s_cleared }, { "map_251", s_map_251 }, { "map_neo", s_map_neo }, { "map_pop", s_map_pop },
     { "unmapped", s_unmapped }, { "shape", s_shape }, { "off", s_off }, { "badge", s_badge }, { "chip", s_chip },
@@ -313,6 +352,42 @@ static int check(void)
     uint32_t f = c2.dg.frames, k = c2.clock;
     c2_frame_state(&c2, 1, 0);
     EXPECT(c2.dg.frames == f + 1 && c2.clock == k + 1, "one frame = one tick");
+    /* the notes view: a chord knob turn, ~1 s, then the map view again; after a learn; SHAPE always */
+    struct c2_view v;
+    base(2);
+    dn(7);
+    up(7);
+    tick(80);
+    view(&v);
+    EXPECT(!c2u_notes_view(&c2, &v, 2), "a key played: the map view");
+    knob(2, 1);
+    view(&v);
+    EXPECT(c2u_notes_view(&c2, &v, 2), "a chord knob turned: the notes view");
+    tick(C2_NOTES_SHOW + 1);
+    view(&v);
+    EXPECT(!c2u_notes_view(&c2, &v, 2), "~1 s after the last turn: the map view again");
+    knob(7, 1);
+    view(&v);
+    EXPECT(!c2u_notes_view(&c2, &v, 2), "a SHIFT knob (map setting): stays the map view");
+    shift(1);
+    dn(4); dn(7);
+    view(&v);
+    EXPECT(c2u_notes_view(&c2, &v, 2), "during a learn: the notes view");
+    shift(0);
+    up(4); up(7);
+    view(&v);
+    EXPECT(c2u_notes_view(&c2, &v, 2) && c2.msg == MSG_LEARNED, "after a learn: the notes view");
+    tick(C2_NOTES_SHOW + 20);
+    view(&v);
+    EXPECT(!c2u_notes_view(&c2, &v, 2) && c2u_notes_view(&c2, &v, 1), "then the map view; SHAPE: always notes");
+    uint8_t col[24];
+    int8_t iv[4] = { -9, -2, 0, 30 };
+    int below, above;
+    c2u_notecols(col, iv, 4, 7, 0, 0, &below, &above);
+    EXPECT(below == 1 && above == 1 && col[5] == LIGHTBLUE && col[7] == BLUE && !col[0], "off-keyboard notes are counted per side");
+    int8_t iv2[3] = { 0, 4, 7 };
+    c2u_notecols(col, iv2, 3, 0, 0, 0, &below, &above);
+    EXPECT(col[0] == BLUE && col[4] == LIGHTBLUE && col[7] == WHITE && !below && !above, "root blue, top white, others light blue");
     /* every scene draws inside the safe area and the panel */
     printf(fails ? "FAILED\n" : "all passed\n");
     return fails != 0;

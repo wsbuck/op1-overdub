@@ -202,8 +202,8 @@ void hold_keyup(int32_t *note)
 /* Synth screen SHIFT+key handler: SHIFT+T2 toggles hold, everything else goes to TE's handler. */
 int hold_shiftkey(void *self, int key)
 {
-    if (C2_ON()) {
-        c2.shift_used = 1;             /* a SHIFT combo: this SHIFT press no longer learns */
+    if (C2_ON() && !c2_note_code(key)) {   /* SHIFT + a note key comes here too (before TE plays it): not a combo */
+        c2_combo(key);                 /* a SHIFT combo: this SHIFT press no longer learns */
         if (key == KEY_T2 && c2_learn_cancel())
             return 1;                  /* ... and one during a learn cancels the learn, nothing else */
     }

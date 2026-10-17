@@ -28,16 +28,23 @@ CAPTIONS = {
     "map_play": ("MAP: playing", "DIATONIC C, G4 held: the name spelled out (blue underline = ROOT knob, green = TYPE), "
                  "its notes on the ruler (root blue, top white), TOP and VOICING under it; the key lit and outlined."),
     "map_type_scan": ("TYPE scan", "C4 held, green turned two detents left: C^7 -> C6 -> C, heard as it turns (only the "
-                      "changed notes retrigger). The strip shows where the scan is in the list."),
+                      "changed notes retrigger). The strip shows where the scan is in the list; the keyboard shows the "
+                      "chord's notes while a chord knob turns and ~1 s after (root blue, top white)."),
     "map_top": ("TOP", "White, two detents: E on top (the TOP readout bright)."),
     "map_voicing": ("VOICING", "Orange: DROP 2, the top note kept."),
-    "frozen_playing": ("Edit while playing", "C4 frozen for editing (padlock) while G7 plays: the sounding chord at "
-                       "the right in light blue."),
+    "pinned_playing": ("Pinned while playing", "SPLIT tapped: C4 pinned (blue padlock, blue outline) while G7 "
+                       "plays: the sounding chord at the right in light blue; the knobs still edit C4."),
+    "unpinned": ("Unpinned", "SPLIT tapped again: the open padlock and UNPINNED; the next key pressed is edited."),
+    "notes_offkb": ("Notes off the keyboard", "D5 (the top key), TOP turned up: the notes view lights what fits and "
+                    "shows an arrow with the count at the right edge for the notes above the keyboard."),
+    "factory_ask": ("Restore factory", "NEO SOUL, SHIFT+DROP: MAP 3 TO FACTORY (red, shown while SHIFT is held); "
+                    "a plain DROP within ~2.4 s restores the map, anything else cancels; SHIFT+LIFT undoes."),
     "learn": ("Learn", "C4 edited, SHIFT held, A C E G played: named live in red, LEARN tag."),
     "learned": ("Learned", "SHIFT let go: C4 = A-7 as played, the confirmation and the undo hint."),
     "learned_slash": ("Slash kept", "B D G learned on C4 = G/B; TYPE turned keeps the B in the bass."),
     "map_shift": ("SHIFT layer + diagnostics", "MODE (SHIFT+blue), BASS (SHIFT+orange); the two diagnostic lines the "
-                  "morning test reads (frame hook, knobs, keys, file, voices)."),
+                  "morning test reads (frame hook, knobs, keys, file, voices) and the LEARN line (starts, written, "
+                  "cancelled, blocked, the last end reason, the last combo key); SHIFT+] FACTORY in the header."),
     "cleared": ("Cleared", "SPLIT + A4 cleared it; SHIFT+LIFT undoes."),
     "map_251": ("Factory II-V-I", "ii-V-I in F, Bb, Eb, C on groups of three white keys; D D# E = the minor ii-V-i."),
     "map_neo": ("Factory NEO SOUL", "m9 / maj9 / 13 colours, flat roots on the black keys; BASS and HOLD on."),

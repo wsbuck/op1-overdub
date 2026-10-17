@@ -116,17 +116,33 @@ struct c2_diag {
     uint32_t saves;
     int32_t save_err;               /* C2_SAVE_*: the last save's result */
     int32_t mkdir_ret;
+    /* learn (the third diagnostic line, LEARN ...): why a learn started, ended or never started */
+    uint32_t learn_starts;          /* first SHIFT + note of a learn */
+    uint32_t learn_ok;              /* written (LEARNED / MAX) */
+    uint32_t learn_cancels;         /* a SHIFT combo (LIFT, DROP, SPLIT, T2) during a learn */
+    uint32_t learn_blocked;         /* SHIFT + note that did not learn (after a combo, or MAP off the page) */
+    uint32_t learn_end;             /* the last end / block reason: C2_LE_* */
+    int32_t combo_key;              /* the last key that made this SHIFT press a combo (0x100 + knob), -1 none */
 };
+/* learn end reasons: '-' none, U SHIFT up (release slot), N a plain note (fallback), P a key press without SHIFT
+ * (fallback), C cancelled by a combo, E nothing to write (no notes, no slot), B blocked (SHIFT already used for a
+ * combo), M blocked (MAP mode with the page closed: SHIFT + notes just play) */
+enum { C2_LE_NONE = '-', C2_LE_UP = 'U', C2_LE_NOTE = 'N', C2_LE_PRESS = 'P', C2_LE_CANCEL = 'C', C2_LE_EMPTY = 'E',
+       C2_LE_BLOCKED = 'B', C2_LE_MAP = 'M' };
 enum { C2_LOAD_PENDING, C2_LOAD_NONE, C2_LOAD_A, C2_LOAD_B, C2_LOAD_BAD };
 enum { C2_SAVE_NONE, C2_SAVE_OK, C2_SAVE_OPEN, C2_SAVE_WRITE, C2_SAVE_CLOSE, C2_SAVE_TORN };
 
 enum { MSG_NONE, MSG_CLEARED, MSG_COPIED, MSG_PASTED, MSG_UNDONE, MSG_LEARNED, MSG_MAX4, MSG_EMPTY_CLIP, MSG_LATER,
-       MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_REDONE, MSG_PINNED, MSG_UNPINNED, MSG_WALL, MSG_LEARN_CANCEL, MSG_GREEN_FIRST, MSG_COUNT };
+       MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_REDONE, MSG_PINNED, MSG_UNPINNED, MSG_WALL, MSG_LEARN_CANCEL, MSG_GREEN_FIRST,
+       MSG_FACTORY_ASK, MSG_FACTORY_DONE, MSG_FACTORY_NOMAP, MSG_COUNT };
 
 #define C2_LEARN_MAX 8
-#define C2_FREEZE 128               /* frames (~4 s) the edited key stays fixed after a knob turn */
+#define C2_NOTES_SHOW 30            /* frames (~1 s) the keyboard keeps the notes view after a chord knob turn */
+#define C2_SCAN_SHOW 128            /* frames (~4 s) the TYPE scan strip stays after a green turn */
 #define C2_GROUP 64                 /* frames (~2 s): turns of the same knob within this are one undo gesture */
 #define C2_FLASH 72                 /* frames a message shows */
+#define C2_TAP 15                   /* frames (~0.5 s): a SPLIT held longer does not pin */
+#define C2_ARM 72                   /* frames (~2.4 s, the message) SHIFT+DROP's RESTORE FACTORY? waits for DROP */
 
 /* The whole state. Writers: the KeyHandler thread (keys, knobs: every edit) and the GUI thread (the file load,
  * once, while `loading` is set; closing the page). Readers: both (the GUI draws from it, the save serialises it,
@@ -138,7 +154,7 @@ struct c2_state {
     struct c2_chord clip;           /* LIFT copies, DROP pastes */
     volatile uint32_t gen;          /* bumped at the start and the end of every edit of d (the save checks it) */
     uint32_t edit_frame;            /* frame of the last edit (save 2 s after) */
-    uint32_t knob_frame;            /* frame of the last knob turn (freeze, undo grouping) */
+    uint32_t knob_frame;            /* frame of the last knob turn (undo grouping, the scan strip) */
     volatile uint32_t loading;      /* GUI copying a loaded file into d: the keys play plain meanwhile */
     uint32_t loaded;
     uint32_t load_tries;            /* loads that found no file at all (the disk may not be up yet) */
@@ -177,13 +193,17 @@ struct c2_state {
     uint32_t save_tries;
     uint32_t save_frame;
     uint32_t fail_gen;              /* gen the last failed save tried */
-    int32_t last_tap;               /* the last key pressed on the page (SHIFT and DROP adopt it, even when frozen) */
-    uint32_t pinned;                /* SPLIT tapped alone: the edited key stays until SPLIT is tapped again */
+    int32_t last_tap;               /* the last key pressed on the page (the edited key, unless pinned) */
+    uint32_t pinned;                /* SPLIT tapped alone: the edited key stays until SPLIT is tapped again or the page
+                                     * closes; unpinned, the edited key is always the last key pressed */
     uint32_t split_used;            /* a key was cleared while SPLIT was down (so its release does not pin) */
+    uint32_t split_frame;           /* clock when SPLIT went down: only a short tap pins */
     uint32_t shift_used;            /* this SHIFT press already did a combo (SHIFT+T2, +SPLIT, +knob ...): no learn */
     uint32_t wall_frame;            /* TYPE at the first quality: the frame the wall was hit (a 2nd detent = NOTE) */
     uint32_t redo;                  /* the last undo was itself undone: the next one says REDONE */
     uint32_t gesture_knob;          /* the undo snapshot was taken for a knob gesture */
+    uint32_t restore_frame;         /* SHIFT+DROP armed RESTORE FACTORY? at this clock (0 = not armed) */
+    int32_t restore_map;            /* ... for this map */
     volatile uint32_t clock;        /* frames: the frame hook's (or our engine screen's, without it) */
     uint32_t ui_frame;              /* clock when ui_draw (our engine screen) last drew */
     uint32_t ui_hook_seen;          /* dg.frames when ui_draw last ran (frame hook alive if it moved) */

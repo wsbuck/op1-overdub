@@ -1,7 +1,7 @@
 # CHORD v2 and the key-chord map (firmware 246): scope
 
-Status: **MVP built (2026-10-17), not yet on the device**: §12 "MVP as built" (test image CHORD2, LOG.md). Phases 2-4
-below are still design only.
+Status: **MVP on the device (NIGHT1, LOG.md test 84): works except learn (fixed for NIGHT2, test 85)**: §12 "MVP as
+built". Phases 2-4 below are still design only.
 Mockups: `design/chord2/`:
 - `chord2_ui.h`: the draw code;
 - `chord2_model.h`: qualities, voicings, names, recognition, SMOOTH, fill;
@@ -86,10 +86,8 @@ notes/seq-chord.md "CHORD1 as built" and notes/hold.md. Feature bit `FEAT_CHORD`
     every quality and TOP.
 - **SHIFT + knobs set the map:** blue MODE, green STRUM (off, 10..120 ms for the whole spread, up or down), white
   SMOOTH on/off, orange BASS on/off (the root an octave under the chord, as a 5th voice).
-- **Edited key = the last key pressed.**
-  - It is frozen for 2 s after any knob turn, shown by a padlock.
+- **Edited key = the last key pressed.** (As built, §12: no timed freeze; a SPLIT tap pins it instead.)
   - While a key is held, the knobs edit that key.
-  - Pressing SHIFT ends the freeze, so a learn always goes to the last key tapped.
   - The chord that is sounding, when it isn't the edited one, shows in light blue at the right.
 - **Learn:** press the key, hold SHIFT, play the chord (named live, in red), let go of SHIFT.
   - The notes still held when SHIFT is let go are written; if none are held, all the notes played are. A wrong note
@@ -381,8 +379,8 @@ new hook calls TE's function with the same arguments (simulator-checked).
 | where | control | does |
 |---|---|---|
 | synth screen | SHIFT + SPLIT | open / close the CHORD page (T1..T4 also close it and go to their page) |
-| page | press a key | plays as normal and becomes the edited key (unless frozen: padlock, ~4 s after a knob turn; a plain note over a sounding chord never takes it; a learn's first note and DROP take the last key tapped) |
-| page | SPLIT tapped alone | pin / unpin the edited key (blue padlock): play the song, keep editing one chord |
+| page | press a key | plays as normal and becomes the edited key, chord or plain note, at once (no freeze; NIGHT2), unless pinned |
+| page | SPLIT tapped alone (< ~0.5 s) | pin / unpin the edited key (blue padlock, blue outline; "UNPINNED: LAST KEY EDITS" with an open padlock): play the song, keep editing one chord. Closing the page unpins; it opens unpinned |
 | page | blue | ROOT (semitones from the key; a learned chord transposes) |
 | page | green | TYPE: the scan (below); left past the first = the key plays its note |
 | page | white | TOP: each detent puts the next chord tone on top |
@@ -390,14 +388,20 @@ new hook calls TE's function with the same arguments (simulator-checked).
 | page | SHIFT + blue | MODE of this synth slot: OFF, SHAPE, MAP 1..8 |
 | page | SHIFT + orange | BASS on / off for the map (the root an octave under, a 5th voice; shed first) |
 | page | SHIFT + green / white | STRUM / SMOOTH: "NOT IN THIS VERSION" (phase 2/3) |
-| page | hold SHIFT, play, let go of SHIFT | learn into the last key tapped (held notes; none held = all played; 5 notes = 4 + its bass; more = the bass and the top 4, MAX 5). A SHIFT combo during a learn (LIFT, DROP, SPLIT, T2) cancels it |
+| page | hold SHIFT, play, let go of SHIFT | learn into the edited key (the last key tapped; pinned: the pinned one; the tapped key is only the target, not a note of the chord) (held notes; none held = all played; 5 notes = 4 + its bass; more = the bass and the top 4, MAX 5). A SHIFT combo during a learn (LIFT, DROP, SPLIT, T2) cancels it |
 | page | SPLIT + key | clear that key (the press plays nothing; afterwards the key plays its own note) |
-| page | LIFT / DROP | copy the edited key's chord / paste it onto the last key tapped |
+| page | LIFT / DROP | copy the edited key's chord / paste it onto the last key tapped (pinned: copy the pinned chord, tap keys and DROP to fan it out; the pin stays) |
 | page | SHIFT + LIFT | undo the last gesture (again = redo); turns of one knob within ~2 s are one gesture |
-| page | SHIFT + DROP | WRITE: "NOT IN THIS VERSION" (phase 2) |
+| page | SHIFT + DROP, then DROP | restore this map to factory (maps 5..8: clear it). SHIFT+DROP asks "MAP n TO FACTORY: ] AGAIN" (red, shown while SHIFT is held); only a plain DROP within ~2.4 s confirms; any other key, knob or SHIFT combo cancels; SHIFT+LIFT undoes. The full WRITE page is phase 2. Hint: "\ PIN  SHIFT+] FACTORY" in the SHIFT layer's header |
 | anywhere (synth) | SHIFT + notes (page closed) | slot OFF or SHAPE: CHORD1's gesture, learn a SHAPE (one note = slot OFF); MAP: just plays (never drops MAP mid-song) |
 | anywhere (synth) | SHIFT + T2 | HOLD: latches chords only (everything when the slot is OFF); a new chord replaces the held one |
 - Power-on: each slot comes back in its last mode (user decision 3). The image's default: every slot OFF.
+- **Notes view** (NIGHT2, replaces the 3-octave ruler, which was too small to read): while a chord knob (ROOT, TYPE,
+  TOP, VOICING) turns and ~1 s after the last turn, after a learn (~1.5 s), during a learn on the page (red) and always
+  in SHAPE, the 24-key keyboard shows the edited chord's notes instead of the map's names: each note's key filled
+  (root blue, top note white, others light blue) and named in black; notes off the keyboard as an arrow at that edge,
+  with the count when more than one. Then it switches back to the map view (no fade: the panel has no alpha). The freed
+  top: the chord name at x4 (shrinks to fit), TOP ("TOP B4") and VOICING right-aligned beside it.
 - Names: jazz symbols on the keys (C△7, A-7, Bø), spelled out in the big title where they fit ("C MAJ7", "A MIN7",
   "G7"; else the symbol), user decision 1.
 
@@ -429,7 +433,7 @@ three knobs stay for precision.
 | press | synth controller vtable `0x01911994` +0x14 (`0x019119A8`) | `0x01A51058` | **Verified**: `FUN_019b6c74` calls +0x14 for presses without SHIFT, else the global `FUN_019ac4b4`; keys 2..0xB are a jump table (6..9 = T1..T4, 0xA LIFT, 0xB DROP), 0xC (SPLIT) and note keys (>= 0x3A) return 0 | SPLIT / LIFT / DROP counters stay 0 on the diag line; LIFT / DROP stay TE's |
 | release | +0x24 (`0x019119B8`) | `0x01A5056C` | **Verified**: called for every release before the global `FUN_019acd60` (which clears SHIFT at `0x019ACF94`); returns 0 except 0x24 / 0x25 | `UP` stays 0; learn then ends at the first plain note (fallback) |
 | encoder | +0x2C (`0x019119C0`) | `0x01A505BC` | **Verified**: `FUN_019b6c0c(knob, int16 *delta)` adds 4 with SHIFT (`FUN_019d7c6c` = `B[0x01DD7F78]`) and calls +0x2C; delta = (count & ~1) << 9 (`0x019C2E7C`) | `K` stays 0; knobs keep editing the sound under the page (seen at once) |
-| SHIFT slot | +0x1C (`0x019119B0`) | `0x01A50904` | CHORD1's, shipped | — |
+| SHIFT slot | +0x1C (`0x019119B0`) | `0x01A50904` | CHORD1's, shipped. **Verified (NIGHT1's learn bug):** `FUN_019b6c74` sends *every* press with SHIFT down here first, note keys included; TE's then returns 0 and the global `FUN_019ac9b8` plays the note (`FUN_019c316c` is-note, `FUN_019c3322` code -> index, `FUN_019ac0b0`). Note key codes (table `0x018E0A80`): 0x0D..0x0F, 0x16..0x20, 0x27..0x2A, 0x30..0x35 | — |
 | note on / off | CALLs `0x019AC290` / `0x019AC3A6` | | CHORD1's, shipped | — |
 - Every hook runs in the KeyHandler thread except the frame hook (GUI thread). The GUI writes the maps only when it
   loads the file (once; `loading` set: the keys play plain notes meanwhile).
@@ -468,6 +472,12 @@ three knobs stay for precision.
   DN:<SHIFT presses> CT|CT0`.
 - Line 2: `FILE <-|NONE|A|B|BAD> L:<load tries> <seq> SAVE <count> <-|OK|OPEN|WRITE|CLOSE|TORN> MK:<mkdir> VOX <voices>
   H:<latched keys> SHED <n> PG:<purges> [FB]` (`FB` = the frame hook does not run, page drawn by our engine screen).
+- Line 3 (NIGHT2): `LEARN S:<starts> OK:<written> X:<cancelled> B:<SHIFT+notes that did not learn> END:<reason>
+  CB:<last combo key, hex> [USED]`. END: `U` SHIFT let go (release slot), `N` a plain note ended it (fallback), `P` a
+  key press without SHIFT ended it (fallback), `C` cancelled by a combo, `E` nothing to write, `B` blocked (this SHIFT
+  press was already used for a combo), `M` blocked (MAP with the page closed). CB: the key code that made the SHIFT
+  press a combo (0C SPLIT, 07 T2, 0A LIFT, 0B DROP, 24/25 octave, 10x a SHIFT knob, 2xx MAP off the page); USED = the
+  SHIFT press held now no longer learns.
 
 ### Cut from the MVP (and why)
 - SMOOTH, STRUM, WRITE (scale fill, copy + transpose, factory restore): phase 2/3; user decision 2 puts these live
@@ -548,11 +558,39 @@ three knobs stay for precision.
 - Learned chords ignore the map's BASS (their own bass, if any, is the 5th note); a melody double-stop over a 5-voice pad
   sheds the first melody note.
 
+- **Device test NIGHT1 (LOG.md test 84).** Everything worked (boot, frame hook, knobs, keys, file, chip, voices, HOLD,
+  octave edge, TYPE scan, clear / undo) except learn, which never started ("the notes just played normally").
+  - **Cause:** with SHIFT down, `FUN_019b6c74` calls the SHIFT slot (`hold_shiftkey`) for every press before TE plays
+    it, note keys included. The UX round 1 rule "a SHIFT used for a combo no longer learns" marked every SHIFT + key
+    there as a combo, so the first chord note set `shift_used` and `c2_keydown` then played it plain. The host test
+    called the note hook directly and missed that route. CHORD1 has no such rule, so its learn works.
+  - **Fixes:** note key codes (TE's own table) are not combos; the host tests now deliver every key the way
+    `FUN_019b6c74` does (press slot / SHIFT slot first, then the note hook; release slot first) and reproduce the
+    bug without the fix; the LEARN diagnostic line.
+  - LIFT / DROP off the page: our press slot passes them to TE's own press function with the same arguments, as stock
+    (`0x01A51058`: LIFT -> `FUN_01a50aa8`, copy the slot's sound; DROP -> `FUN_01a50b40`, paste). Stock TE behaviour:
+    a sound copy / paste, so LIFT then DROP on the same slot changes nothing audible.
+  - The ~4 s edit freeze is gone (user): the edited key always follows the last key pressed, unless pinned. The
+    UX round 2 rule "a plain note over a sounding chord doesn't take the edit" went with it; the pin covers that case.
+  - New (user): restore a map to factory (SHIFT+DROP, then DROP); the notes view on the main keyboard instead of the
+    ruler.
+  - A bfin GCC 4.3 `-O2` quirk found on the way: a per-key loop around the inlined byte copy from the const factory
+    table left every key after the first zero in the simulator (`-O0` and the host were right). The restore copies the
+    whole map in one flat loop instead, and the simulator test checks it.
+- **UX round 3** (fresh subagent, live performer, on the new rules and renders). Adopted:
+  - pinned, DROP pastes onto the key tapped (LIFT the pinned chord, tap, DROP: fan it out);
+  - the factory question names the map ("MAP 3 TO FACTORY", "CLEAR MAP 6"), and only a plain DROP confirms (SHIFT+DROP
+    twice only asks again);
+  - only a short SPLIT tap pins (holding SPLIT to clear, then letting go unused, no longer toggles the pin);
+  - "\ PIN" next to the factory hint; "UNPINNED: LAST KEY EDITS".
+  Not adopted: a dedicated restore undo slot (one-level undo, like every other gesture); naming the key and chord in
+  LEARNED (the big name already shows it).
+
 ### Checks
-- `src/slot/test/chord2_check.py`: the engine test (`chord2_test.c`, 142 checks: model, factory maps, play, budget
+- `src/slot/test/chord2_check.py`: the engine test (`chord2_test.c`, 203 checks; keys delivered as `FUN_019b6c74` does: model, factory maps, play, budget
   fuzz, HOLD, page, learn, file: missing / short / long / old version / magic / CRC / random payload / sequence wrap /
   write failures, every feature mask) under the Blackfin simulator; the asm entries' ABI and pass-through
   (`chord2_main.c`); hold.o calls no libgcc / libc.
 - `src/slot/test/hold_check.py`: CHORD1 unchanged with chord2 off.
 - `src/slot/test/chord2_screens.py OUTDIR`: the gallery from the device draw code; nothing outside the safe area,
-  <= 120 AA segments per scene (max 72), the frame hook's page rules.
+  <= 120 AA segments per scene (max 65), the frame hook's page rules, the notes view's timing and colours.

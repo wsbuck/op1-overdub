@@ -131,9 +131,22 @@ static int fails, passes;
 
 static struct c2_state c2_boot;          /* the state as the image loads it */
 
+/* A note key as the device delivers it (FUN_019b6c74): without SHIFT the synth controller's press slot (+0x14,
+ * c2_press) first, then TE's global press plays it; with SHIFT down the SHIFT slot (+0x1C, hold_shiftkey) first,
+ * then TE's global SHIFT handler FUN_019ac9b8 plays it (FUN_019ac0b0: s_note_ons set, the note-on CALL). A release
+ * always goes to the release slot (+0x24, c2_release) first, then the global release (the note-off CALL). The key
+ * codes are TE's note codes (FUN_019c316c); the code -> key order is not modelled (ascending). */
+static const uint8_t note_code[24] = { 0x0D, 0x0E, 0x0F, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+                                       0x1F, 0x20, 0x27, 0x28, 0x29, 0x2A, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35 };
+static int slot_calls;                   /* note presses that went through a controller slot first */
 static void key_dn(int key)
 {
     int32_t n[5];
+    int code = note_code[key];
+    int taken = shift_down ? hold_shiftkey(0, code) : c2_press(0, code);
+    slot_calls++;
+    if (taken)
+        return;                          /* a slot that returns 1 ends the press: no note (never for a note key) */
     key_down[key] = 1;
     te_make_note(n, key, 0x7F);
     chord_keydown(n);
@@ -141,6 +154,7 @@ static void key_dn(int key)
 static void key_up(int key)
 {
     int32_t n[5];
+    c2_release(0, note_code[key]);
     key_down[key] = 0;
     te_make_note(n, key, 0x40);
     hold_keyup(n);
@@ -533,7 +547,6 @@ static void t_page(void)
     key_dn(4);
     key_up(4);
     CHECK(c2.sel == 4, "the last key pressed is edited");
-    frames(C2_FREEZE + 2);
     /* TYPE scan with live audition on a held key */
     key_dn(7);                            /* C^7 sounding */
     int before = nons;
@@ -555,17 +568,16 @@ static void t_page(void)
     knob(1, 100);
     CHECK(c2.d.maps[0][7].q == Q_COUNT - 1, "TYPE stops at the end of the list");
     key_up(7);
-    /* freeze: a knob turn keeps the edited key for C2_FREEZE frames */
+    /* no freeze: right after a knob turn, the next key pressed is the edited one */
     key_dn(9);
     key_up(9);
-    CHECK(c2.sel == 7, "frozen after a knob turn: playing another key does not move the edit");
-    frames(C2_FREEZE + 2);
-    key_dn(9);
-    key_up(9);
-    CHECK(c2.sel == 9, "after the freeze a tap moves the edit");
+    CHECK(c2.sel == 9, "no freeze: a key pressed right after a knob turn takes the edit at once");
+    knob(2, 1);
+    key_dn(7);
+    key_up(7);
+    CHECK(c2.sel == 7, "... and again, with no wait");
+    knob(2, -1);
     /* ROOT, TOP, VOICING */
-    c2.sel = 7;
-    frames(C2_FREEZE + 2);
     knob(0, 2);
     c2_name(b, &c2.d.maps[0][7], 7, 0, 0);
     knob(0, -2);
@@ -585,7 +597,6 @@ static void t_page(void)
     knob(2, 100);
     CHECK(c2_in_range(&c2.d.maps[0][7], 1), "TOP clamps inside the range");
     /* clear, copy, paste, undo */
-    frames(C2_FREEZE + 2);
     c2_press(0, KEY_SPLIT);
     key_dn(4);
     CHECK(c2.d.maps[0][4].q == Q_NONE && count_sounding() == 0 && c2.msg == MSG_CLEARED, "SPLIT + A: cleared, no sound");
@@ -597,36 +608,83 @@ static void t_page(void)
     shift_key(KEY_LIFT);
     CHECK(c2.d.maps[0][4].q == Q_NONE, "SHIFT+LIFT again redoes it");
     shift_key(KEY_LIFT);
+    key_dn(2);
+    key_up(2);
     te_press_calls = 0;
-    c2.sel = 2;
     c2_press(0, KEY_LIFT);
-    c2.sel = 3;
-    c2.last_tap = 3;
+    key_dn(3);
+    key_up(3);
+    int tp = te_press_calls;
     c2_press(0, KEY_DROP);
-    CHECK(c2.d.maps[0][3].q == Q_7 && c2.msg == MSG_PASTED, "LIFT on G, DROP on G#: G7's chord pasted");
-    CHECK(te_press_calls == 0, "page open: LIFT / DROP / SPLIT never reach TE");
-    /* SPLIT tapped alone pins the edited key; SHIFT adopts the last tapped key unless pinned */
-    c2.sel = 7;
+    CHECK(c2.d.maps[0][3].q == Q_7 && c2.msg == MSG_PASTED, "tap G, LIFT, tap G#, DROP: G7's chord pasted on G#");
+    CHECK(te_press_calls == tp && tp == 1, "page open: LIFT / DROP / SPLIT never reach TE (only the note keys do)");
+    /* SPLIT tapped alone pins the edited key: knobs, learn, LIFT, DROP, SPLIT+key keep to it until SPLIT again */
+    key_dn(7);
+    key_up(7);
     c2_press(0, KEY_SPLIT);
     c2_release(0, KEY_SPLIT);
-    CHECK(c2.pinned && c2.msg == MSG_PINNED, "SPLIT tapped alone pins the edited key");
-    frames(C2_FREEZE * 3);
+    CHECK(c2.pinned && c2.sel == 7 && c2.msg == MSG_PINNED, "SPLIT tapped alone pins the edited key");
+    frames(400);
     key_dn(9);
     key_up(9);
     shift(1);
     shift(0);
-    CHECK(c2.sel == 7, "pinned: playing and SHIFT keep the edited key");
+    CHECK(c2.sel == 7 && c2.pinned, "pinned: playing and SHIFT keep the edited key, however long");
+    key_dn(4);                            /* A-7 sounding */
+    key_dn(13);                           /* a melody over it */
+    CHECK(c2.sel == 7, "pinned: chords and plain notes played keep the edited key");
+    key_up(13);
+    key_up(4);
+    struct c2_chord pin_was = c2.d.maps[0][7];
+    knob(3, -1);
+    CHECK(c2.sel == 7 && memcmp(&pin_was, &c2.d.maps[0][7], sizeof pin_was), "pinned: the knobs edit the pinned key");
+    c2_press(0, KEY_LIFT);
+    key_dn(12);
+    key_up(12);
+    c2_press(0, KEY_DROP);
+    CHECK(c2.sel == 7 && c2.pinned && !memcmp(&c2.clip, &c2.d.maps[0][7], sizeof c2.clip) &&
+          !memcmp(&c2.d.maps[0][12], &c2.d.maps[0][7], sizeof c2.clip) && c2.msg == MSG_PASTED,
+          "pinned: LIFT copies the pinned key, DROP pastes onto the key tapped, the pin stays");
+    shift_key(KEY_LIFT);                  /* undo the paste */
+    CHECK(c2.d.maps[0][12].q == Q_MAJ7, "... undone");
+    c2_press(0, KEY_SPLIT);
+    key_dn(16);
+    key_up(16);
+    c2_release(0, KEY_SPLIT);
+    CHECK(c2.pinned && c2.sel == 7 && c2.d.maps[0][16].q == Q_NONE, "pinned: SPLIT + key clears that key, the pin stays");
+    shift_key(KEY_LIFT);                  /* undo the clear */
     c2_press(0, KEY_SPLIT);
     c2_release(0, KEY_SPLIT);
-    CHECK(!c2.pinned, "SPLIT again unpins");
+    CHECK(!c2.pinned && c2.msg == MSG_UNPINNED, "SPLIT again unpins (UNPINNED)");
+    c2_press(0, KEY_SPLIT);
+    frames(C2_TAP + 5);
+    c2_release(0, KEY_SPLIT);
+    CHECK(!c2.pinned, "SPLIT held ~1 s and let go unused: no pin");
+    key_dn(11);
+    key_up(11);
+    CHECK(c2.sel == 11, "unpinned: the next key pressed is edited again");
+    /* the pin ends when the page closes, by SHIFT+SPLIT or a T key; the page reopens unpinned */
+    c2_press(0, KEY_SPLIT);
+    c2_release(0, KEY_SPLIT);
+    CHECK(c2.pinned, "pinned again");
+    shift_key(KEY_SPLIT);
+    CHECK(!c2.page && !c2.pinned, "SHIFT+SPLIT closes the page and unpins");
+    shift_key(KEY_SPLIT);
+    CHECK(c2.page && !c2.pinned, "the page reopens unpinned");
+    c2_press(0, KEY_SPLIT);
+    c2_release(0, KEY_SPLIT);
+    c2_press(0, 6);
+    CHECK(!c2.page && !c2.pinned, "T1 closes the page and unpins");
+    shift_key(KEY_SPLIT);
+    /* a learn goes to the last key tapped (no wait after a knob turn) */
     knob(2, 1);
     key_dn(11);
     key_up(11);
-    CHECK(c2.sel == 7, "frozen after a knob turn: the tap does not move the edit...");
+    CHECK(c2.sel == 11, "a tap right after a knob turn takes the edit");
     shift(1);
-    CHECK(c2.sel == 7, "SHIFT alone keeps the edited key");
+    CHECK(c2.sel == 11, "SHIFT alone keeps the edited key");
     key_dn(14);
-    CHECK(c2.sel == 11 && c2.learning, "...the first learn note moves it to the last key tapped");
+    CHECK(c2.sel == 11 && c2.learning, "the learn goes to the key tapped");
     shift(0);
     key_up(14);
     shift_key(KEY_LIFT);
@@ -635,11 +693,10 @@ static void t_page(void)
     CHECK(c2.msg == MSG_UNDONE, "undo says UNDONE");
     shift_key(KEY_LIFT);
     CHECK(c2.msg == MSG_REDONE, "undo again says REDONE");
-    /* a melody note over a sounding chord doesn't take the edit */
-    frames(C2_FREEZE + 2);
+    /* unpinned, a plain note is the last key pressed too: it takes the edit (pin to keep a pad's chord) */
     key_dn(4);                            /* A-7 sounding (edited) */
     key_dn(13);                           /* F#4: plain */
-    CHECK(c2.sel == 4, "a plain key over a sounding chord leaves the edited key alone");
+    CHECK(c2.sel == 13, "unpinned: a plain key over a sounding chord is the edited key (the last pressed)");
     key_up(13);
     key_up(4);
     /* a rootless colour chord keeps its root without BASS */
@@ -794,6 +851,188 @@ static void t_learn(void)
     CHECK(!c2.learning && c2.d.maps[0][7].q == Q_CUSTOM && c2.d.maps[0][7].n == 2, "fallback: a plain note ends the learn");
     all_up();
     CHECK(count_sounding() == 0, "learn: everything released");
+}
+
+/* The device's learn sequence (NIGHT1, test image 84: "LEARNED" never appeared), every key through the controller
+ * slots as FUN_019b6c74 delivers it. SHIFT + a note reaches the SHIFT slot (hold_shiftkey) before TE plays the note:
+ * NIGHT1 counted that as a SHIFT combo, so the first chord note already ended any chance of a learn. */
+static void t_learn_device(void)
+{
+    char b[24];
+    fresh(7);
+    c2.d.mode[0] = 2;
+    shift(1);                             /* SHIFT + SPLIT: the page opens (a combo) */
+    CHECK(shift_key(KEY_SPLIT) == 1 && c2.page, "device: SHIFT+SPLIT opens the page");
+    shift_down = 1;
+    c2_release(0, KEY_SPLIT);
+    shift(0);
+    CHECK(c2.dg.combo_key == KEY_SPLIT && c2.dg.learn_starts == 0, "device: the opening SHIFT+SPLIT is a combo");
+    key_dn(7);                            /* tap the key to learn into */
+    key_up(7);
+    CHECK(c2.sel == 7 && c2.last_tap == 7, "device: the tapped key is edited");
+    int calls = te_shift_calls;
+    shift(1);
+    CHECK(!c2.shift_used, "device: a new SHIFT press is not a combo yet");
+    key_dn(4); key_dn(7); key_dn(11); key_dn(14);   /* A C E G, each through the SHIFT slot first */
+    CHECK(te_shift_calls == calls + 4, "device: SHIFT + each note went to TE's SHIFT slot too (it ignores notes)");
+    CHECK(c2.learning && !c2.shift_used && c2.dg.learn_starts == 1 && c2.dg.learn_blocked == 0 && count_sounding() == 4,
+          "device: SHIFT + notes through the SHIFT slot learn (not a combo), the notes sound");
+    shift(0);
+    c2_name(b, &c2.d.maps[0][7], 7, 0, 0);
+    CHECK(!c2.learning && c2.msg == MSG_LEARNED && !strcmp(b, "A-7") && c2.dg.learn_ok == 1 && c2.dg.learn_end == C2_LE_UP,
+          "device: SHIFT up (release slot) writes the chord: LEARNED A-7, END:U (%s)", b);
+    CHECK(c2.dg.shift_up == 2 && c2.dg.shift_dn == 2, "device: UP / DN count the SHIFT releases / presses");
+    all_up();
+    CHECK(count_sounding() == 0, "device: the learn's notes released");
+    key_dn(7);
+    CHECK(count_sounding() == 4 && is_on(N0 + 4) && is_on(N0 + 14), "device: the key now plays the learned A-7");
+    key_up(7);
+    /* the tapped key is not part of the chord: a 3-note learn on another key */
+    key_dn(2);
+    key_up(2);
+    shift(1);
+    key_dn(9); key_dn(13); key_dn(16);    /* D F# A over G: the key itself not played */
+    shift(0);
+    all_up();
+    c2_name(b, &c2.d.maps[0][2], 2, 0, 0);
+    CHECK(c2.d.maps[0][2].q == Q_CUSTOM && c2.d.maps[0][2].n == 3 && !strcmp(b, "D"),
+          "device: tap G, SHIFT + D F# A: G's key plays D (the tapped key is only the target) (%s)", b);
+    /* the combo rules still hold: SHIFT+T2 (HOLD) then a note under the same SHIFT does not learn */
+    struct c2_chord keep = c2.d.maps[0][2];
+    shift(1);
+    shift_key(KEY_T2);
+    shift_down = 1;
+    key_dn(4);
+    shift(0);
+    all_up();
+    shift_key(KEY_T2);                    /* HOLD off again */
+    CHECK(!memcmp(&keep, &c2.d.maps[0][2], sizeof keep) && c2.dg.learn_blocked == 1 && c2.dg.learn_end == C2_LE_BLOCKED &&
+          c2.dg.combo_key == KEY_T2, "device: SHIFT+T2 then a note: no learn, B:1 END:B CB:07");
+    /* a combo during a learn cancels it */
+    shift(1);
+    key_dn(0);
+    key_dn(4);
+    shift_key(KEY_LIFT);
+    shift_down = 1;
+    shift(0);
+    all_up();
+    CHECK(c2.dg.learn_cancels == 1 && c2.dg.learn_end == C2_LE_CANCEL && !memcmp(&keep, &c2.d.maps[0][2], sizeof keep),
+          "device: SHIFT+LIFT during a learn cancels it, X:1 END:C");
+    /* the octave keys under SHIFT are combos (not notes) */
+    shift(1);
+    hold_shiftkey(0, 0x24);
+    CHECK(c2.shift_used && c2.dg.combo_key == 0x24, "device: SHIFT + an octave key is a combo");
+    shift(0);
+    /* MAP with the page closed: SHIFT + notes play, M */
+    shift_key(KEY_SPLIT);
+    shift(1);
+    key_dn(5);
+    shift(0);
+    all_up();
+    CHECK(!c2.page && c2.dg.learn_end == C2_LE_MAP && c2.d.mode[0] == 2, "device: page closed in MAP: no learn, END:M");
+    /* every TE note code is a note to us, and nothing else is */
+    int codes = 0, wrong = 0;
+    for (int code = 0; code < 0x40; code++) {
+        int note = 0;
+        for (int k = 0; k < 24; k++)
+            note |= note_code[k] == code;
+        codes += c2_note_code(code);
+        wrong += c2_note_code(code) != note;
+    }
+    CHECK(codes == 24 && !wrong && !c2_note_code(KEY_SHIFT) && !c2_note_code(KEY_SPLIT) && !c2_note_code(KEY_T2),
+          "the 24 note codes are TE's (FUN_019c316c), SHIFT / SPLIT / T keys are not");
+}
+
+/* SHIFT+DROP: RESTORE FACTORY? and DROP again (with or without SHIFT) restores the map; anything else, or ~2.4 s,
+ * drops the question; one undo gesture. */
+static void t_factory_restore(void)
+{
+    fresh(7);
+    memcpy(&c2, &c2_boot, sizeof c2);    /* the real factory TOPs */
+    c2.d.mode[0] = 4;                     /* MAP 3 NEO SOUL */
+    shift_key(KEY_SPLIT);
+    struct c2_chord was0 = c2.d.maps[2][0];
+    key_dn(0);
+    key_up(0);
+    knob(1, 3);
+    knob(7, -1);                          /* BASS off */
+    c2_press(0, KEY_SPLIT);
+    key_dn(3);
+    key_up(3);
+    c2_release(0, KEY_SPLIT);
+    CHECK(memcmp(&was0, &c2.d.maps[2][0], sizeof was0) && c2.d.maps[2][3].q == Q_NONE && !c2.d.set[2].bass, "NEO SOUL edited");
+    /* SHIFT+DROP asks; a key in between drops the question */
+    shift_key(KEY_DROP);
+    CHECK(c2.msg == MSG_FACTORY_ASK && c2_restore_armed(), "SHIFT+DROP: RESTORE FACTORY?");
+    key_dn(5);
+    key_up(5);
+    c2_press(0, KEY_DROP);
+    int same = !memcmp(c2.d.maps[2], c2_factory_maps[2], sizeof c2.d.maps[2]);
+    CHECK(!same && !c2_restore_armed(), "a key between SHIFT+DROP and DROP: no restore (DROP pastes as usual)");
+    /* a knob between: no restore */
+    shift_key(KEY_DROP);
+    knob(2, 0);
+    knob(0, 1);
+    knob(0, -1);
+    c2_press(0, KEY_LIFT);
+    CHECK(!c2_restore_armed(), "a knob or LIFT drops the question");
+    /* too late: no restore */
+    shift_key(KEY_DROP);
+    frames(C2_ARM + 2);
+    c2_press(0, KEY_DROP);
+    CHECK(memcmp(c2.d.maps[2], c2_factory_maps[2], sizeof c2.d.maps[2]), "DROP after ~2.4 s: no restore");
+    /* SHIFT+DROP, then DROP: restored, map settings too, sounding chords revoiced */
+    struct c2_chord edited[24];
+    memcpy(edited, c2.d.maps[2], sizeof edited);
+    key_dn(7);                            /* a NEO SOUL chord held */
+    shift_key(KEY_DROP);
+    c2_press(0, KEY_DROP);
+    CHECK(!memcmp(c2.d.maps[2], c2_factory_maps[2], sizeof c2.d.maps[2]) && c2.d.set[2].bass == 1 &&
+          !strcmp(c2.d.set[2].name, "NEO SOUL") && c2.msg == MSG_FACTORY_DONE, "SHIFT+DROP, DROP: NEO SOUL is factory again");
+    CHECK(c2.d.maps[0][7].q == c2_boot.d.maps[0][7].q, "other maps untouched");
+    key_up(7);
+    CHECK(count_sounding() == 0 && bad_off == 0, "restore under a held chord: nothing left sounding");
+    shift_key(KEY_LIFT);
+    CHECK(!memcmp(c2.d.maps[2], edited, sizeof edited) && !c2.d.set[2].bass, "SHIFT+LIFT undoes the restore");
+    shift_key(KEY_LIFT);                  /* redo */
+    /* SHIFT+DROP twice under one SHIFT also confirms */
+    knob(1, 1);
+    shift(1);
+    shift_down = 1;
+    hold_shiftkey(0, KEY_DROP);
+    hold_shiftkey(0, KEY_DROP);
+    shift(0);
+    CHECK(memcmp(c2.d.maps[2], c2_factory_maps[2], sizeof c2.d.maps[2]) && c2_restore_armed(),
+          "SHIFT+DROP twice: only asks (a plain DROP confirms)");
+    c2_press(0, KEY_DROP);
+    CHECK(!memcmp(c2.d.maps[2], c2_factory_maps[2], sizeof c2.d.maps[2]), "... then DROP restores");
+    /* an empty map (5..8) restores to empty; SHAPE / OFF: nothing, a hint */
+    c2.d.mode[0] = 6;                     /* MAP 5 */
+    key_dn(4);
+    key_up(4);
+    knob(1, 2);
+    shift_key(KEY_DROP);
+    c2_press(0, KEY_DROP);
+    int empty = 1;
+    for (int k = 0; k < 24; k++)
+        empty &= c2.d.maps[4][k].q == Q_NONE;
+    CHECK(empty, "MAP 5 restores to empty");
+    c2.d.mode[0] = 1;
+    struct c2_data before;
+    memcpy(&before, &c2.d, sizeof before);
+    shift_key(KEY_DROP);
+    c2_press(0, KEY_DROP);
+    CHECK(c2.msg != MSG_FACTORY_DONE && !memcmp(c2.d.maps, before.maps, sizeof before.maps), "SHAPE: SHIFT+DROP restores nothing");
+    shift_key(KEY_DROP);
+    CHECK(c2.msg == MSG_FACTORY_NOMAP, "SHAPE: SHIFT+DROP says pick a map");
+    /* page closed: SHIFT+DROP and DROP are TE's */
+    c2.d.mode[0] = 4;
+    shift_key(KEY_SPLIT);
+    int sc = te_shift_calls, pc = te_press_calls;
+    hold_shiftkey(0, KEY_DROP);
+    c2_press(0, KEY_DROP);
+    CHECK(te_shift_calls == sc + 1 && te_press_calls == pc + 1 && !c2_restore_armed(), "page closed: SHIFT+DROP, DROP go to TE");
+    all_up();
 }
 
 /* ---- the file ---- */
@@ -1019,6 +1258,8 @@ int main(void)
     t_hold();
     t_page();
     t_learn();
+    t_learn_device();
+    t_factory_restore();
     t_file();
     t_mask();
     printf("\n%d checks, %d failed\n", passes + fails, fails);
