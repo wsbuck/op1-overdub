@@ -13,7 +13,8 @@ bfin-elf-run at 88.2 kHz. The knob curves come from src/slot/gen_fmdrum.py (the 
   colour rising AIR < SNARE < HAT, tone gone in CLAP, clap bursts); velocity; knob changes and retriggers without
   clicks; every factory kit key: level (peaks, near-clip samples, audible); the hi-hat choke (keys 10..13, HAT zone);
   the RATIO table's order, NOISE's stock maximum still CLAP, the kits' shared hat keys; CYCLES per render call against
-  the engines' budget; output guard; no runtime division or other libgcc calls; slot init; the ABI. Exits non-zero on
+  the engines' budget; output guard; no runtime division or other libgcc calls; slot init; the ABI; the harsh path's
+  asm loops against fmdrum.c's C loops (built without __bfin__: the same cases, bit for bit). Exits non-zero on
   a failure.
 """
 import argparse
@@ -128,6 +129,19 @@ def cases():
     for name, kit in G.KITS.items():
         for k, row in enumerate(kit[1]):
             c[f"kit_{name.replace(' ', '_')}_{k}"] = (k, 127, 500, list(row))
+    rng = np.random.default_rng(82)         # random keys, knob turns and retriggers (the asm against the C loops)
+    for j in range(48):
+        k = [int(rng.integers(-24320, 24833))] + [int(rng.integers(0, 32768)) for _ in range(7)]
+        if j % 2:                           # half of them harsh: FM and NOISE in the top zones
+            k[FM] = int(rng.integers(G.FM_FB0 - 2048, 32768))
+            k[NOISE] = int(rng.integers(G.NOISE_EDGES[4], 32768))
+        extra = []
+        for _ in range(int(rng.integers(1, 4))):
+            b0 = int(rng.integers(0, 60))
+            extra += ["ramp", b0, b0 + int(rng.integers(1, 40)), int(rng.integers(0, 8)), int(rng.integers(0, 32768)),
+                      int(rng.integers(0, 32768))]
+        extra += ["retrig", int(rng.integers(5, 90)), "chg", int(rng.integers(1, 99)), FM, int(rng.integers(0, 32768))]
+        c[f"fuzz{j}"] = (int(rng.integers(0, 24)), int(rng.integers(1, 128)), 100, k + extra)
     return c
 
 
@@ -388,6 +402,8 @@ def main():
     cflags = "-std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror"
     cmds = [f"bfin-elf-run /tmp/m {k} {v} {b} {' '.join(map(str, p))} > /w/{n}.bin 2> /w/{n}.err; echo $? > /w/{n}.rc"
             for n, (k, v, b, p) in cs.items()]
+    cmds += [f"bfin-elf-run /tmp/mc {k} {v} {b} {' '.join(map(str, p))} > /w/{n}.cref 2> /dev/null"     # C reference
+             for n, (k, v, b, p) in cs.items()]
     cmds.append("bfin-elf-run /tmp/m init > /w/init.txt 2> /w/init.err; echo $? > /w/init.rc")
     for n, (k1, k2, p1, p2) in CHOKE.items():
         cmds.append(f"bfin-elf-run /tmp/m choke {k1} {k2} 20 200 {' '.join(map(str, p1 + p2))} > /w/{n}.bin "
@@ -404,6 +420,8 @@ def main():
         "bfin-elf-as -I /src --defsym NO_FX=1 -o abi.o /src/test/fx_abi.S\n"
         "bfin-elf-as -I /src -o entries.o /engine/test/fmdrum_abi.S\n"
         "bfin-elf-gcc -std=gnu99 -msim -O1 -Wall -I /src -I /engine -o m /engine/test/fmdrum_main.c fd.o abi.o entries.o\n"
+        f"bfin-elf-gcc {cflags} -U__bfin__ -I /engine -I /src -c -o fdc.o /src/fmdrum.c\n"   # the C loops, no asm
+        "bfin-elf-gcc -std=gnu99 -msim -O1 -Wall -I /src -I /engine -o mc /engine/test/fmdrum_main.c fdc.o abi.o entries.o\n"
         "xargs -P 8 -I CMD sh -c CMD < /w/cmds\n")
     subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", "-v", f"{SLOT}:/src:ro", "-v",
                     f"{ENGINE}:/engine:ro", "-v", f"{w}:/w", "op1-bfin", "sh", "/w/run.sh"], check=True)
@@ -435,6 +453,10 @@ def main():
     who = max(res, key=lambda n: res[n]["cyc"])
     check(worst <= CPU_BUDGET, f"cycles per render call: max {worst} = {worst / 128:.0f} per sample ({who}; budget "
           f"{CPU_BUDGET} = 600 per sample per voice)")
+
+    same = [n for n in cs if np.array_equal(np.fromfile(os.path.join(w, n + ".cref"), dtype="<i2"), res[n]["x"])]
+    check(len(same) == len(cs), f"the asm loops render bit for bit what fmdrum.c's C loops do ({len(same)} of {len(cs)} "
+          "cases)" + ("" if len(same) == len(cs) else ": not " + ", ".join(sorted(set(cs) - set(same))[:8])))
 
     # ---- pitch ----
     errs = []

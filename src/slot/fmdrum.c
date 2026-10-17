@@ -26,7 +26,9 @@
  *                                                                                     METAL/GRIND
  * FEEDBACK: the modulator reads its own last two outputs (mean, as the DX7) x beta, following the index's envelope;
  * SQUARE: the carrier is driven into a clip (1 .. 32 x, level-matched) while the feedback falls back. Both only in the
- * harsh loop (run_hv), so clean keys cost what they did.
+ * harsh path (run_hv), so clean keys cost what they did. run_hv runs in passes over the run (FM core, METAL's squares,
+ * the source, the filter, the mix), each a Blackfin assembly loop with its state in registers (dual MACs, parallel
+ * loads); the C loops under #ifndef __bfin__ are their reference, bit for bit (fmdrum_check builds both).
  * Hi-hat choke: a note-on on keys 10..13 whose NOISE is in the HAT or METAL zone releases the other sounding voices of
  * the group in those zones, in ~5 ms (open hat cut by the closed one).
  * Per block (128 samples at 88.2 kHz): the three envelopes step once (per-block factors from the tables), and every
@@ -39,7 +41,8 @@
  * below -50 dB, and only components above 0.77 fs fold back under 20 kHz (the rest lands where TE's 2:1 decimation
  * removes it, as fm4). DC (a 1:1 ratio puts a sideband at
  * 0 Hz) goes through an 8 Hz one-pole high-pass; the output passes dsp.h's soft knee.
- * Fixed point, no division (reciprocal constants, multiply-shift), no libgcc, no .bss.
+ * Fixed point, no division (reciprocal constants, multiply-shift), no libgcc, no .bss. The asm loops need n >= 1 (a hardware
+ * loop count of 0 is not a loop of none); runs are 32, 96 or 128 samples.
  */
 #include <stdint.h>
 #include "dsp.h"
@@ -88,6 +91,21 @@ static inline uint32_t cycles(void)
 #define mul16(d, f) (((int32_t)(short)(d) * (f)) >> 15)
 #endif
 
+/* qmul as the device computes it (__builtin_bfin_mult_fr1x32x32: the low halves' product only to 16 bits), so the C
+ * build (the asm loops' reference, fmdrum_check --c-ref) renders bit for bit what the device does */
+#ifdef __bfin__
+#define fd_qmul qmul
+#else
+static inline int32_t fd_qmul(int32_t a, int32_t b)
+{
+    int64_t lo = (int64_t)(((uint32_t)a & 0xFFFF) * ((uint32_t)b & 0xFFFF) >> 16);
+    lo = (lo + (int64_t)(a >> 16) * (b & 0xFFFF) + (int64_t)(b >> 16) * (a & 0xFFFF)) >> 15;
+    int64_t hi = (a >> 16) == -32768 && (b >> 16) == -32768 ? 0x7FFFFFFF : (int64_t)(a >> 16) * (b >> 16) * 2;
+    int64_t r = hi + lo;
+    return r > 0x7FFFFFFF ? 0x7FFFFFFF : r < -0x7FFFFFFF - 1 ? (int32_t)0x80000000 : (int32_t)r;
+}
+#endif
+
 /* sin(2 pi ph / 2^32), Q15: sine256 interpolated (~ -82 dB) */
 static inline int32_t fsin(uint32_t ph)
 {
@@ -100,7 +118,7 @@ static inline int32_t fsin(uint32_t ph)
  * lose a few % per block) */
 static inline int32_t env_step(int32_t e, int32_t factor)
 {
-    return qmul(e, factor << 1);
+    return fd_qmul(e, factor << 1);
 }
 
 /* carrier increment for pitch q (K0 units, 512 per semitone, 0 = 220 Hz), held below 0.45 fs */
@@ -179,7 +197,7 @@ static inline __attribute__((always_inline)) void run_v(const int NOISE, const i
             y += ((wl * lp + wb * bp + wh * hp) >> 12) * (gn >> 8);
         }
         y >>= 7;                                                    /* Q23 */
-        dcy = y - dcx + qmul(DC_R, dcy);
+        dcy = y - dcx + fd_qmul(DC_R, dcy);
         dcx = y;
         out[i] = soft_knee(dcy >> 8);
         cph += ci;
@@ -204,20 +222,102 @@ static inline __attribute__((always_inline)) void run_v(const int NOISE, const i
     v->dcy = dcy;
 }
 
-static inline int32_t clamp15(int32_t x)
+/* the asm loops' 16-bit saturation, for the C reference */
+static inline int32_t sat16(int32_t x)
 {
-    return x > 32767 ? 32767 : x < -32767 ? -32767 : x;
+    return x > 32767 ? 32767 : x < -32768 ? -32768 : x;
 }
 
-/* METAL's six squares and GRIND's square for a run, scaled by their weights, into fd_src[] (Q0, added to the filter's
- * source): small loops (three phases each in registers), so the main loop below keeps its state in registers.
- * Each square is +-3861 (six: RMS ~ white noise's); GRIND's is +-9459 (the same RMS). */
-static int16_t fd_src[BLOCK] RAM;           /* render calls come one at a time (TE's audio thread) */
+/* The harsh path (any of FEEDBACK, SQUARE, METAL, GRIND): the modulator fed back on itself (beta x the mean of its last
+ * two outputs, as the DX7), the carrier driven into a clip (gc), the filter's source white noise plus METAL's / GRIND's
+ * squares, and the filtered source ring-modulated with the voice (gr). In passes over the run, each small enough to keep
+ * its state in registers: the FM core (the clipped carrier into out[]), the source (into fd_x[]), the filter (fd_x[] in
+ * place) and the mix (out[] in place). */
+static int16_t fd_src[BLOCK] RAM;           /* the squares; render calls come one at a time (TE's audio thread) */
+static int32_t fd_x[BLOCK] RAM;             /* the filter's source, then its output */
 
+/* METAL's six squares for a run, scaled by their weight, into fd_src[] (Q0; zeros without METAL). Each square is
+ * +-3861 (six: RMS ~ white noise's). METAL: x = u (6 + 2 neg), neg = -(the squares below
+ * zero), high-passed (x minus its one-pole low-pass lpm), clamped to Q15. */
 static void squares(struct fd_voice *v, int n, const struct flt *nf)
 {
     int16_t *d = fd_src;
     if (nf->wm) {
+#ifdef __bfin__
+        /* four phases in R4..R7 (their signs as two vector pairs), two in I0/I1 (+= M0/M1); x' = 2u neg and lpm' =
+         * lpm - 6u (x - lpm and x - lpm's update are the same); x' - lpm' saturated to 16 bits */
+        struct {
+            uint32_t inc[4];                /*  0  4  8 12 */
+            int32_t lpm;                    /* 16: lpm - 6u */
+            uint32_t umh;                   /* 20: 2u | mh << 16 */
+            uint32_t ph[6];                 /* 24 .. 44 */
+            int16_t *d;                     /* 48 */
+            int32_t n;                      /* 52 */
+            uint32_t inc45[2];              /* 56 60 */
+        } c;
+        for (int j = 0; j < 4; j++)
+            c.inc[j] = nf->mi[j];
+        c.inc45[0] = nf->mi[4];
+        c.inc45[1] = nf->mi[5];
+        for (int j = 0; j < 6; j++)
+            c.ph[j] = v->mt[j];
+        c.lpm = v->mlp - 6 * nf->unit;
+        c.umh = (uint32_t)(2 * nf->unit) | (uint32_t)nf->mh << 16;
+        c.d = d;
+        c.n = n;
+        register void *cp __asm__("P5") = &c;
+        __asm__ volatile(
+            "R4 = [%[c] + 24];\n\t"
+            "R5 = [%[c] + 28];\n\t"
+            "R6 = [%[c] + 32];\n\t"
+            "R7 = [%[c] + 36];\n\t"
+            "R0 = [%[c] + 40];\n\tI0 = R0;\n\t"
+            "R0 = [%[c] + 44];\n\tI1 = R0;\n\t"
+            "R0 = [%[c] + 56];\n\tM0 = R0;\n\t"
+            "R0 = [%[c] + 60];\n\tM1 = R0;\n\t"
+            "R0 = [%[c] + 48];\n\tI2 = R0;\n\t"
+            "R3 = [%[c] + 20];\n\t"
+            "P2 = [%[c] + 52];\n\t"
+            "LSETUP (1f, 2f) LC0 = P2;\n"
+            "1:\tR0 = [%[c] + 0];\n\t"
+            "R4 = R4 + R0 (NS) || R1 = [%[c] + 4];\n\t"
+            "R5 = R5 + R1 (NS) || R0 = [%[c] + 8];\n\t"
+            "R6 = R6 + R0 (NS) || R1 = [%[c] + 12];\n\t"
+            "R7 = R7 + R1 (NS) || I0 += M0;\n\t"
+            "R0 = PACK (R4.H, R5.H) || I1 += M1;\n\t"
+            "R1 = PACK (R6.H, R7.H);\n\t"
+            "R0 = R0 >>> 15 (V);\n\t"
+            "R1 = R1 >>> 15 (V);\n\t"
+            "R0 = R0 +|+ R1;\n\t"
+            "R1 = I0;\n\t"
+            "R2 = I1;\n\t"
+            "R1 = PACK (R1.H, R2.H);\n\t"
+            "R1 = R1 >>> 15 (V);\n\t"
+            "R0 = R0 +|+ R1 || R2 = [%[c] + 16];\n\t"             /* neg in two halves; lpm' */
+            "A0 = R3.L * R0.L (IS);\n\t"
+            "R0 = (A0 += R3.L * R0.H) (IS);\n\t"                    /* x' = 2u neg */
+            "R1 = R0 - R2;\n\t"
+            "A1 = R3.H * R1.L (M), A0 = R3.H * R1.H;\n\t"
+            "A1 = A1 >>> 15;\n\t"
+            "R1 = (A0 += A1);\n\t"
+            "R2 = R2 + R1;\n\t"                                     /* lpm' += ((x' - lpm') mh) >> 15 */
+            "R1 = R0 - R2 (NS) || [%[c] + 16] = R2;\n\t"
+            "R1 = R1 << 16 (S);\n"
+            "2:\tW [I2++] = R1.H;\n\t"
+            "[%[c] + 24] = R4;\n\t"
+            "[%[c] + 28] = R5;\n\t"
+            "[%[c] + 32] = R6;\n\t"
+            "[%[c] + 36] = R7;\n\t"
+            "R0 = I0;\n\t[%[c] + 40] = R0;\n\t"
+            "R0 = I1;\n\t[%[c] + 44] = R0;\n\t"
+            :
+            : [c] "a"(cp)
+            : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P2", "I0", "I1", "I2", "M0", "M1", "A0", "A1", "LC0",
+              "LT0", "LB0", "cc", "memory");
+        for (int j = 0; j < 6; j++)
+            v->mt[j] = c.ph[j];
+        v->mlp = c.lpm + 6 * nf->unit;
+#else
         uint32_t a = v->mt[0], b = v->mt[1], c = v->mt[2];
         const uint32_t ia = nf->mi[0], ib = nf->mi[1], ic = nf->mi[2];
         for (int i = 0; i < n; i++) {       /* count the negative halves: 0 .. -3 */
@@ -242,100 +342,459 @@ static void squares(struct fd_voice *v, int n, const struct flt *nf)
             int32_t neg = d[i] + ((int32_t)a >> 31) + ((int32_t)b >> 31) + ((int32_t)c >> 31);
             int32_t x = u * (6 + 2 * neg);                        /* +-23166 at most */
             lpm += ((x - lpm) * mh) >> 15;                         /* high-pass: x minus its low-pass */
-            d[i] = (int16_t)clamp15(x - lpm);
+            d[i] = (int16_t)sat16(x - lpm);
         }
         v->mlp = lpm;
         v->mt[3] = a;
         v->mt[4] = b;
         v->mt[5] = c;
+#endif
     } else {
         for (int i = 0; i < n; i++)
             d[i] = 0;
     }
-    if (nf->wsq) {
-        uint32_t g = v->gph;
-        const uint32_t gi = nf->gi;
-        const int32_t w = (nf->wsq * 9459) >> 15;                 /* RMS = white noise's */
-        for (int i = 0; i < n; i++) {
-            g += gi;
-            d[i] = (int16_t)clamp15(d[i] + ((int32_t)g < 0 ? -w : w));
-        }
-        v->gph = g;
-    }
 }
 
-/* The harsh path (any of FEEDBACK, SQUARE, METAL, GRIND): the modulator fed back on itself (beta x the mean of its last
- * two outputs, as the DX7), the carrier driven into a clip (gc), the filter's source white noise plus (SRC) fd_src[],
- * and the filtered source ring-modulated with the voice (gr). Every term is halved before the sum (three terms: int32
- * headroom), the filtered source clamped to Q15. */
-static inline __attribute__((always_inline)) void run_hv(const int SRC, struct fd_voice *v, int16_t *out, int n,
-                                                         const struct seg *s, const struct flt *nf)
+/* 1. The FM core: the clipped carrier cc (Q15) into out[] */
+#ifdef __bfin__
+struct hv_core_ctx {                        /* hv_core's asm loop reads and writes these (offsets fixed below) */
+    uint32_t cph, ci, dci, mph, mi, dmi;    /*  0  4  8 12 16 20 */
+    int32_t gm, dgm, gf, dgf, m1, s;        /* 24 28 32 36 40 44: s = m1 + m2 */
+    uint32_t gc, dgc;                       /* 48 52: gc << 16 | the EXTRACT control (fsin's 15 fraction bits), dgc << 16 */
+    const uint32_t *tab;                    /* 56 */
+    int16_t *out;                           /* 60 */
+    int32_t n;                              /* 64 */
+};
+
+/* fsin(R0) -> R2.L, as fsin() above: index ph >> 24, fraction (ph >> 9) & 0x7FFF (EXTRACT with R3.L), one table word
+ * per step (fd_sin2: the step's sine and its difference to the next). FSIN_A: index to P0, fraction to R0, with FILL
+ * between the move to P0 and the address (independent work: a register moved to P0 is not usable as an address for a
+ * few cycles on the device); FSIN_B: the lookup. R0, R1, P0 used. */
+#define FSIN_A(FILL)                                                                                                 \
+    "R1 = R0 >> 24;\n\t"                                                                                              \
+    "P0 = R1;\n\t"                                                                                                   \
+    FILL                                                                                                             \
+    "P0 = P4 + (P0 << 2);\n\t"
+#define FSIN_B                                                                                                       \
+    "R1 = [P0];\n\t"                                                                                                 \
+    "R2.L = R1.H * R0.L (T);\n\t"                                                                                    \
+    "R2.L = R2.L + R1.L (NS);\n\t"
+#endif
+
+static void hv_core(struct fd_voice *v, int16_t *out, int n, const struct seg *s)
 {
-    uint32_t cph = v->cph, mph = v->mph, ci = v->cinc, mi = v->minc, seed = v->seed;
-    int32_t gt = v->gt, gn = v->gn, gm = v->gm, gf = v->gf, gc = v->gc, gr = v->gr;
-    int32_t lp = v->lp, bp = v->bp, dcx = v->dcx, dcy = v->dcy, m1 = v->m1, m2 = v->m2;
-    const int32_t f = nf->f, q = nf->q, wl = nf->wl, wb = nf->wb, wh = nf->wh, wx = nf->wx, go = nf->go;
-    const int16_t *sx = fd_src;
+#ifdef __bfin__
+    struct hv_core_ctx c;
+    c.cph = v->cph;
+    c.ci = v->cinc;
+    c.dci = s->dci;
+    c.mph = v->mph;
+    c.mi = v->minc;
+    c.dmi = s->dmi;
+    c.gm = v->gm;
+    c.dgm = s->dgm;
+    c.gf = v->gf;
+    c.dgf = s->dgf;
+    c.m1 = v->m1;
+    c.s = v->m1 + v->m2;
+    c.gc = ((uint32_t)v->gc << 16) | 0x090F;
+    c.dgc = (uint32_t)s->dgc << 16;
+    c.tab = fd_sin2;
+    c.out = out;
+    c.n = n;
+    register struct hv_core_ctx *cp __asm__("P5") = &c;
+    __asm__ volatile(
+        "R0 = [%[c] + 0];\n\tI0 = R0;\n\t"
+        "R0 = [%[c] + 4];\n\tI1 = R0;\n\t"
+        "R0 = [%[c] + 8];\n\tM1 = R0;\n\t"
+        "R0 = [%[c] + 12];\n\tI2 = R0;\n\t"
+        "R0 = [%[c] + 16];\n\tI3 = R0;\n\t"
+        "R0 = [%[c] + 20];\n\tM3 = R0;\n\t"
+        "R4 = [%[c] + 24];\n\t"
+        "R5 = [%[c] + 32];\n\t"
+        "R6 = [%[c] + 40];\n\t"
+        "R7 = [%[c] + 44];\n\t"
+        "R3 = [%[c] + 48];\n\t"
+        "P4 = [%[c] + 56];\n\t"
+        "P1 = [%[c] + 60];\n\t"
+        "P2 = [%[c] + 64];\n\t"
+        "LSETUP (1f, 2f) LC0 = P2;\n"
+        "1:\tR1 = I2;\n\t"
+        "R7 *= R5;\n\t"                                         /* (m1 + m2) gf */
+        "R0 = R7 + R1;\n\t"
+        FSIN_A("R0 = EXTRACT (R0, R3.L) (Z) || R2 = [%[c] + 36];\n\t"
+               "R5 = R5 + R2;\n\t"                                /* gf += dgf */
+               "M2 = I3;\n\t"
+               "I2 += M2;\n\t"                                    /* mph += mi */
+               "I3 += M3;\n\t")                                   /* mi += dmi */
+        FSIN_B                                                  /* ms */
+        "R2 = R2.L (X);\n\t"
+        "R7 = R2 + R6;\n\t"                                     /* m1 + m2 for the next sample */
+        "R6 = R2;\n\t"
+        "R2 *= R4;\n\t"                                         /* ms gm */
+        "R1 = I0;\n\t"
+        "R0 = R2 + R1;\n\t"
+        FSIN_A("R0 = EXTRACT (R0, R3.L) (Z) || R2 = [%[c] + 28];\n\t"
+               "R4 = R4 + R2;\n\t"                                /* gm += dgm */
+               "M0 = I1;\n\t"
+               "I0 += M0;\n\t"                                    /* cph += ci */
+               "I1 += M1;\n\t")                                   /* ci += dci */
+        FSIN_B                                                  /* cs */
+        "A0 = R2.L * R3.H (IS);\n\t"
+        "A0 = A0 >>> 10 || R1 = [%[c] + 52];\n\t"
+        "R2.L = A0 (IS);\n"                                      /* cc = (cs gc) >> 10, saturated */
+        "2:\tR3 = R3 + R1 (NS) || W [P1++] = R2;\n\t"           /* gc += dgc */
+        "R0 = I0;\n\t[%[c] + 0] = R0;\n\t"
+        "R0 = I1;\n\t[%[c] + 4] = R0;\n\t"
+        "R0 = I2;\n\t[%[c] + 12] = R0;\n\t"
+        "R0 = I3;\n\t[%[c] + 16] = R0;\n\t"
+        "[%[c] + 24] = R4;\n\t"
+        "[%[c] + 32] = R5;\n\t"
+        "[%[c] + 40] = R6;\n\t"
+        "[%[c] + 44] = R7;\n\t"
+        "[%[c] + 48] = R3;\n\t"
+        :
+        : [c] "a"(cp)
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "P4", "I0", "I1", "I2", "I3", "M0", "M1",
+          "M2", "M3", "A0", "LC0", "LT0", "LB0", "cc", "memory");
+    v->cph = c.cph;
+    v->cinc = c.ci;
+    v->mph = c.mph;
+    v->minc = c.mi;
+    v->gm = c.gm;
+    v->gf = c.gf;
+    v->gc = (int32_t)c.gc >> 16;
+    v->m1 = c.m1;
+    v->m2 = c.s - c.m1;
+#else
+    uint32_t cph = v->cph, mph = v->mph, ci = v->cinc, mi = v->minc;
+    int32_t gm = v->gm, gf = v->gf, gc = v->gc, m1 = v->m1, m2 = v->m2;
     for (int i = 0; i < n; i++) {
         int32_t ms = fsin(mph + (uint32_t)(m1 + m2) * (uint32_t)gf);
         m2 = m1;
         m1 = ms;
-        int32_t cc = clamp15((fsin(cph + (uint32_t)ms * (uint32_t)gm) * gc) >> 10);
-        int32_t y = (cc * (gt >> 8)) >> 1;
-        seed = seed * 1664525u + 1013904223u;
-        int32_t src = (wx * ((int32_t)seed >> 17)) >> 15;          /* white, +-16384 */
-        if (SRC)
-            src += sx[i];
-        lp += (f * bp) >> 15;
-        int32_t hp = src - lp - ((q * bp) >> 15);
-        bp += (f * hp) >> 15;
-        int32_t nz = clamp15((((wl * lp + wb * bp + wh * hp) >> 12) * go) >> 8);
-        y += (nz * (gn >> 8)) >> 1;
-        y += ((nz * cc) >> 15) * (gr >> 8);                         /* ring-mod, x2 (halved like the rest) */
-        y >>= 6;                                                    /* Q23 */
-        dcy = y - dcx + qmul(DC_R, dcy);
-        dcx = y;
-        out[i] = soft_knee(dcy >> 8);
+        out[i] = (int16_t)sat16((fsin(cph + (uint32_t)ms * (uint32_t)gm) * gc) >> 10);
         cph += ci;
         mph += mi;
         ci += s->dci;
         mi += s->dmi;
-        gt += s->dgt;
-        gn += s->dgn;
         gm += s->dgm;
         gf += s->dgf;
         gc += s->dgc;
-        gr += s->dgr;
     }
     v->cph = cph;
     v->mph = mph;
     v->cinc = ci;
     v->minc = mi;
-    v->seed = seed;
-    v->gt = gt;
-    v->gn = gn;
     v->gm = gm;
     v->gf = gf;
     v->gc = gc;
-    v->gr = gr;
-    v->lp = lp;
-    v->bp = bp;
-    v->dcx = dcx;
-    v->dcy = dcy;
     v->m1 = m1;
     v->m2 = m2;
+#endif
+}
+
+/* 2. The filter's source into fd_x[]: white noise x wx (+-16384), plus (SRC) METAL's squares (fd_src[]) and GRIND's
+ * square (+-9459 x wsq: the same RMS as white noise), those two clamped to Q15 together */
+#ifdef __bfin__
+#define SRC_HEAD                                                                                                     \
+    "R7 = [%[c] + 0];\n\tR6 = [%[c] + 4];\n\tR5 = [%[c] + 12];\n\tR4 = [%[c] + 16];\n\tR3 = [%[c] + 20];\n\t"           \
+    "P1 = [%[c] + 28];\n\tP2 = [%[c] + 36];\n\tR0 = [%[c] + 32];\n\tI0 = R0;\n\t"                                  \
+    "LSETUP (1f, 2f) LC0 = P2;\n"                                                                                   \
+    "1:\tR7 *= R6;\n\t"                                                                                             \
+    "R0 = [%[c] + 8];\n\t"                                                                                          \
+    "R7 = R7 + R0 (NS) || R2 = [%[c] + 24];\n\t"                     /* seed = seed a + c; gi */                    \
+    "R0 = R7 >>> 17;\n\t"                                                                                           \
+    "R0.L = R0.L * R5.L (T);\n\t"                                    /* (wx (seed >> 17)) >> 15 */                  \
+    "R0 = R0.L (X);\n\t"
+#define SRC_TAIL                                                                                                     \
+    "2:\t[P1++] = R0;\n\t"                                                                                          \
+    "[%[c] + 0] = R7;\n\t[%[c] + 20] = R3;\n\t"                                                                     \
+    : : [c] "a"(cp) : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P1", "P2", "I0", "LC0", "LT0", "LB0", "cc",  \
+      "memory"
+#endif
+
+static void hv_src(struct fd_voice *v, int n, const struct flt *nf, int SRC)
+{
+    const int32_t w = (nf->wsq * 9459) >> 15;
+#ifdef __bfin__
+    struct {
+        uint32_t seed, a, c;                /*  0  4  8: the LCG */
+        int32_t wx, w;                      /* 12 16 */
+        uint32_t g, gi;                     /* 20 24: GRIND's phase, increment */
+        int32_t *x;                         /* 28 */
+        const int16_t *d;                   /* 32 */
+        int32_t n;                          /* 36 */
+    } c;
+    c.seed = v->seed;
+    c.a = 1664525u;
+    c.c = 1013904223u;
+    c.wx = nf->wx;
+    c.w = w;
+    c.g = v->gph;
+    c.gi = nf->gi;
+    c.x = fd_x;
+    c.d = fd_src;
+    c.n = n;
+    register void *cp __asm__("P5") = &c;
+    if (!SRC)
+        __asm__ volatile(SRC_HEAD SRC_TAIL);
+    else if (!nf->wsq)
+        __asm__ volatile(SRC_HEAD
+                         "R1.L = W [I0++];\n\t"
+                         "R1 = R1.L (X);\n\t"
+                         "R0 = R0 + R1;\n"
+                         SRC_TAIL);
+    else                                    /* + sat16(d +- w): (w ^ s) - s, s = g >> 31 */
+        __asm__ volatile(SRC_HEAD
+                         "R3 = R3 + R2 (NS) || R1.L = W [I0++];\n\t"
+                         "R1 = R1.L (X);\n\t"
+                         "R2 = R3 >>> 31;\n\t"
+                         "R4 = R4 ^ R2;\n\t"
+                         "R1 = R1 + R4;\n\t"
+                         "R4 = R4 ^ R2;\n\t"
+                         "R1 = R1 - R2;\n\t"
+                         "R1 = R1 << 16 (S);\n\t"
+                         "R1 >>>= 16;\n\t"
+                         "R0 = R0 + R1;\n"
+                         SRC_TAIL);
+    v->seed = c.seed;
+    v->gph = c.g;
+#else
+    uint32_t seed = v->seed, g = v->gph;
+    const int32_t wx = nf->wx;
+    for (int i = 0; i < n; i++) {
+        seed = seed * 1664525u + 1013904223u;
+        int32_t sq = 0;
+        if (SRC) {
+            g += nf->gi;
+            sq = nf->wsq ? sat16(fd_src[i] + ((int32_t)g < 0 ? -w : w)) : fd_src[i];
+        }
+        fd_x[i] = ((wx * ((int32_t)seed >> 17)) >> 15) + sq;
+    }
+    v->seed = seed;
+    v->gph = g;
+#endif
+}
+
+/* 3. The filter (Chamberlin SVF, lp/bp/hp blended, x go), clamped to Q15: fd_x[] -> fd_src[] (the squares are used) */
+static void hv_filt(struct fd_voice *v, int n, const struct flt *nf)
+{
+#ifdef __bfin__
+    /* (x c) >> 15 for 32-bit x, 16-bit c, exactly: the high half's product (fractional: x 2) plus the low half's
+     * (mixed mode: c signed, x.L unsigned) >> 15; q * bp as bp + (q - 32768) bp, so the coefficient fits 16 bits */
+    struct {
+        uint32_t fq, wlb, whg;              /*  0  4  8: f | (q - 32768) << 16, wl | wb << 16, wh | go << 16 */
+        int32_t lp, bp;                     /* 12 16 */
+        const int32_t *x;                   /* 20 */
+        int16_t *nz;                        /* 24 */
+        int32_t n;                          /* 28 */
+    } c;
+    c.fq = (uint32_t)nf->f | (uint32_t)(nf->q - 32768) << 16;
+    c.wlb = (uint32_t)nf->wl | (uint32_t)nf->wb << 16;
+    c.whg = (uint32_t)nf->wh | (uint32_t)nf->go << 16;
+    c.lp = v->lp;
+    c.bp = v->bp;
+    c.x = fd_x;
+    c.nz = fd_src;
+    c.n = n;
+    register void *cp __asm__("P5") = &c;
+    __asm__ volatile(
+        "R5 = [%[c] + 0];\n\t"
+        "R4 = [%[c] + 4];\n\t"
+        "R3 = [%[c] + 8];\n\t"
+        "R7 = [%[c] + 12];\n\t"
+        "R6 = [%[c] + 16];\n\t"
+        "P0 = [%[c] + 20];\n\t"
+        "P1 = [%[c] + 24];\n\t"
+        "P2 = [%[c] + 28];\n\t"
+        "LSETUP (1f, 2f) LC0 = P2;\n"
+        "1:\tA1 = R5.L * R6.L (M), A0 = R5.L * R6.H || R2 = [P0++];\n\t"
+        "A1 = A1 >>> 15;\n\t"
+        "R0 = (A0 += A1);\n\t"
+        "R7 = R7 + R0;\n\t"                                    /* lp += (f bp) >> 15 */
+        "A1 = R5.H * R6.L (M), A0 = R5.H * R6.H;\n\t"
+        "A1 = A1 >>> 15;\n\t"
+        "R0 = (A0 += A1);\n\t"
+        "R1 = R2 - R7;\n\t"
+        "R1 = R1 - R6;\n\t"
+        "R1 = R1 - R0;\n\t"                                    /* hp = x - lp - (q bp) >> 15 */
+        "A1 = R5.L * R1.L (M), A0 = R5.L * R1.H;\n\t"
+        "A1 = A1 >>> 15;\n\t"
+        "R0 = (A0 += A1);\n\t"
+        "R6 = R6 + R0;\n\t"                                    /* bp += (f hp) >> 15 */
+        "A1 = R4.L * R7.L (M), A0 = R4.L * R7.H (IS);\n\t"
+        "A1 += R4.H * R6.L (M), A0 += R4.H * R6.H (IS);\n\t"
+        "A1 += R3.L * R1.L (M), A0 += R3.L * R1.H (IS);\n\t"
+        "A1 = A1 >>> 12;\n\t"
+        "A0 = A0 << 4;\n\t"
+        "R0 = (A0 += A1);\n\t"                                 /* (wl lp + wb bp + wh hp) >> 12 */
+        "A1 = R3.H * R0.L (M), A0 = R3.H * R0.H (IS);\n\t"
+        "A1 = A1 >>> 8;\n\t"
+        "A0 = A0 << 8;\n\t"
+        "A0 += A1;\n\t"
+        "R0.L = A0 (IS);\n"                                     /* x go >> 8, saturated */
+        "2:\tW [P1++] = R0;\n\t"
+        "[%[c] + 12] = R7;\n\t"
+        "[%[c] + 16] = R6;\n\t"
+        :
+        : [c] "a"(cp)
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "A0", "A1", "LC0", "LT0", "LB0", "cc",
+          "memory");
+    v->lp = c.lp;
+    v->bp = c.bp;
+#else
+    int32_t lp = v->lp, bp = v->bp;
+    const int32_t f = nf->f, q = nf->q, wl = nf->wl, wb = nf->wb, wh = nf->wh, go = nf->go;
+    for (int i = 0; i < n; i++) {           /* (64-bit products: the accumulators are 40 bits) */
+        lp += (int32_t)(((int64_t)f * bp) >> 15);
+        int32_t hp = fd_x[i] - lp - (int32_t)(((int64_t)q * bp) >> 15);
+        bp += (int32_t)(((int64_t)f * hp) >> 15);
+        int64_t pre = ((int64_t)wl * lp + (int64_t)wb * bp + (int64_t)wh * hp) >> 12;
+        pre = pre > 0x7FFFFFFF ? 0x7FFFFFFF : pre < -0x7FFFFFFF - 1 ? -0x7FFFFFFF - 1 : pre;
+        int64_t y = (pre * go) >> 8;
+        fd_src[i] = (int16_t)(y > 32767 ? 32767 : y < -32768 ? -32768 : y);
+    }
+    v->lp = lp;
+    v->bp = bp;
+#endif
+}
+
+/* 4. The mix: tone cc, the filtered source nz and their ring modulation (x2), each term halved before the sum (int32
+ * headroom); the DC blocker and the soft knee: out[] in place */
+static void hv_mix(struct fd_voice *v, int16_t *out, int n, const struct seg *s)
+{
+#ifdef __bfin__
+    /* the gains as gt << 8, so their high halves are gt >> 8 (Q15) exactly; the DC blocker's qmul as gcc expands
+     * __builtin_bfin_mult_fr1x32x32; the knee (dsp.h soft_knee) branches out of the loop only above 0.75 FS */
+    struct {
+        int32_t dcx, knee, top, one;        /*  0  4  8 12: dcx, KNEE_T, KNEE_T + 2 (32767 - KNEE_T), 32767 */
+        int32_t dgt, dgn, dgr;              /* 16 20 24 (<< 8) */
+        int32_t gt, gn, gr, dcy, dcr;       /* 28 32 36 40 44 */
+        const int16_t *cc, *nz;             /* 48 52 */
+        int16_t *out;                       /* 56 */
+        int32_t n;                          /* 60 */
+    } c;
+    c.dcx = v->dcx;
+    c.knee = KNEE_T;
+    c.top = KNEE_T + 2 * (32767 - KNEE_T);
+    c.one = 32767;
+    c.dgt = s->dgt << 8;
+    c.dgn = s->dgn << 8;
+    c.dgr = s->dgr << 8;
+    c.gt = v->gt << 8;
+    c.gn = v->gn << 8;
+    c.gr = v->gr << 8;
+    c.dcy = v->dcy;
+    c.dcr = DC_R;
+    c.cc = out;
+    c.nz = fd_src;
+    c.out = out;
+    c.n = n;
+    register void *cp __asm__("P5") = &c;
+    __asm__ volatile(
+        "R7 = [%[c] + 28];\n\t"
+        "R6 = [%[c] + 32];\n\t"
+        "R5 = [%[c] + 36];\n\t"
+        "R3 = [%[c] + 40];\n\t"
+        "R4 = [%[c] + 44];\n\t"
+        "R0 = [%[c] + 48];\n\tI0 = R0;\n\t"
+        "R0 = [%[c] + 52];\n\tI1 = R0;\n\t"
+        "R0 = [%[c] + 56];\n\tI2 = R0;\n\t"
+        "P2 = [%[c] + 60];\n\t"
+        "LSETUP (1f, 2f) LC0 = P2;\n"
+        "1:\tMNOP || R0.L = W [I0++] || R1.L = W [I1++];\n\t"
+        "A0 = R0.L * R7.H (IS);\n\t"                            /* cc gt >> 8 */
+        "A1 = R1.L * R6.H (IS);\n\t"                            /* nz gn >> 8 */
+        "A0 = A0 >>> 1;\n\t"
+        "A1 = A1 >>> 1;\n\t"
+        "A0 += A1;\n\t"
+        "R2.L = R1.L * R0.L (T);\n\t"                           /* (nz cc) >> 15 */
+        "A0 += R2.L * R5.H (IS);\n\t"
+        "A0 = A0 >>> 6;\n\t"
+        "R0 = A0 || R1 = [%[c] + 0];\n\t"                       /* y, Q23; dcx */
+        "R1 = R0 - R1 (NS) || [%[c] + 0] = R0;\n\t"             /* dcx = y */
+        "A1 = R3.L * R4.L (FU);\n\t"
+        "A1 = A1 >> 16;\n\t"
+        "A1 += R3.H * R4.L (M), A0 = R3.H * R4.H;\n\t"
+        "A1 += R4.H * R3.L (M);\n\t"
+        "A1 = A1 >>> 15;\n\t"
+        "R2 = (A0 += A1);\n\t"                                  /* qmul(DC_R, dcy) */
+        "R3 = R1 + R2;\n\t"                                     /* dcy */
+        "R0 = R3 >>> 8;\n\t"
+        "R1 = ABS R0 || R2 = [%[c] + 4];\n\t"
+        "CC = R1 <= R2;\n\t"
+        "IF !CC JUMP 4f;\n"
+        "3:\tR1 = [%[c] + 16];\n\t"
+        "R7 = R7 + R1 (NS) || W [I2++] = R0.L || R2 = [%[c] + 20];\n\t"
+        "R6 = R6 + R2 (NS) || R1 = [%[c] + 24];\n"
+        "2:\tR5 = R5 + R1;\n\t"
+        "JUMP 5f;\n"
+        "4:\tR2 = [%[c] + 8];\n\t"                             /* the knee: a = min(|x|, top), d = a - KNEE_T, */
+        "R1 = MIN (R1, R2);\n\t"                                /* min(a - d^2 >> 15, 32767), x's sign */
+        "R2 = [%[c] + 4];\n\t"
+        "R2 = R1 - R2;\n\t"
+        "R2 = R2.L * R2.L (IS);\n\t"
+        "R2 >>>= 15;\n\t"
+        "R1 = R1 - R2;\n\t"
+        "R2 = [%[c] + 12];\n\t"
+        "R1 = MIN (R1, R2);\n\t"
+        "R2 = -R1;\n\t"
+        "CC = R0 < 0;\n\t"
+        "IF CC R1 = R2;\n\t"
+        "R0 = R1;\n\t"
+        "JUMP 3b;\n"
+        "5:\t[%[c] + 28] = R7;\n\t"
+        "[%[c] + 32] = R6;\n\t"
+        "[%[c] + 36] = R5;\n\t"
+        "[%[c] + 40] = R3;\n\t"
+        :
+        : [c] "a"(cp)
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P2", "I0", "I1", "I2", "A0", "A1", "LC0", "LT0", "LB0", "cc",
+          "memory");
+    v->gt = c.gt >> 8;
+    v->gn = c.gn >> 8;
+    v->gr = c.gr >> 8;
+    v->dcx = c.dcx;
+    v->dcy = c.dcy;
+#else
+    int32_t gt = v->gt, gn = v->gn, gr = v->gr, dcx = v->dcx, dcy = v->dcy;
+    for (int i = 0; i < n; i++) {
+        int32_t cc = out[i], nz = fd_src[i];
+        int32_t y = (cc * (gt >> 8)) >> 1;
+        y += (nz * (gn >> 8)) >> 1;
+        y += ((nz * cc) >> 15) * (gr >> 8);
+        y >>= 6;                                                    /* Q23 */
+        dcy = y - dcx + fd_qmul(DC_R, dcy);
+        dcx = y;
+        out[i] = soft_knee(dcy >> 8);
+        gt += s->dgt;
+        gn += s->dgn;
+        gr += s->dgr;
+    }
+    v->gt = gt;
+    v->gn = gn;
+    v->gr = gr;
+    v->dcx = dcx;
+    v->dcy = dcy;
+#endif
+}
+
+static void run_hv(int SRC, struct fd_voice *v, int16_t *out, int n, const struct seg *s, const struct flt *nf)
+{
+    hv_core(v, out, n, s);
+    if (SRC)
+        squares(v, n, nf);
+    hv_src(v, n, nf, SRC);
+    hv_filt(v, n, nf);
+    hv_mix(v, out, n, s);
 }
 
 static void run(struct fd_voice *v, int16_t *out, int n, const struct seg *s, const struct flt *nf)
 {
     int harsh = v->gf || s->dgf || v->gc != 1024 || s->dgc || v->gr || s->dgr || nf->wm || nf->wsq || nf->wx != 32767;
     if (harsh) {
-        if (nf->wm || nf->wsq) {
-            squares(v, n, nf);
-            run_hv(1, v, out, n, s, nf);
-        } else {
-            run_hv(0, v, out, n, s, nf);
-        }
+        run_hv(nf->wm || nf->wsq, v, out, n, s, nf);
         return;
     }
     v->m1 = v->m2 = 0;                      /* the clean path has no feedback (gf is 0 here) */

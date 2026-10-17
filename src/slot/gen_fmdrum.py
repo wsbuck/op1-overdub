@@ -31,6 +31,7 @@ cymbals, 16-23 percussion and effects.
 """
 import json
 import math
+import re
 import os
 
 import numpy as np
@@ -443,6 +444,14 @@ def tables():
     return exp2, ratio, amp, mod, swp
 
 
+def sine_pairs():
+    """sine256 (src/engine/sine_table.h) as (next - this) << 16 | this, one word per step (fmdrum.c's fsin in asm)"""
+    t = open(os.path.join(HERE, "..", "engine", "sine_table.h")).read()
+    v = [int(x) for x in re.findall(r"-?\d+", t[t.index("{"):t.index("}")])]
+    assert len(v) == 257
+    return [f"0x{((v[i + 1] - v[i]) & 0xFFFF) << 16 | (v[i] & 0xFFFF):08x}" for i in range(256)]
+
+
 def c_array(name, ctype, vals, per=12):
     s = f"static const {ctype} {name}[{len(vals)}] __attribute__((unused)) = {{\n"
     for i in range(0, len(vals), per):
@@ -693,7 +702,9 @@ def main():
           f"/* clap: noise gain at the end of block b (bursts {CLAP_BURSTS} blocks), Q15; from the last one 32767 */",
           f"#define FD_CLAP_N {len(clap)}", c_array("fd_clap", "int16_t", clap),
           f"static const char *const fd_noise_zone[{len(NOISE_ZONES)}] __attribute__((unused)) = {{ {names[:-2]} }};",
-          f"#define FD_TONE {int(round(TONE * 32767))}", "", "#endif", ""]
+          f"#define FD_TONE {int(round(TONE * 32767))}",
+          "/* fmdrum.c's sine in its assembly loops: sine256[i] (low half) and sine256[i + 1] - sine256[i] (high half) */",
+          c_array("fd_sin2", "uint32_t", sine_pairs(), 8), "#endif", ""]
     open(os.path.join(HERE, "fmdrum_tables.h"), "w").write("\n".join(h))
     kits = {}
     for name, (template, keys) in KITS.items():

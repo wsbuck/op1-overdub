@@ -98,7 +98,9 @@ static inline int32_t svf_lp(const struct svf *f, int32_t v0, int32_t *ic1, int3
 
 /* x in Q15 (any range) -> Q15 soft clip: x - 4x^3/27 on |x| <= 1.5, +-1 beyond. */
 /* Linear up to KNEE_T (0.75 FS), then a quadratic knee reaching full scale with zero slope at
- * x = KNEE_T + 2 (32767 - KNEE_T): transparent at normal levels (a pure sine stays pure), soft only near the top. */
+ * x = KNEE_T + 2 (32767 - KNEE_T): transparent at normal levels (a pure sine stays pure), soft only near the top.
+ * The quadratic reaches 32768 just below the top (|x| 40779 .. 40957, d^2 >> 15 rounds down): held at 32767, or a
+ * positive sample there wrapped to -32768. */
 #define KNEE_T 24576
 static inline int16_t soft_knee(int32_t x)
 {
@@ -106,6 +108,7 @@ static inline int16_t soft_knee(int32_t x)
     if (ax > KNEE_T) {
         int32_t d = ax - KNEE_T;
         ax = d >= 2 * (32767 - KNEE_T) ? 32767 : KNEE_T + d - ((d * d) >> 15);   /* d^2 / (4 * 8191) ~ d^2 >> 15 */
+        ax = ax > 32767 ? 32767 : ax;
     }
     return (int16_t)(x < 0 ? -ax : ax);
 }
