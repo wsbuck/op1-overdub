@@ -9,6 +9,15 @@
 #define SHIFT_DOWN (*(volatile uint8_t *)0x01DD7F78)        /* set/cleared by the global key handler */
 #define RAM __attribute__((section(".data")))
 #define FEATURES feature_mask                               /* slot.S, set by tools/apply.py */
+#define TEMPO_SPB te_tempo_spb                              /* samples per beat, Q14 (0x01AADAD8; fx-pingpong.md) */
+/* Time for SMOOTH and STRUM, in units of 512 core cycles (1.28 us at 400 MHz; wraps after ~1.5 h): CYCLES2:CYCLES (reading
+ * CYCLES latches CYCLES2). Read from the KeyHandler and the sequencer thread (same core, same counter). */
+static inline uint32_t c2_time(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile ("%0 = CYCLES; %1 = CYCLES2;" : "=d"(lo), "=d"(hi));
+    return hi << 23 | lo >> 9;
+}
 #else
 #define RAM
 #endif
@@ -210,9 +219,10 @@ int hold_shiftkey(void *self, int key)
     if (key == KEY_T2 && (FEATURES & FEAT_HOLD)) {
         hold_on = !hold_on;
         if (!hold_on) {
-            if (C2_ON())
+            if (C2_ON()) {
                 c2_release_held();
-            else
+                c2.smooth_n = 0;       /* SMOOTH starts over when HOLD goes off */
+            } else
                 release_held();
         }
         return 1;
@@ -249,4 +259,13 @@ int c2_knob(void *self, int knob, int16_t *delta)
     if (steps)
         c2_knob_turn(knob, steps);
     return 0;
+}
+
+/* The sequencer thread, after TE's step (entry.inc _c2_seq_hook replaces the CALL FUN_01a0d2c0 at 0x01A431AA in the
+ * thread's loop FUN_01a4318c: TE's step first with its registers untouched, then this): STRUM's notes
+ * (chord2_impl.h c2_seq_service). With CHORD v2 left out it returns at once. */
+void c2_seq_tick(void)
+{
+    if (C2_ON())
+        c2_seq_service();
 }

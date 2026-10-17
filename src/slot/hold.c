@@ -35,6 +35,7 @@ extern int te_yaffs_read(int fd, void *buf, unsigned n);    /* FUN_01a99c90: byt
 extern int te_yaffs_write(int fd, const void *buf, unsigned n);   /* FUN_01a99f84: bytes written */
 extern int te_yaffs_close(int fd);                          /* FUN_01a99908: 0 */
 extern int te_yaffs_mkdir(const char *path, int mode);      /* FUN_01a9a886: 0, -1 if it exists */
+extern const volatile uint32_t te_tempo_spb;                /* 0x01AADAD8: samples per beat, Q14 */
 extern const volatile uint32_t feature_mask;                /* slot.S: FEAT_HOLD | FEAT_CHORD | FEAT_CHORD2 (apply.py) */
 
 void hold_keyup(int32_t *note);
@@ -44,5 +45,6 @@ int c2_press(void *self, int key);
 int c2_release(void *self, int key);
 int c2_knob(void *self, int knob, int16_t *delta);
 void c2_gui_tick(void);
+void c2_seq_tick(void);
 
 #include "hold_impl.h"

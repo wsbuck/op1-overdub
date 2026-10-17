@@ -16,6 +16,8 @@ static int offs[64], noffs, shift_calls, ons[64], nons, sounding[128], bad_range
 #define SHIFT_DOWN shift_down
 static uint32_t features = 3;                      /* slot.S _feature_mask without FEAT_CHORD2: CHORD1 (apply.py --without chord2) */
 #define FEATURES features
+static uint32_t c2_time(void) { return 0; }        /* CHORD v2's clock and tempo (unused with chord2 off) */
+#define TEMPO_SPB (22050u << 14)
 
 void te_make_note(int32_t *n, int key, int vel) { n[0] = key + 0x35 + 12 * OCTAVE(SLOT); n[1] = vel; }
 void te_note_off(int32_t *n)

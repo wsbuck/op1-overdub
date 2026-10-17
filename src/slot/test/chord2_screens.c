@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 typedef int32_t fp32;
 #define FP(x) ((fp32)(x) << 10)
@@ -38,6 +39,9 @@ static uint8_t key_down[24], locked, shift_down;
 #define SHIFT_DOWN shift_down
 static uint32_t features = 7;
 #define FEATURES features
+static uint32_t host_time = 1000000, tempo_spb = 22050u << 14;   /* c2_time units (1.28 us); 120 BPM */
+static uint32_t c2_time(void) { return host_time; }
+#define TEMPO_SPB tempo_spb
 void te_make_note(int32_t *n, int key, int vel) { n[0] = key + 0x35 + 12 * OCTAVE(SLOT); n[1] = vel; }
 void te_note_off(int32_t *n) { (void)n; }
 void te_note_on(int32_t *n, int flags) { (void)n; (void)flags; }
@@ -119,7 +123,7 @@ static void page(void)
 }
 
 /* ---- scenes ---- */
-static void s_map_play(void)              /* DIATONIC C, G4 held */
+static void s_map_play(void)              /* DIATONIC C, G4 held: the played view */
 {
     base(2);
     dn(14);
@@ -147,7 +151,7 @@ static void s_map_voicing(void)
     dn(7);
     up(7);
     tick(80);
-    knob(3, 1);
+    knob(3, -1);
     page();
 }
 static void s_pinned_playing(void)        /* C4 pinned (SPLIT tapped) while G7 is played */
@@ -236,11 +240,161 @@ static void s_notes_offkb(void)           /* D5 (top key), TOP up: notes past th
     knob(2, 3);
     page();
 }
-static void s_factory_ask(void)           /* NEO SOUL, SHIFT+DROP (SHIFT still held): RESTORE FACTORY? */
+static void s_write_factory(void)         /* NEO SOUL, SHIFT+DROP: WRITE opens on FACTORY -> MAP 3 */
 {
     base(4);
-    shift(1);
     hold_shiftkey(0, KEY_DROP);
+    page();
+}
+static void s_write_dorian(void)          /* WRITE: D dorian 7ths into MAP 5 (the preview on the keys) */
+{
+    base(2);
+    hold_shiftkey(0, KEY_DROP);
+    knob(0, 1);
+    knob(1, 2);
+    knob(2, S_DORIAN);
+    knob(3, 4);
+    page();
+}
+static void s_write_copy(void)            /* WRITE: a copy of II-V-I a tone up into MAP 6 */
+{
+    base(3);
+    hold_shiftkey(0, KEY_DROP);
+    knob(0, 3);
+    knob(1, 2);
+    knob(3, 4);
+    page();
+}
+static void s_write_overwrite(void)       /* WRITE: triads over a used map: OVERWRITE? */
+{
+    base(2);
+    hold_shiftkey(0, KEY_DROP);
+    knob(0, 2);
+    knob(1, 7);
+    c2_press(0, KEY_DROP);
+    page();
+}
+static void s_played(void)                /* the played-notes view: a C^7 pad and a melody note, what sounds lit */
+{
+    base(2);
+    dn(7);
+    dn(16);
+    page();
+}
+static void s_played_hold(void)           /* NEO SOUL + BASS latched, a melody over it: every sounding note */
+{
+    base(4);
+    hold_shiftkey(0, 7);
+    dn(0);
+    up(0);
+    dn(19);
+    page();
+}
+static void s_map_after(void)             /* 0.5 s after the last key-up: the map view again */
+{
+    base(2);
+    dn(14);
+    up(14);
+    tick(C2_PLAYED_SHOW + 1);
+    page();
+}
+static void s_voicing_up(void)            /* VOICING right: UP 2 (the bass kept), the strip */
+{
+    base(2);
+    dn(7);
+    up(7);
+    tick(80);
+    knob(3, 1);
+    page();
+}
+static void s_voicing_spread(void)        /* VOICING all the way left: SPREAD */
+{
+    base(2);
+    dn(7);
+    up(7);
+    tick(80);
+    knob(3, -4);
+    page();
+}
+static void s_learned_10th(void)          /* the user's C3 + E4 learned on C4: C MAJOR 10TH, VOICING moves the E */
+{
+    base(5);
+    dn(7);
+    up(7);
+    tick(80);
+    shift(1);
+    octave[0] = -1;
+    dn(7);                                /* C3 */
+    octave[0] = 0;
+    dn(11);                               /* E4 */
+    shift(0);
+    up(11);
+    key_down[7] = 0;
+    tick(80);
+    page();
+}
+static void s_learned_wide(void)          /* C3 G3 E4 learned: the quality name, "PLAYED 2 OCT" */
+{
+    base(5);
+    dn(7);
+    up(7);
+    tick(80);
+    shift(1);
+    octave[0] = -1;
+    dn(7);
+    dn(14);
+    octave[0] = 0;
+    dn(11);
+    shift(0);
+    up(11);
+    key_down[7] = key_down[14] = 0;
+    tick(80);
+    page();
+}
+static void s_type_wide(void)             /* TYPE left of NOTE: the WIDE group, M10 */
+{
+    base(2);
+    dn(8);
+    up(8);
+    tick(80);
+    knob(1, -2);
+    page();
+}
+static void s_map_wide(void)              /* a map of wide intervals: the key labels */
+{
+    base(6);
+    static const uint8_t q[7] = { Q_P8, Q_M10, Q_MIN10, Q_P12, Q_M9D, Q_M13D, Q_TT };
+    static const uint8_t k[7] = { 0, 2, 4, 5, 7, 9, 11 };
+    for (int i = 0; i < 7; i++) {
+        c2.d.maps[4][k[i]].q = q[i];
+        c2.d.maps[4][k[i] + 12].q = q[i];
+    }
+    dn(14);
+    up(14);
+    tick(80);
+    page();
+}
+static void s_strum_shift(void)           /* SHIFT layer with STRUM (up 30 ms), SMOOTH on; the SEQ diagnostic line */
+{
+    base(3);
+    c2.seq_live = 8;
+    c2.d.set[1].strum = 3;
+    c2.dg.tick_rate = 689;
+    c2.dg.tick_gap = 1140;
+    c2.dg.strum_sent = 412;
+    c2.owner = 1;
+    shift_down = 1;
+    page();
+}
+static void s_strum_header(void)          /* the header: strum, SMOOTH, BASS, HOLD */
+{
+    base(4);
+    c2.seq_live = 8;
+    c2.d.set[2].strum = -4;
+    hold_shiftkey(0, 7);
+    dn(5);
+    up(5);
+    tick(80);
     page();
 }
 static void s_cleared(void)
@@ -325,7 +479,12 @@ struct scene { const char *name; void (*fn)(void); };
 static const struct scene scenes[] = {
     { "map_play", s_map_play }, { "map_type_scan", s_map_type_scan }, { "map_top", s_map_top },
     { "map_voicing", s_map_voicing }, { "pinned_playing", s_pinned_playing },
-    { "unpinned", s_unpinned }, { "factory_ask", s_factory_ask },
+    { "unpinned", s_unpinned }, { "write_factory", s_write_factory }, { "write_dorian", s_write_dorian },
+    { "write_copy", s_write_copy }, { "write_overwrite", s_write_overwrite }, { "played", s_played },
+    { "played_hold", s_played_hold }, { "map_after", s_map_after }, { "voicing_up", s_voicing_up },
+    { "voicing_spread", s_voicing_spread }, { "learned_10th", s_learned_10th }, { "learned_wide", s_learned_wide },
+    { "type_wide", s_type_wide }, { "map_wide", s_map_wide }, { "strum_shift", s_strum_shift },
+    { "strum_header", s_strum_header },
     { "notes_offkb", s_notes_offkb }, { "learn", s_learn },
     { "learned", s_learned }, { "learned_slash", s_learned_slash }, { "map_shift", s_map_shift },
     { "cleared", s_cleared }, { "map_251", s_map_251 }, { "map_neo", s_map_neo }, { "map_pop", s_map_pop },
@@ -359,30 +518,66 @@ static int check(void)
     up(7);
     tick(80);
     view(&v);
-    EXPECT(!c2u_notes_view(&c2, &v, 2), "a key played: the map view");
+    EXPECT(!c2u_notes_view(&c2, &v), "a key played: the map view");
     knob(2, 1);
     view(&v);
-    EXPECT(c2u_notes_view(&c2, &v, 2), "a chord knob turned: the notes view");
+    EXPECT(c2u_notes_view(&c2, &v), "a chord knob turned: the notes view");
     tick(C2_NOTES_SHOW + 1);
     view(&v);
-    EXPECT(!c2u_notes_view(&c2, &v, 2), "~1 s after the last turn: the map view again");
+    EXPECT(!c2u_notes_view(&c2, &v), "~1 s after the last turn: the map view again");
     knob(7, 1);
     view(&v);
-    EXPECT(!c2u_notes_view(&c2, &v, 2), "a SHIFT knob (map setting): stays the map view");
+    EXPECT(!c2u_notes_view(&c2, &v), "a SHIFT knob (map setting): stays the map view");
     shift(1);
     dn(4); dn(7);
     view(&v);
-    EXPECT(c2u_notes_view(&c2, &v, 2), "during a learn: the notes view");
+    EXPECT(c2u_notes_view(&c2, &v), "during a learn: the notes view");
     shift(0);
     up(4); up(7);
     view(&v);
-    EXPECT(c2u_notes_view(&c2, &v, 2) && c2.msg == MSG_LEARNED, "after a learn: the notes view");
+    EXPECT(c2u_notes_view(&c2, &v) && c2.msg == MSG_LEARNED, "after a learn: the notes view");
     tick(C2_NOTES_SHOW + 20);
     view(&v);
-    EXPECT(!c2u_notes_view(&c2, &v, 2) && c2u_notes_view(&c2, &v, 1), "then the map view; SHAPE: always notes");
+    EXPECT(!c2u_notes_view(&c2, &v), "then the map view");
+    /* the played-notes view: while keys are held and ~0.5 s after, then the map view (a HOLD pad included) */
     uint8_t col[24];
-    int8_t iv[4] = { -9, -2, 0, 30 };
     int below, above;
+    base(2);
+    c2_clear(&c2.d.maps[0][7]);           /* the learn above wrote C4: C^7 again */
+    c2.d.maps[0][7].q = Q_MAJ7;
+    c2.d.set[0].bass = 0;                 /* BASS was turned on above */
+    tick(80);
+    view(&v);
+    EXPECT(!c2u_played_view(&c2, &v), "nothing played yet: the map view");
+    dn(7);
+    dn(1);
+    view(&v);
+    EXPECT(c2u_played_view(&c2, &v), "keys held: the played-notes view");
+    c2u_played_cols(&c2, col, &below, &above);
+    EXPECT(col[7] == BLUE && col[11] == LIGHTBLUE && col[14] == LIGHTBLUE && col[18] == WHITE && col[1] == LIGHTBLUE &&
+           !col[0] && !below && !above, "C^7 + F#: C (root) blue, B (top) white, E G F# light blue");
+    up(1);
+    up(7);
+    tick(C2_PLAYED_SHOW - 2);
+    view(&v);
+    EXPECT(c2u_played_view(&c2, &v), "just released: still the played view (~0.5 s)");
+    tick(4);
+    view(&v);
+    EXPECT(!c2u_played_view(&c2, &v), "0.5 s after the last key-up: the map view");
+    hold_shiftkey(0, 7);
+    dn(4);
+    up(4);
+    tick(C2_PLAYED_SHOW + 1);
+    view(&v);
+    EXPECT(!c2u_played_view(&c2, &v) && c2.sounding, "HOLD: the pad sounds on, the map view comes back after 0.5 s");
+    hold_shiftkey(0, 7);
+    octave[0] = 2;
+    dn(23);
+    c2u_played_cols(&c2, col, &below, &above);
+    EXPECT(above >= 1 && col[23], "a chord past the top key: the arrow counts what is above");
+    up(23);
+    octave[0] = 0;
+    int8_t iv[4] = { -9, -2, 0, 30 };
     c2u_notecols(col, iv, 4, 7, 0, 0, &below, &above);
     EXPECT(below == 1 && above == 1 && col[5] == LIGHTBLUE && col[7] == BLUE && !col[0], "off-keyboard notes are counted per side");
     int8_t iv2[3] = { 0, 4, 7 };

@@ -51,6 +51,8 @@ void c2_release(void) {}
 void c2_knob(void) {}
 void c2_frame(void) {}
 void te_frame_render(void) {}
+void c2_seq_tick(void) {}
+void te_seq_tick(void) {}
 int te_json_eq(void *a, void *b) { (void)a; (void)b; return 0; }
 void *te_json_str(void *v, const char *s) { (void)s; return v; }
 void te_json_free(void *v, int f) { (void)v; (void)f; }

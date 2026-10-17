@@ -176,4 +176,16 @@ _c2_frame_hook:
     SP += 12;
     RETS = [SP++];
     JUMP.L _c2_frame_c;
+/* The sequencer thread's step (FUN_01a4318c: pend on its semaphore, CALL FUN_01a0d2c0 at 0x01A431AA, loop): TE's
+ * step first with R0-R2 as the loop left them, then c2_seq_tick (STRUM) through its C entry; the loop reloads
+ * R0 / R1 after the call (0x01A43198). */
+    C_ENTRY _c2_seq_c, _c2_seq_tick
+    .global _c2_seq_hook
+_c2_seq_hook:
+    [--SP] = RETS;
+    SP += -12;
+    CALL _te_seq_tick;
+    SP += 12;
+    RETS = [SP++];
+    JUMP.L _c2_seq_c;
     .endm

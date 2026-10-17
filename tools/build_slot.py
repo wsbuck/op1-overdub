@@ -20,7 +20,7 @@ image (TE data, never committed). TE's name lookup, producer factory, ScreenId, 
 per-engine flag-table code is repointed at the grown tables by checked halfword patches
 (tools/ldr_patch.py --half). iter (id 14) stays stock. See notes/engine-slot.md.
 Writes DIR/features.json: the address of slot.S's feature mask word and the hooks installed (--hold; --chord installs
-chord and chord2, CHORD v2's press / release / encoder slots and frame hook), for
+chord and chord2, CHORD v2's press / release / encoder slots, frame hook and sequencer-step hook), for
 tools/mkpatch.py (apply.py clears the mask bits of hooks the user leaves out).
 With --db-in/--db-out, adds each engine's synth_types row and presets (tools/add_engine_db.py), optionally
 enables TE's hidden filter FX (--db-enable-filter), keeps
@@ -87,6 +87,8 @@ SYNTH_PRESS_SLOT, TE_SYNTH_PRESS = 0x019119A8, 0x01A51058
 SYNTH_RELEASE_SLOT, TE_SYNTH_RELEASE = 0x019119B8, 0x01A5056C
 SYNTH_KNOB_SLOT, TE_SYNTH_KNOB = 0x019119C0, 0x01A505BC
 FRAME_RENDER_CALL, TE_FRAME_RENDER = 0x019AB8B2, 0x019B2674
+# CHORD v2 STRUM (notes/chord2.md phase 2): the sequencer thread's loop FUN_01a4318c calls its step FUN_01a0d2c0 here
+SEQ_STEP_CALL, TE_SEQ_STEP = 0x01A431AA, 0x01A0D2C0
 # Screen: iter's screen page vtable 0x019103FC, slot +0x1C = update (notes/screen.md)
 ITER_PAGE_UPDATE_SLOT, ITER_PAGE_UPDATE = 0x01910418, 0x019B9EA4
 # FX screen: the filter FX screen page (object 0x01DD8B44) vtable 0x01910CD4, slot +0x1C = update (notes/fx-slot.md)
@@ -116,7 +118,7 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
          "_te_note_off": 0x01A85840, "_te_note_on": 0x01A85750, "_te_make_note": 0x01A85014, "_te_synth_shiftkey": 0x01A50904,
          "_te_synth_press": TE_SYNTH_PRESS, "_te_synth_release": TE_SYNTH_RELEASE, "_te_synth_knob": TE_SYNTH_KNOB,
-         "_te_frame_render": TE_FRAME_RENDER,
+         "_te_frame_render": TE_FRAME_RENDER, "_te_seq_tick": TE_SEQ_STEP,
          # yaffs direct API (TE's file copy 0x0199FD40..: open, read, write, close; mkdir at boot 0x0196F874)
          "_te_yaffs_read": 0x01A99C90, "_te_yaffs_write": 0x01A99F84, "_te_yaffs_mkdir": 0x01A9A886,
          "_voice_ram": 0x00810000,       # engines' per-voice RAM in FREE region 0 (src/engine/build.sh)
@@ -508,6 +510,7 @@ def main():
                                            (SYNTH_KNOB_SLOT, TE_SYNTH_KNOB, "_c2_knob_entry")):
                 cmd += ["--pointer", f"0x{slot_addr:08x}=0x{stock:08x}:0x{sym[ours]:08x}"]
             calls.append((FRAME_RENDER_CALL, TE_FRAME_RENDER, "_c2_frame_hook"))
+            calls.append((SEQ_STEP_CALL, TE_SEQ_STEP, "_c2_seq_hook"))
     if hooked:
         calls.append((KNOB_APPLY_CALL, TE_KNOB_APPLY, "_knob_hook"))
     if drums:

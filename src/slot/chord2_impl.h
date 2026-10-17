@@ -117,6 +117,8 @@ static void c2_zero(void *dst, int n)
         d[i] = 0;
 }
 
+static int c2_clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
 static void c2_flash(int msg, int arg)
 {
     c2.msg = (uint32_t)msg;
@@ -177,46 +179,187 @@ static struct c2_chord *c2_target(void)
 
 static void c2_revoice_all(void);
 
-/* Restore the map to its factory contents (maps 5..8: empty) after SHIFT+DROP armed it; one undo gesture. */
-static int c2_restore_armed(void)
+/* ---- WRITE (SHIFT+DROP on the page): a whole map from a factory map, diatonic 7ths or triads in a key and scale, a
+ * transposed copy of a map, or empty. It opens on "FACTORY -> this map" (maps 5..8: EMPTY), so SHIFT+DROP, DROP is
+ * still the NIGHT2 factory restore; turning a knob picks something else, and then a map that is not empty needs DROP
+ * twice (OVERWRITE?). One undo gesture. The keys audition the preview while WRITE is open. ---- */
+static int c2_in_range(const struct c2_chord *c, int bass);
+
+static int c2_map_empty(int m)
 {
-    return c2.restore_frame && c2_now() + 1 - c2.restore_frame <= C2_ARM;
+    int used = 0;
+    for (int k = 0; k < C2_KEYS; k++)
+        used |= c2.d.maps[m][k].q != Q_NONE;
+    return !used;
 }
 
-static void c2_disarm(void) { c2.restore_frame = 0; }
+static int c2_wr_armed(void) { return c2.wr_arm && c2_now() + 1 - c2.wr_arm <= C2_ARM; }
 
-static void c2_restore_ask(void)
+/* A chord transposed by t semitones (same key), kept inside +-35 by octaves. */
+static void c2_transpose(struct c2_chord *c, int t)
+{
+    if (c->q == Q_NONE)
+        return;
+    if (c->q == Q_CUSTOM) {
+        int lo = 99, hi = -99;
+        for (int i = 0; i < c->n && i < C2_MAX; i++) {
+            c->iv[i] = (int8_t)(c->iv[i] + t);
+            lo = c->iv[i] < lo ? c->iv[i] : lo;
+            hi = c->iv[i] > hi ? c->iv[i] : hi;
+        }
+        c->slash = (int8_t)(c->slash + t);
+        int sh = hi > 23 ? -12 : lo < -23 ? 12 : 0;
+        for (int i = 0; i < c->n && i < C2_MAX; i++)
+            c->iv[i] = (int8_t)(c->iv[i] + sh);
+        c->slash = (int8_t)(c->slash + sh);
+        return;
+    }
+    int r = c->root + t, sh = r > 11 ? -12 : r < -11 ? 12 : 0;
+    c->root = (int8_t)(r + sh);
+    c->slash = (int8_t)(c->slash + t + sh);
+    for (int g = 0; g < 4 && !c2_in_range(c, 1); g++) {
+        int8_t iv[C2_NOTES];
+        int bi, n = c2_notes(c, 1, iv, &bi);
+        int d = n && iv[n - 1] > C2_IV_MAX ? -12 : 12;
+        c->root = (int8_t)(c->root + d);
+        c->slash = (int8_t)(c->slash + d);
+    }
+}
+
+static void c2_wr_name(char *nm, const char *a, const char *b, int c)   /* "D DORIAN 7": 11 characters at most */
+{
+    char t[24], *p = c2_puts(t, a);
+    if (b[0]) {
+        *p++ = ' ';
+        p = c2_puts(p, b);
+    }
+    if (c) {
+        *p++ = ' ';
+        *p++ = (char)c;
+        *p = 0;
+    }
+    int i = 0;
+    for (; i < 11 && t[i]; i++)
+        nm[i] = t[i];
+    for (; i < 12; i++)
+        nm[i] = 0;
+}
+
+/* The preview from the knobs: wr_map / wr_set. */
+static void c2_wr_build(void)
+{
+    int to = c2.wr_to, from = c2.wr_from;
+    struct c2_set *st = &c2.wr_set;
+    if (from == W_FACTORY) {
+        int f = c2.wr_fac;
+        c2_copy(c2.wr_map, c2_factory_maps[f], sizeof c2.wr_map);
+        c2_copy(st, &c2_factory_set[f], sizeof *st);
+    } else if (from == W_SEVENTHS || from == W_TRIADS) {
+        c2_fill(c2.wr_map, c2.wr_key, c2.wr_scale, from == W_SEVENTHS);
+        c2_copy(st, &c2.d.set[to], sizeof *st);   /* the target's BASS / SMOOTH / STRUM stay */
+        st->flats = (uint8_t)c2_scale_flats(c2.wr_key, c2.wr_scale);
+        c2_wr_name(st->name, (st->flats ? c2_pc_flat : c2_pc_sharp)[c2.wr_key], c2_scale_short[c2.wr_scale],
+                   from == W_SEVENTHS ? '7' : '3');
+    } else if (from == W_COPY) {
+        int src = c2.wr_src, t = c2.wr_shift;
+        c2_copy(c2.wr_map, c2.d.maps[src], sizeof c2.wr_map);
+        c2_copy(st, &c2.d.set[src], sizeof *st);
+        for (int k = 0; k < C2_KEYS; k++)
+            c2_transpose(&c2.wr_map[k], t);
+        char base[13], sfx[5], *p = sfx;
+        for (int i = 0; i < 12; i++)
+            base[i] = st->name[i];
+        base[12] = 0;
+        if (!base[0])
+            c2_put2(c2_puts(base, "MAP "), src + 1);
+        if (t) {
+            *p++ = t > 0 ? '+' : '-';
+            p = c2_put2(p, t > 0 ? t : -t);
+        }
+        *p = 0;
+        int room = 11 - (t ? (int)(p - sfx) + 1 : 0);
+        if (room < (int)sizeof base - 1)
+            base[room] = 0;
+        c2_wr_name(st->name, base, sfx, 0);
+    } else {
+        c2_zero(c2.wr_map, sizeof c2.wr_map);
+        c2_zero(st, sizeof *st);
+    }
+}
+
+static void c2_wr_close(void)
+{
+    c2.wr_open = 0;
+    c2.wr_arm = 0;
+}
+
+static void c2_wr_open_page(void)
 {
     int m = c2_mode_map(c2_mode());
     if (m < 0 || c2.loading) {
-        c2_disarm();
         c2_flash(MSG_FACTORY_NOMAP, 0);
         return;
     }
-    c2.restore_frame = c2_now() + 1;   /* + 1: never 0 */
-    c2.restore_map = m;
-    c2_flash(MSG_FACTORY_ASK, m);
+    c2.wr_open = 1;
+    c2.wr_to = m;
+    c2.wr_from = m < C2_FACTORY_N ? W_FACTORY : W_EMPTY;
+    c2.wr_fac = m < C2_FACTORY_N ? m : 0;
+    c2.wr_src = m;
+    c2.wr_shift = 0;
+    c2.wr_touched = 0;
+    c2.wr_arm = 0;
+    c2.msg = MSG_NONE;
+    c2_wr_build();
 }
 
-static void c2_restore(void)
+static void c2_wr_knob(int knob, int steps)
 {
-    int m = c2.restore_map;
-    c2_disarm();
-    if (m < 0 || m >= C2_MAPS || c2.loading || c2_mode_map(c2_mode()) != m)
+    if (knob == 0)
+        c2.wr_from = c2_clampi(c2.wr_from + steps, 0, W_COUNT - 1);
+    else if (knob == 1) {
+        if (c2.wr_from == W_FACTORY)
+            c2.wr_fac = c2_clampi(c2.wr_fac + steps, 0, C2_FACTORY_N - 1);
+        else if (c2.wr_from == W_COPY)
+            c2.wr_shift = c2_clampi(c2.wr_shift + steps, -11, 11);
+        else if (c2.wr_from != W_EMPTY)
+            c2.wr_key = c2_mod12(c2.wr_key + steps);  /* the tonic goes round */
+    } else if (knob == 2) {
+        if (c2.wr_from == W_COPY)
+            c2.wr_src = c2_clampi(c2.wr_src + steps, 0, C2_MAPS - 1);
+        else if (c2.wr_from == W_SEVENTHS || c2.wr_from == W_TRIADS)
+            c2.wr_scale = c2_clampi(c2.wr_scale + steps, 0, S_COUNT - 1);
+    } else if (knob == 3)
+        c2.wr_to = c2_clampi(c2.wr_to + steps, 0, C2_MAPS - 1);
+    c2.wr_touched = 1;
+    c2.wr_arm = 0;
+    c2_wr_build();
+}
+
+/* DROP on the WRITE page. */
+static void c2_wr_drop(void)
+{
+    int to = c2.wr_to, plain = !c2.wr_touched;   /* SHIFT+DROP, DROP: the plain restore, already asked */
+    if (c2.loading)
         return;
-    c2_snapshot(0);
-    /* whole-map copies, one flat loop each, the map test outside them: a per-key loop with `m < C2_FACTORY_N` inside
-     * hits the bfin GCC 4.3 -O2 hardware-loop CC bug (src/slot/test/loopcc.py): keys after the first left zero */
-    if (m < C2_FACTORY_N) {
-        c2_copy(c2.d.maps[m], c2_factory_maps[m], sizeof c2.d.maps[m]);
-        c2_copy(&c2.d.set[m], &c2_factory_set[m], sizeof c2.d.set[m]);
-    } else {
-        c2_zero(c2.d.maps[m], sizeof c2.d.maps[m]);   /* Q_NONE = 0: every key plays its note */
-        c2_zero(&c2.d.set[m], sizeof c2.d.set[m]);
+    if (!plain && !c2_map_empty(to) && !c2_wr_armed()) {
+        c2.wr_arm = c2_now() + 1;
+        c2_flash(MSG_OVERWRITE, to);
+        return;
     }
+    int s = c2_slot();
+    c2_snapshot(0);
+    c2_copy(c2.d.maps[to], c2.wr_map, sizeof c2.d.maps[to]);
+    c2_copy(&c2.d.set[to], &c2.wr_set, sizeof c2.d.set[to]);
+    if (s >= 0)
+        c2.d.mode[s] = (uint8_t)(to + 2);     /* the slot plays what was written */
     c2_touch();
+    c2_wr_close();
+    c2.smooth_n = 0;
     c2_revoice_all();
-    c2_flash(MSG_FACTORY_DONE, m);
+    if (plain)
+        c2_flash(MSG_FACTORY_DONE, to);
+    else
+        c2_flash(MSG_WRITTEN, to);
 }
 
 /* TE's note key codes (FUN_019c316c, table 0x018E0A80: 0x0D..0x0F, 0x16..0x20, 0x27..0x2A, 0x30..0x35). With SHIFT
@@ -234,6 +377,160 @@ static void c2_combo(int key)
     c2.dg.combo_key = key;
 }
 
+/* ---- STRUM: our notes through the sequencer thread ----
+ * TE's voice control has no lock, and the only fine timer is TE's sequencer thread (FUN_01a4318c: it pends on its
+ * semaphore, then runs the sequencer step FUN_01a0d2c0; our c2_seq_tick wraps that CALL at 0x01A431AA, hold_impl.h).
+ * So while the slot's map strums, NO note of ours is sent from the KeyHandler: the KeyHandler only keeps the wanted
+ * state (rel_ref, plus a due time and an onset count per note) and the tick sends the difference, offs first, then
+ * the ons that are due. The KeyHandler pre-empts the tick (priority 26 over 27), so the tick always sees a whole key
+ * event; a tick pre-empted half way just finishes the difference on its next run. Nothing is queued, so nothing can
+ * be sent out of order: a note released before its strum turn never sounds, and every tick converges on rel_ref.
+ * owner: 0 the KeyHandler sends (the MVP path, every map without STRUM); 1 the tick sends; 2 the tick sends until
+ * nothing is pending, then hands back (0). The KeyHandler only hands over when the GUI has seen the tick run for 4
+ * frames in a row; if it then stops for 3 frames, the KeyHandler takes the notes back at its next event and sends the
+ * difference itself (dg.takeovers). */
+#define C2_TU_MS 781                   /* c2_time units per ms (512 cycles at 400 MHz) */
+#define C2_STALE_TICKS 128             /* a wanted note waits at most this many ticks (~190 ms), whatever the clock says */
+#define C2_LIVE 4                      /* GUI frames in a row the tick must have run before strums go through it */
+#define C2_IDLE 3                      /* GUI frames without a tick before the KeyHandler takes over */
+
+static int c2_strum_map(void)
+{
+    int m = c2_mode_map(c2_mode());
+    return m >= 0 ? c2.d.set[m].strum : 0;
+}
+
+/* KeyHandler: note r (relative) on or off; rel_ref is already updated by the caller. delay: c2_time units. */
+static void c2_out(int r, int on, uint32_t delay)
+{
+    if (!c2.owner) {
+        rel_note(r - REL_OFS, on);
+        return;
+    }
+    if (on) {
+        c2.due[r] = c2_time() + delay;
+        c2.onset[r]++;                   /* a new onset: a note still on is retriggered */
+    }
+}
+
+/* KeyHandler takes the notes back from a tick that stopped: send the difference itself. */
+static void c2_take_back(void)
+{
+    for (int r = 0; r < 96; r++) {
+        int want = c2.rel_ref[r] != 0, was = c2.on[r];
+        if (was && !want)
+            rel_note(r - REL_OFS, 0);
+        else if (!was && want)
+            rel_note(r - REL_OFS, 1);
+        else if (!was && !want && c2.raw_off[r])
+            rel_note(r - REL_OFS, 0);
+        c2.on[r] = 0;
+        c2.raw_off[r] = 0;
+    }
+}
+
+/* At every KeyHandler event: hand the notes to the tick while the map strums, back when it stops. */
+static void c2_owner_update(void)
+{
+    uint32_t o = c2.owner;
+    int want = c2_strum_map() != 0 && c2.seq_live >= C2_LIVE && !c2.loading;
+    if (o && c2.seq_idle >= C2_IDLE) {
+        c2.owner = 0;
+        c2_take_back();
+        c2.dg.takeovers++;
+        return;
+    }
+    if (want && !o) {
+        for (int r = 0; r < 96; r++) {
+            c2.on[r] = c2.rel_ref[r] != 0;
+            c2.seen[r] = c2.onset[r];
+            c2.wait[r] = 0;
+            c2.raw_off[r] = 0;
+        }
+        c2.seq_reset = 0;
+        c2.owner = 1;
+    } else if (want && o == 2)
+        c2.owner = 1;
+    else if (!want && o == 1)
+        c2.owner = 2;
+}
+
+/* The sequencer thread, every tick (hold_impl.h c2_seq_tick, after TE's step): send what rel_ref wants. */
+static void c2_seq_service(void)
+{
+    uint32_t now = c2_time();
+    c2.seq_ticks++;
+    uint32_t gap = now - c2.tick_last;
+    if (c2.tick_n && gap > c2.tick_gap)
+        c2.tick_gap = gap;
+    c2.tick_last = now;
+    c2.tick_n++;
+    if (now - c2.tick_t0 >= 1000u * C2_TU_MS) {
+        c2.dg.tick_rate = c2.tick_n;
+        c2.dg.tick_gap = c2.tick_gap;
+        c2.tick_n = 0;
+        c2.tick_gap = 0;
+        c2.tick_t0 = now;
+    }
+    uint32_t o = c2.owner;
+    if (!o || VOICECTL_LOCKED)
+        return;                        /* a preset is loading: everything waits for the next tick */
+    if (c2.seq_reset) {                /* a play-mode switch: TE dropped the voices; forget what we sent */
+        for (int r = 0; r < 96; r++)
+            c2.on[r] = 0;
+        c2.seq_reset = 0;
+    }
+    for (int r = 0; r < 96; r++)       /* offs first, so an onset never takes a 7th voice */
+        if (c2.on[r] && (!c2.rel_ref[r] || c2.onset[r] != c2.seen[r])) {
+            rel_note(r - REL_OFS, 0);
+            c2.on[r] = 0;
+        }
+    for (int r = 0; r < 96; r++)
+        if (c2.raw_off[r]) {
+            c2.raw_off[r] = 0;
+            if (!c2.on[r] && !c2.rel_ref[r])
+                rel_note(r - REL_OFS, 0);
+        }
+    int pending = 0;
+    for (int r = 0; r < 96; r++) {
+        if (!c2.rel_ref[r] || c2.on[r])
+            continue;
+        int32_t until = (int32_t)(c2.due[r] - now);
+        int stale = until > 200 * C2_TU_MS || c2.wait[r] >= C2_STALE_TICKS;
+        if (until > 0 && !stale) {
+            c2.wait[r]++;
+            pending = 1;
+            continue;
+        }
+        c2.seen[r] = c2.onset[r];
+        rel_note(r - REL_OFS, 1);
+        c2.on[r] = 1;
+        c2.wait[r] = 0;
+        c2.dg.strum_sent++;
+        if (until > 0)
+            c2.dg.strum_forced++;
+    }
+    if (o == 2 && !pending)
+        c2.owner = 0;                  /* nothing left to strum: the KeyHandler sends again */
+}
+
+/* GUI, every frame: is the tick running? */
+static void c2_seq_watch(void)
+{
+    uint32_t t = c2.seq_ticks;
+    if (t != c2.seq_seen) {
+        c2.seq_seen = t;
+        c2.seq_idle = 0;
+        if (c2.seq_live < 8)
+            c2.seq_live++;
+    } else {
+        if (c2.seq_idle < 255)
+            c2.seq_idle++;
+        if (c2.seq_idle >= C2_IDLE)
+            c2.seq_live = 0;
+    }
+}
+
 /* ---- playing: our own voice tracking, by key ---- */
 
 static int c2_voice_count(void)
@@ -244,19 +541,46 @@ static int c2_voice_count(void)
     return n;
 }
 
+/* The played-notes view (page): what sounds now, kept as it was when the last note stops. */
+static void c2_view_update(void)
+{
+    uint32_t w[3] = { 0, 0, 0 }, roots = 0;
+    for (int r = 0; r < 96; r++)
+        if (c2.rel_ref[r])
+            w[r >> 5] |= 1u << (r & 31);
+    if (!(w[0] | w[1] | w[2]))
+        return;
+    int mode = c2_mode(), s = c2_slot(), m = c2_mode_map(mode);
+    for (int k = 0; k < C2_KEYS; k++) {
+        if (c2.key_kind[k] != 2)
+            continue;
+        const struct c2_chord *c = c2.wr_open ? &c2.wr_map[k] : m >= 0 ? &c2.d.maps[m][k] :
+                                   mode == 1 && s >= 0 ? &c2.d.shape[s] : 0;
+        int rt;
+        if (c && c2_shown(c, &rt) != Q_NONE)
+            roots |= 1u << c2_mod12(k + rt);
+    }
+    c2.view_rel[0] = w[0];
+    c2.view_rel[1] = w[1];
+    c2.view_rel[2] = w[2];
+    c2.view_roots = roots;
+}
+
 static void c2_release_key(int key)
 {
     int n = c2.key_cnt[key];
     for (int i = 0; i < n; i++) {
         int r = c2.key_rel[key][i];
         if (r < 96 && c2.rel_ref[r] && --c2.rel_ref[r] == 0)
-            rel_note(r - REL_OFS, 0);
+            c2_out(r, 0, 0);
     }
     c2.key_cnt[key] = 0;
     c2.key_kind[key] = 0;
     c2.key_bass[key] = -1;
-    c2.sounding &= ~(1u << key);
+    if (c2.sounding && !(c2.sounding &= ~(1u << key)))
+        c2.silent_since = c2_time();   /* the last chord stopped: SMOOTH's silence starts */
     c2.dg.voices = c2_voice_count();
+    c2_view_update();
 }
 
 static void c2_reset(void)
@@ -271,16 +595,52 @@ static void c2_reset(void)
     c2.dead = c2.chord_down = c2.sounding = 0;
     c2.learning = 0;
     c2.split_down = 0;
+    c2.keys_held = 0;
+    c2.smooth_n = 0;
+    if (c2.owner)
+        c2.seq_reset = 1;              /* the tick forgets what it sent (TE dropped the voices) */
 }
 
+/* SMOOTH: 2 bars at TE's tempo (samples per beat, Q14; pingpong's valid range, else 120 BPM) in c2_time units:
+ * 8 beats x spb samples x 17.72 units per sample (400 MHz / 512 / 44100). */
+static uint32_t c2_two_bars(void)
+{
+    uint32_t spb = (uint32_t)TEMPO_SPB >> 14;
+    if (spb < 11980 || spb > 66300)
+        spb = 22050;
+    return spb * 142;
+}
+
+static int8_t c2_kn_upper[C2_MAX] RAM; /* c2_key_notes: the upper notes it chose (key-relative), for SMOOTH */
+static int c2_kn_un RAM;
+
 /* The relative notes key `key` plays now (key + interval + REL_OFS, deduplicated, ascending, inside the note range);
- * *chord = 1 for a chord, 0 for its plain note; *bass = index of the BASS note or -1. */
-static int c2_key_notes(int key, uint8_t *rel, int *chord, int *bass)
+ * *chord = 1 for a chord, 0 for its plain note; *bass = index of the BASS note or -1. smooth: a new chord (SMOOTH may
+ * pick its TOP); 0 for a re-voice (an edit auditions the chord's own TOP). WRITE open: the preview plays. */
+static int c2_key_notes(int key, uint8_t *rel, int *chord, int *bass, int smooth)
 {
     int mode = c2_mode(), s = c2_slot(), m = c2_mode_map(mode);
     const struct c2_chord *c = m >= 0 ? &c2.d.maps[m][key] : mode == 1 && s >= 0 ? &c2.d.shape[s] : 0;
+    int bassf = m >= 0 && c2.d.set[m].bass, sm = smooth && m >= 0 && c2.d.set[m].smooth;
+    if (c2.wr_open && m >= 0) {
+        c = &c2.wr_map[key];
+        bassf = c2.wr_set.bass;
+        sm = 0;
+    }
     int8_t iv[C2_NOTES];
-    int b = -1, n = c ? c2_notes(c, m >= 0 && c2.d.set[m].bass, iv, &b) : 0;
+    int b = -1, n = 0;
+    c2_kn_un = 0;
+    if (c && c->q != Q_NONE) {
+        int top = c->top;
+        if (sm && c2.smooth_n > 0 && c2.smooth_map == m)
+            top = c2_smooth(c, key, c2.smooth_prev, c2.smooth_n);
+        n = c2_notes_t(c, bassf, top, iv, &b);
+        int8_t u[C2_MAX];
+        int nu = c2_upper(c, top, u);
+        for (int i = 0; i < nu; i++)
+            c2_kn_upper[i] = (int8_t)(u[i] + key);
+        c2_kn_un = nu;
+    }
     *chord = n > 0;
     if (!n) {
         iv[0] = 0;
@@ -335,7 +695,7 @@ static void c2_shed_bass(int k)
         return;
     int r = c2.key_rel[k][b];
     if (c2.rel_ref[r] && --c2.rel_ref[r] == 0)
-        rel_note(r - REL_OFS, 0);
+        c2_out(r, 0, 0);
     for (int i = b; i < n - 1; i++)
         c2.key_rel[k][i] = c2.key_rel[k][i + 1];
     c2.key_cnt[k] = (uint8_t)(n - 1);
@@ -414,17 +774,29 @@ static void c2_play(int key, const uint8_t *rel, int n, int chord, int bass)
     if (chord && hold_on && !(c2.chord_down & ~bit))
         victims |= hold_keys;                      /* a new HOLD gesture replaces the latched chords */
     victims = c2_budget(key, rel, n, victims & ~bit, chord);
-    uint8_t need[C2_NOTES];
+    uint8_t need[C2_NOTES], pos[C2_NOTES];
     int nn = 0;
     for (int i = 0; i < n && i < C2_NOTES; i++)
-        if (c2.rel_ref[rel[i]]++ == 0)
+        if (c2.rel_ref[rel[i]]++ == 0) {
+            pos[nn] = (uint8_t)i;
             need[nn++] = rel[i];
+        }
     c2_track(key, rel, n, chord, bass);
     c2.key_age[key] = ++c2.age;
     c2_let_go(victims);
+    /* STRUM: the whole spread is |strum| x 10 ms; note i of n (from the bottom up, or the top down) starts at
+     * spread x i / (n - 1) (Q8 reciprocals: no division); common tones keep sounding */
+    static const uint16_t recip8[C2_NOTES] = { 0, 256, 128, 85, 64 };
+    int st = chord && c2.owner ? c2_strum_map() : 0;
+    uint32_t step = 0;
+    if (st && n > 1) {
+        uint32_t spread = (uint32_t)(st < 0 ? -st : st) * 10u * C2_TU_MS;
+        step = (spread * recip8[n - 1]) >> 8;
+    }
     for (int i = 0; i < nn; i++)
-        rel_note(need[i] - REL_OFS, 1);
+        c2_out(need[i], 1, step * (uint32_t)(st < 0 ? n - 1 - pos[i] : pos[i]));
     c2.dg.voices = c2_voice_count();
+    c2_view_update();
 }
 
 /* A sounding key whose chord was edited (live audition): the notes it keeps are not retriggered, the ones it loses go
@@ -434,7 +806,7 @@ static void c2_revoice(int key)
     if (!c2.key_cnt[key] || !(KEY_DOWN[key] || (hold_keys >> key & 1)))
         return;
     uint8_t rel[C2_NOTES], old[C2_NOTES];
-    int chord, bass, n = c2_key_notes(key, rel, &chord, &bass), on = c2.key_cnt[key];
+    int chord, bass, n = c2_key_notes(key, rel, &chord, &bass, 0), on = c2.key_cnt[key];
     for (int i = 0; i < on; i++) {
         old[i] = c2.key_rel[key][i];
         if (c2.rel_ref[old[i]])
@@ -452,12 +824,13 @@ static void c2_revoice(int key)
     }
     for (int i = 0; i < on; i++)       /* before the budget's victims: a shared note goes off exactly once */
         if (!c2.rel_ref[old[i]])
-            rel_note(old[i] - REL_OFS, 0);
+            c2_out(old[i], 0, 0);
     c2_let_go(c2_budget(key, rel, 0, 0, chord));
     c2_track(key, rel, n, chord, bass);
     for (int i = 0; i < nn; i++)
-        rel_note(need[i] - REL_OFS, 1);
+        c2_out(need[i], 1, 0);
     c2.dg.voices = c2_voice_count();
+    c2_view_update();
 }
 
 static void c2_revoice_all(void)
@@ -610,6 +983,7 @@ static void c2_keydown(int32_t *note)
         return;
     }
     uint32_t bit = 1u << key;
+    c2_owner_update();
     c2_purge_stale();
     if (hold_keys & bit) {             /* a latched key pressed again: release it first, so it retriggers */
         hold_keys &= ~bit;
@@ -640,7 +1014,7 @@ static void c2_keydown(int32_t *note)
     int chord = 0, bass = -1, n;
     if (!SHIFT_DOWN)
         c2.shift_used = 0;             /* also without the press hook: a plain key ends any SHIFT combo */
-    int learn = SHIFT_DOWN && !c2.shift_used && (c2.page || c2_mode() <= 1);
+    int learn = SHIFT_DOWN && !c2.shift_used && !c2.wr_open && (c2.page || c2_mode() <= 1);
     if (SHIFT_DOWN && !learn) {        /* SHIFT + note in MAP off the page, or after a combo: just play */
         if (!c2.learning) {
             c2.dg.learn_blocked++;
@@ -657,8 +1031,15 @@ static void c2_keydown(int32_t *note)
     }
     if (c2.learning)
         c2_learn_commit(C2_LE_NOTE);   /* SHIFT's release was not seen: the first plain note ends the learn */
-    n = c2_key_notes(key, rel, &chord, &bass);
-    if (c2.page) {                     /* the edited key = the last key pressed, unless pinned */
+    int m = c2_mode_map(c2_mode());
+    if (m >= 0 && (c2.smooth_map != m || (!c2.sounding && c2_time() - c2.silent_since > c2_two_bars()))) {
+        if (c2.smooth_n)
+            c2.dg.smooth_resets++;
+        c2.smooth_n = 0;               /* SMOOTH starts over: 2 bars of silence, or another map */
+        c2.smooth_map = m;
+    }
+    n = c2_key_notes(key, rel, &chord, &bass, 1);
+    if (c2.page && !c2.wr_open) {      /* the edited key = the last key pressed, unless pinned */
         c2.last_tap = key;
         if (!c2.pinned)
             c2.sel = key;
@@ -666,8 +1047,15 @@ static void c2_keydown(int32_t *note)
     if (!n)
         return;
     c2_play(key, rel, n, chord, bass);
-    if (chord)
+    c2.keys_held |= bit;
+    if (chord) {
         c2.chord_down |= bit;
+        if (c2_kn_un >= 2 && m >= 0) {   /* SMOOTH leads on from what this chord played */
+            for (int i = 0; i < c2_kn_un; i++)
+                c2.smooth_prev[i] = c2_kn_upper[i];
+            c2.smooth_n = c2_kn_un;
+        }
+    }
 }
 
 static void c2_keyup(int32_t *note)
@@ -678,14 +1066,21 @@ static void c2_keyup(int32_t *note)
         return;
     }
     uint32_t bit = 1u << key;
+    c2_owner_update();
     c2.chord_down &= ~bit;
+    c2.keys_held &= ~bit;
+    c2.release_frame = c2_now();
     if (c2.dead & bit) {
         c2.dead &= ~bit;
         return;
     }
     if (!c2.key_cnt[key]) {            /* not ours: release like stock, unless one of our chords holds that pitch */
-        if (!c2.rel_ref[key + REL_OFS])
-            te_note_off(note);
+        if (!c2.rel_ref[key + REL_OFS]) {
+            if (c2.owner)
+                c2.raw_off[key + REL_OFS] = 1;   /* strumming: only the tick talks to TE's voices */
+            else
+                te_note_off(note);
+        }
         return;
     }
     if (hold_on && (c2.key_kind[key] == 2 || c2_mode() == 0)) {
@@ -711,13 +1106,14 @@ static int c2_learn_cancel(void)
 
 static int c2_shiftkey(int key)
 {
-    c2_disarm();                       /* any SHIFT combo drops a pending RESTORE FACTORY? (SHIFT+DROP asks again) */
+    c2.wr_arm = 0;                     /* any SHIFT combo drops a pending OVERWRITE? */
     if (c2_note_code(key))
         return 0;                      /* SHIFT + a note: TE plays it next, and c2_keydown learns it */
     if ((key == KEY_LIFT || key == KEY_DROP || key == KEY_SPLIT) && c2_learn_cancel())
         return 1;                      /* a combo during a learn cancels it and does nothing else */
     if (key == KEY_SPLIT) {
         c2.page = !c2.page;
+        c2_wr_close();
         c2.pinned = 0;                 /* the pin ends when the page closes (and a page opens unpinned) */
         c2.split_down = 0;
         c2.turned = -1;
@@ -729,12 +1125,17 @@ static int c2_shiftkey(int key)
     if (key == KEY_LIFT) {
         if (c2.loading)
             return 1;
+        c2_wr_close();
         c2_undo();
         c2_revoice_all();
         return 1;
     }
-    if (key == KEY_DROP) {             /* RESTORE FACTORY? (the full WRITE page is phase 2); a plain DROP confirms */
-        c2_restore_ask();
+    if (key == KEY_DROP) {             /* WRITE: opens on the factory restore; SHIFT+DROP again closes it */
+        if (c2.wr_open) {
+            c2_wr_close();
+            c2_flash(MSG_WRITE_CANCEL, 0);
+        } else
+            c2_wr_open_page();
         return 1;
     }
     return 0;
@@ -750,8 +1151,8 @@ static int c2_press_key(int key)
         c2.dg.lift++;
     else if (key == KEY_DROP)
         c2.dg.drop++;
-    if (key != KEY_SHIFT && !(key == KEY_DROP && c2.page && c2_restore_armed()))
-        c2_disarm();
+    if (key != KEY_SHIFT && key != KEY_DROP)
+        c2.wr_arm = 0;                 /* OVERWRITE? waits for DROP only */
     if (key == KEY_SHIFT) {
         c2.dg.shift_dn++;
         c2.shift_used = 0;             /* the edited key moves only at the first learn note (c2_learn_note) */
@@ -759,14 +1160,19 @@ static int c2_press_key(int key)
     }
     if (!c2.page)
         return 0;
+    if (c2.wr_open && (key == KEY_SPLIT || key == KEY_LIFT || key == KEY_DROP)) {
+        if (key == KEY_DROP)
+            c2_wr_drop();              /* WRITE: DROP writes (OVERWRITE? needs it twice) */
+        else if (key == KEY_SPLIT) {
+            c2_wr_close();             /* SPLIT cancels */
+            c2_flash(MSG_WRITE_CANCEL, 0);
+        }
+        return 1;
+    }
     if (key == KEY_SPLIT) {
         c2.split_down = 1;
         c2.split_used = 0;
         c2.split_frame = c2_now();
-        return 1;
-    }
-    if (key == KEY_DROP && c2_restore_armed()) {
-        c2_restore();                  /* SHIFT+DROP, then DROP: the map back to factory */
         return 1;
     }
     if (key == KEY_LIFT || key == KEY_DROP) {
@@ -795,6 +1201,7 @@ static int c2_press_key(int key)
     }
     if (key >= KEY_T1 && key <= KEY_T4) {
         c2.page = 0;                   /* T1..T4 close the page and go on to TE's page */
+        c2_wr_close();
         c2.pinned = 0;
     }
     return 0;
@@ -828,30 +1235,38 @@ static int c2_in_range(const struct c2_chord *c, int bass)
     return 1;
 }
 
-static int c2_clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* VOICING after a TYPE change: the nearest position toward CLOSE that exists for the new chord. */
+static void c2_voi_fix(struct c2_chord *c)
+{
+    for (int g = 0; g < 9 && c->voi && !c2_voi_applies(c, c->voi); g++)
+        c->voi = (int8_t)(c->voi > 0 ? c->voi - 1 : c->voi + 1);
+}
 
 /* Edit chord c with knob 0..3 by `steps` (the plain layer). Returns 1 if it changed. */
 static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
 {
     struct c2_chord old;
     c2_copy(&old, c, sizeof old);
-    if (knob == 1) {                   /* TYPE: scan the ordered list; left past the first = the key's own note */
+    if (knob == 1) {                   /* TYPE: scan the ordered list; NOTE between the chords and the WIDE group */
         int q = c->q == Q_CUSTOM ? c2_custom_q(c) : c->q;
         if (c->q == Q_CUSTOM)
             c2_structure(c, q);
-        int to = c2_clampi(q + steps, Q_NONE, Q_COUNT - 1);
-        if (to == Q_NONE && q > Q_NONE) {          /* a wall before NOTE: after resting there ~0.3 s, one more */
+        int pos = c2_scan_pos(q), to = c2_clampi(pos + steps, C2_SCAN_MIN, C2_SCAN_MAX);
+        if (pos && (pos > 0 ? to <= 0 : to >= 0)) {   /* a wall each side of NOTE: rest there ~0.3 s, then one more */
             uint32_t since = c2_now() + 1 - c2.wall_frame;
             if (!c2.wall_frame || since < 10 || since > 64) {
                 if (!c2.wall_frame || since > 64)
                     c2.wall_frame = c2_now() + 1;
-                to = Q_NONE + 1;
+                to = pos > 0 ? 1 : -1;
                 c2_flash(MSG_WALL, 0);
-            } else
+            } else {
                 c2.wall_frame = 0;
+                to = 0;
+            }
         } else
             c2.wall_frame = 0;
-        q = to;
+        q = c2_scan_q(to);
         if (q == Q_NONE) {
             c2_clear(c);
         } else {
@@ -860,53 +1275,47 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
                 c->root = 0;
             }
             c->q = (uint8_t)q;
-            int nt = c2_q[q].n;
-            c->top = (int8_t)c2_clampi(c->top, -2 * nt, 2 * nt);
+            int nt = c2_q[q].n, lim = c2_is_wide(q) ? 2 : 2 * nt;
+            c->top = (int8_t)c2_clampi(c->top, -lim, lim);
+            c2_voi_fix(c);
+            for (int g = 0; g < 4 && !c2_in_range(c, bass); g++)
+                c->top = (int8_t)(c->top > 0 ? c->top - 1 : c->top < 0 ? c->top + 1 : 0);   /* a wide one fits */
         }
     } else if (c->q == Q_NONE) {
         c2_flash(MSG_TURN_GREEN, 0);
         return 0;
-    } else if (c->q == Q_CUSTOM) {
-        int n = c->n < 1 ? 1 : c->n > C2_MAX ? C2_MAX : c->n;
-        if (knob == 0) {               /* ROOT on a learned chord: transpose it */
+    } else if (knob == 0) {
+        if (c->q == Q_CUSTOM) {        /* ROOT on a learned chord: transpose it */
+            int n = c2_voi_n(c);
             for (int i = 0; i < n; i++)
                 c->iv[i] = (int8_t)(c->iv[i] + steps);
             c->slash = (int8_t)(c->slash + steps);
-        } else if (knob == 2) {        /* TOP: the lowest note up an octave, or the highest down */
-            for (int s = steps; s != 0; s += s > 0 ? -1 : 1) {
-                int lo = 0, hi = 0;
-                for (int i = 1; i < n; i++) {
-                    lo = c->iv[i] < c->iv[lo] ? i : lo;
-                    hi = c->iv[i] > c->iv[hi] ? i : hi;
-                }
-                if (s > 0)
-                    c->iv[lo] = (int8_t)(c->iv[lo] + 12);
-                else
-                    c->iv[hi] = (int8_t)(c->iv[hi] - 12);
-            }
-        } else {                       /* VOICING: a recognised chord becomes structured first */
-            int root;
-            int8_t v[C2_MAX];
-            for (int i = 0; i < n; i++)
-                v[i] = c->iv[i];
-            c2_sort(v, n);
-            if (c2_recognise(v, n, &root) == Q_CUSTOM) {
-                c2_flash(MSG_GREEN_FIRST, 0);
-                return 0;
-            }
-            c2_structure(c, 0);
-            c->fam = (uint8_t)c2_clampi(c->fam + steps, 0, F_COUNT - 1);
+        } else {
+            int r = c2_clampi(c->root + steps, -11, 11);
+            if (c->has_slash)
+                c->slash = (int8_t)(c->slash + (r - c->root));
+            c->root = (int8_t)r;
         }
-    } else if (knob == 0) {
-        int r = c2_clampi(c->root + steps, -11, 11);
-        if (c->has_slash)
-            c->slash = (int8_t)(c->slash + (r - c->root));
-        c->root = (int8_t)r;
-    } else if (knob == 2) {
-        int nt = c2_q[c->q].n;
-        c->top = (int8_t)c2_clampi(c->top + steps, -2 * nt, 2 * nt);
-    } else
-        c->fam = (uint8_t)c2_clampi(c->fam + steps, 0, F_COUNT - 1);
+    } else if (knob == 2) {            /* TOP: a ladder from the voicing as built (learned: as played) */
+        int n = c2_voi_n(c), lim = c->q != Q_CUSTOM && c2_is_wide(c->q) ? 2 : 2 * n;
+        c->top = (int8_t)c2_clampi(c->top + steps, -lim, lim);
+    } else {                           /* VOICING: bipolar; positions that don't exist (or don't fit) are skipped */
+        int dir = steps > 0 ? 1 : -1, v = c->voi;
+        for (int s = steps; s != 0; s -= dir) {
+            int cand = v + dir;
+            for (; cand >= C2_VOI_MIN && cand <= C2_VOI_MAX; cand += dir) {
+                c->voi = (int8_t)cand;
+                if (c2_voi_applies(c, cand) && c2_in_range(c, bass))
+                    break;
+            }
+            if (cand < C2_VOI_MIN || cand > C2_VOI_MAX) {
+                c2_flash(MSG_VOI_END, dir);
+                break;
+            }
+            v = cand;
+        }
+        c->voi = (int8_t)v;
+    }
     if (!c2_in_range(c, bass)) {
         c2_copy(c, &old, sizeof old);
         return 0;
@@ -920,37 +1329,57 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
 
 static void c2_knob_turn(int knob, int steps)
 {
-    c2_disarm();
     if (c2.loading || c2.learning || knob < 0 || knob > 7)
         return;                        /* knob turns during a learn do nothing (MODE can't change mid-learn) */
     if (knob >= 4)
         c2_combo(0x100 + knob);
+    if (c2.wr_open) {                  /* WRITE: the plain knobs pick what to write; SHIFT + knobs do nothing */
+        if (knob < 4)
+            c2_wr_knob(knob, steps);
+        c2.turned = knob;
+        c2.knob_frame = c2_now();
+        return;
+    }
+    c2_owner_update();
     int s = c2_slot();
     c2.turned = knob;
     if (knob >= 4) {                   /* SHIFT layer: the map's settings */
         if (s < 0)
             return;
+        int m = c2_mode_map(c2_mode());
         if (knob == 4) {
-            int m = c2_clampi(c2.d.mode[s] + steps, 0, C2_MODE_COUNT - 1);
-            if (m != c2.d.mode[s]) {
+            int md = c2_clampi(c2.d.mode[s] + steps, 0, C2_MODE_COUNT - 1);
+            if (md != c2.d.mode[s]) {
                 c2_snapshot(knob + 1);
-                c2.d.mode[s] = (uint8_t)m;
+                c2.d.mode[s] = (uint8_t)md;
                 c2_touch();
             }
-            c2_flash(MSG_MODE, m);
-        } else if (knob == 7) {
-            int m = c2_mode_map(c2_mode());
-            if (m < 0) {
-                c2_flash(MSG_TURN_GREEN, 0);
-            } else if ((steps > 0) != (c2.d.set[m].bass != 0)) {
+            c2_flash(MSG_MODE, md);
+        } else if (m < 0) {
+            c2_flash(MSG_TURN_GREEN, 0);
+        } else if (knob == 5) {        /* STRUM: down 120 ms .. off .. up 120 ms, 10 ms a detent */
+            int v = c2_clampi(c2.d.set[m].strum + steps, -12, 12);
+            if (v != c2.d.set[m].strum) {
                 c2_snapshot(knob + 1);
-                c2.d.set[m].bass = steps > 0;
+                c2.d.set[m].strum = (int8_t)v;
                 c2_touch();
-                c2_revoice_all();
-                c2_flash(MSG_BASS, steps > 0);
             }
-        } else
-            c2_flash(MSG_LATER, knob);  /* STRUM, SMOOTH: phase 2/3 */
+            c2_flash(v && c2.seq_live < C2_LIVE ? MSG_NO_TICK : MSG_STRUM, v);
+        } else if (knob == 6) {        /* SMOOTH on (right) / off (left) */
+            if ((steps > 0) != (c2.d.set[m].smooth != 0)) {
+                c2_snapshot(knob + 1);
+                c2.d.set[m].smooth = steps > 0;
+                c2.smooth_n = 0;
+                c2_touch();
+            }
+            c2_flash(MSG_SMOOTH, c2.d.set[m].smooth);
+        } else if ((steps > 0) != (c2.d.set[m].bass != 0)) {
+            c2_snapshot(knob + 1);
+            c2.d.set[m].bass = steps > 0;
+            c2_touch();
+            c2_revoice_all();
+            c2_flash(MSG_BASS, steps > 0);
+        }
         c2.knob_frame = c2_now();
         return;
     }
@@ -980,7 +1409,7 @@ static void c2_knob_turn(int knob, int steps)
  * payload. Payload: 8 maps x 24 chords x 12 bytes, 8 map settings x 16, 8 shapes x 12, 8 slot modes.
  * Missing, short, long, wrong magic / version / size / CRC: not used (the other file, else the factory maps).
  * Every value read is clamped (c2_sanitize). Nothing here can assert: TE's yaffs calls return -1 on errors. */
-#define C2_FILE_VERSION 1
+#define C2_FILE_VERSION 2              /* 2: VOICING bipolar (-4..4) where 1 had a family 0..3; 1 is migrated */
 #define C2_HDR 24
 #define C2_PAYLOAD (C2_MAPS * C2_KEYS * 12 + C2_MAPS * 16 + C2_SLOTS * 12 + C2_SLOTS)
 #define C2_FILE (C2_HDR + C2_PAYLOAD)
@@ -1001,7 +1430,7 @@ static uint8_t *c2_put_chord(uint8_t *p, const struct c2_chord *c)
 {
     *p++ = (uint8_t)c->root;
     *p++ = c->q;
-    *p++ = c->fam;
+    *p++ = (uint8_t)c->voi;
     *p++ = (uint8_t)c->top;
     for (int i = 0; i < C2_MAX; i++)
         *p++ = (uint8_t)c->iv[i];
@@ -1016,7 +1445,7 @@ static const uint8_t *c2_get_chord(const uint8_t *p, struct c2_chord *c)
 {
     c->root = (int8_t)*p++;
     c->q = *p++;
-    c->fam = *p++;
+    c->voi = (int8_t)*p++;
     c->top = (int8_t)*p++;
     for (int i = 0; i < C2_MAX; i++)
         c->iv[i] = (int8_t)*p++;
@@ -1036,7 +1465,7 @@ static void c2_sanitize_chord(struct c2_chord *c)
         return;
     }
     c->root = (int8_t)c2_clampi(c->root, -11, 11);
-    c->fam = (uint8_t)(c->fam < F_COUNT ? c->fam : 0);
+    c->voi = (int8_t)c2_clampi(c->voi, C2_VOI_MIN, C2_VOI_MAX);
     c->top = (int8_t)c2_clampi(c->top, -8, 8);
     for (int i = 0; i < C2_MAX; i++)
         c->iv[i] = (int8_t)c2_clampi(c->iv[i], -C2_IV_MAX, C2_IV_MAX);
@@ -1044,9 +1473,12 @@ static void c2_sanitize_chord(struct c2_chord *c)
         c->n = 0;
     c->has_slash = c->has_slash != 0;
     c->slash = (int8_t)c2_clampi(c->slash, -60, 60);
+    if (c->n > C2_MAX)
+        c->n = C2_MAX;
+    c2_voi_fix(c);
     if (!c2_in_range(c, 1)) {
         c->top = 0;
-        c->fam = F_CLOSE;
+        c->voi = 0;
         if (!c2_in_range(c, 1))
             c2_clear(c);
     }
@@ -1061,14 +1493,15 @@ static void c2_sanitize(struct c2_data *d)
         s->bass = s->bass != 0;
         s->smooth = s->smooth != 0;
         s->flats = s->flats != 0;
-        s->strum = 0;
+        s->strum = (int8_t)c2_clampi(s->strum, -12, 12);
         int end = 0;
         for (int i = 0; i < 12; i++) {
             char ch = s->name[i];
             end |= ch == 0 || i == 11;
             if (end)
                 s->name[i] = 0;
-            else if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == ' ' || ch == '-' || ch == '#'))
+            else if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == ' ' || ch == '-' || ch == '#' ||
+                       ch == '&' || ch == '+'))
                 s->name[i] = '?';
         }
     }
@@ -1089,7 +1522,7 @@ static int c2_serialize(uint8_t *buf, const struct c2_data *d, uint32_t seq)
         *p++ = d->set[m].bass;
         *p++ = d->set[m].smooth;
         *p++ = d->set[m].flats;
-        *p++ = d->set[m].strum;
+        *p++ = (uint8_t)d->set[m].strum;
         for (int i = 0; i < 12; i++)
             *p++ = (uint8_t)d->set[m].name[i];
     }
@@ -1108,7 +1541,7 @@ static int c2_serialize(uint8_t *buf, const struct c2_data *d, uint32_t seq)
     return (int)(p - buf);
 }
 
-/* 1 if buf[0..n) is a valid file; *seq its sequence number. */
+/* The file's version if buf[0..n) is a valid file (1 or 2), else 0; *seq its sequence number. */
 static int c2_check(const uint8_t *buf, int n, uint32_t *seq)
 {
     static const char magic[8] = { 'O', 'V', 'D', 'B', 'C', 'H', 'R', 'D' };
@@ -1117,30 +1550,56 @@ static int c2_check(const uint8_t *buf, int n, uint32_t *seq)
     for (int i = 0; i < 8; i++)
         if (buf[i] != (uint8_t)magic[i])
             return 0;
-    if (c2_get16(buf + 8) != C2_FILE_VERSION || c2_get16(buf + 10) != C2_HDR || c2_get32(buf + 16) != C2_PAYLOAD)
+    uint32_t ver = c2_get16(buf + 8);
+    if ((ver != 1 && ver != C2_FILE_VERSION) || c2_get16(buf + 10) != C2_HDR || c2_get32(buf + 16) != C2_PAYLOAD)
         return 0;
     if (c2_crc32(buf + C2_HDR, C2_PAYLOAD) != c2_get32(buf + 20))
         return 0;
     *seq = c2_get32(buf + 12);
-    return 1;
+    return (int)ver;
 }
 
-static void c2_parse(const uint8_t *buf, struct c2_data *d)
+/* Version 1 stored a VOICING family 0..3 (CLOSE, DROP 2, DROP 3, SPREAD) where version 2 has the bipolar position:
+ * each lands where it sounds the same. 4+ notes: 0 -1 -2 -3 (v1 SPREAD = DROP 2+4); triads: 0 -1 -1 -4 (v1's triad
+ * DROP 3 played DROP 2, its SPREAD was DROP 2+3); a power chord: any v1 drop (the lower note down an octave) = +1 OCT
+ * (the same interval, an octave higher). Learned chords ignored the family: CLOSE (= as played). */
+static void c2_migrate_v1(struct c2_chord *c)
+{
+    static const int8_t four[4] = { 0, -1, -2, -3 }, three[4] = { 0, -1, -1, -4 };
+    int f = (uint8_t)c->voi;
+    f = f < 4 ? f : 0;
+    if (c->q == Q_NONE || c->q == Q_CUSTOM || c->q >= Q_FIRST_WIDE)
+        c->voi = 0;
+    else if (c2_q[c->q].n >= 4)
+        c->voi = four[f];
+    else if (c2_q[c->q].n == 3)
+        c->voi = three[f];
+    else
+        c->voi = (int8_t)(f != 0);
+}
+
+static void c2_parse(const uint8_t *buf, struct c2_data *d, int ver)
 {
     const uint8_t *p = buf + C2_HDR;
     for (int m = 0; m < C2_MAPS; m++)
         for (int k = 0; k < C2_KEYS; k++)
             p = c2_get_chord(p, &d->maps[m][k]);
+    if (ver == 1)                      /* the test outside the loops (src/slot/test/loopcc.py) */
+        for (int i = 0; i < C2_MAPS * C2_KEYS; i++)
+            c2_migrate_v1(&d->maps[0][0] + i);
     for (int m = 0; m < C2_MAPS; m++) {
         d->set[m].bass = *p++;
         d->set[m].smooth = *p++;
         d->set[m].flats = *p++;
-        d->set[m].strum = *p++;
+        d->set[m].strum = (int8_t)*p++;
         for (int i = 0; i < 12; i++)
             d->set[m].name[i] = (char)*p++;
     }
     for (int s = 0; s < C2_SLOTS; s++)
         p = c2_get_chord(p, &d->shape[s]);
+    if (ver == 1)
+        for (int s = 0; s < C2_SLOTS; s++)
+            c2_migrate_v1(&d->shape[s]);
     for (int s = 0; s < C2_SLOTS; s++)
         d->mode[s] = *p++;
     c2_sanitize(d);
@@ -1181,8 +1640,10 @@ static void c2_load(void)
         return;                        /* nothing opened: maybe the disk isn't up yet; try again in ~8 s */
     c2.loading = 1;                    /* the keys play plain notes; edits wait */
     int n = pick >= 0 ? c2_read(pick) : -1;
-    if (n >= 0 && c2_check(c2_buf, n, &seq)) {
-        c2_parse(c2_buf, &c2.d);
+    int ver = n >= 0 ? c2_check(c2_buf, n, &seq) : 0;
+    if (ver) {
+        c2_parse(c2_buf, &c2.d, ver);
+        c2.dg.load_ver = ver;
         c2.file_slot = pick;
         c2.file_seq = seq;
         c2.dg.load = pick ? C2_LOAD_B : C2_LOAD_A;
@@ -1249,6 +1710,7 @@ void c2_gui_tick(void)
 {
     if (!C2_ON())
         return;
+    c2_seq_watch();
     uint32_t now = c2_now();
     if (!c2.loaded) {
         if (now >= C2_LOAD_FRAME + 256 * c2.load_tries)

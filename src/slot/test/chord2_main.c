@@ -12,6 +12,7 @@ extern int c2_press_entry(void *self, int key);
 extern int c2_release_entry(void *self, int key);
 extern int c2_knob_entry(void *self, int knob, int16_t *delta);
 extern void c2_frame_hook(void *buf);
+extern void c2_seq_hook(void *r0);
 extern struct c2_state c2;
 
 uint32_t feature_mask = 7;
@@ -36,6 +37,10 @@ int te_yaffs_close(int fd) { (void)fd; return 0; }
 int te_yaffs_mkdir(const char *p, int m) { (void)p; (void)m; return -1; }
 void te_frame_render(void *buf) { last_buf = buf; render_at = ++order; }
 void c2_frame(void) { frame_at = ++order; }
+uint32_t te_tempo_spb = 22050u << 14;
+static int seq_at, n_seq;
+static void *seq_r0;
+void te_seq_tick(void *r0) { seq_r0 = r0; n_seq++; seq_at = ++order; }
 
 int main(void)
 {
@@ -76,6 +81,18 @@ int main(void)
     CHECK(last_buf == (void *)0x02000000 && render_at == 1 && frame_at == 2, "frame hook: TE renders the buffer, then c2_frame");
     mask |= (uint32_t)fx_abi_call((entry_t)c2_frame_hook, (void *)0x03000000, 0, 0, 0);
     CHECK(last_buf == (void *)0x03000000, "frame hook under the ABI harness renders the right buffer");
+    /* the sequencer step hook: TE's step first with its R0, then STRUM's service (mask 7) or nothing (mask 3) */
+    feature_mask = 7;
+    order = 0;
+    uint32_t t0 = c2.seq_ticks;
+    c2_seq_hook((void *)0x0BADF00D);
+    CHECK(n_seq == 1 && seq_at == 1 && seq_r0 == (void *)0x0BADF00D && c2.seq_ticks == t0 + 1,
+          "sequencer hook: TE's step with the loop's R0, then our tick");
+    feature_mask = 3;
+    c2_seq_hook((void *)0x1234);
+    CHECK(n_seq == 2 && c2.seq_ticks == t0 + 1, "mask 3: the sequencer hook is TE's step only");
+    feature_mask = 7;
+    mask |= (uint32_t)fx_abi_call((entry_t)c2_seq_hook, (void *)0x1234, 0, 0, 0);
     printf("abi %08x\n", (unsigned)mask);
     CHECK(mask == 0, "every entry preserves R4-R7, P3-P5, FP, SP, loops, L0-L3");
     printf(fails ? "FAILED\n" : "all passed\n");
