@@ -6,7 +6,8 @@
  * top, across octaves) + voicing family (close, drop 2, drop 3, spread), or a learned chord kept as played
  * (Q_CUSTOM) until TYPE is turned. Q_NONE (0, so zeroed memory means "plays its note") = no chord.
  * The qualities are listed in the order the TYPE knob scans them (Model:Cycles style, notes/chord2.md "TYPE scan"):
- * bright major colours, suspended, dominant, altered, minor, diminished; turning left past the first one unmaps the key.
+ * the everyday triads and sevenths first, then sixths, the open (no third) group, the colour chords, the altered ones;
+ * turning left past the first one (two detents: a wall) unmaps the key.
  */
 #ifndef CHORD2_H
 #define CHORD2_H
@@ -21,9 +22,8 @@
 #define C2_VOICES 6                 /* TE's poly voices (VoiceCtl.cpp:178) */
 #define C2_IV_MAX 35                /* intervals from the key stay within +-35 (the player's relative range) */
 
-enum { Q_NONE, Q_5, Q_MAJ, Q_6, Q_MAJ7, Q_69, Q_ADD9, Q_MAJ9, Q_SUS2, Q_SUS4, Q_7SUS4, Q_9SUS4,
-       Q_7, Q_9, Q_13, Q_7S11, Q_7B9, Q_7S9, Q_7B13, Q_AUG,
-       Q_MIN, Q_MIN6, Q_MINMAJ7, Q_MIN7, Q_MIN9, Q_MIN11, Q_HDIM, Q_DIM, Q_DIM7,
+enum { Q_NONE, Q_MAJ, Q_MIN, Q_MAJ7, Q_7, Q_MIN7, Q_HDIM, Q_DIM, Q_DIM7, Q_6, Q_MIN6, Q_MINMAJ7, Q_SUS4, Q_SUS2, Q_5,
+       Q_7SUS4, Q_9SUS4, Q_ADD9, Q_69, Q_MAJ9, Q_9, Q_MIN9, Q_MIN11, Q_13, Q_7S11, Q_7B9, Q_7S9, Q_7B13, Q_AUG,
        Q_COUNT, Q_CUSTOM = 0x7E };
 
 struct c2_quality {
@@ -37,34 +37,34 @@ struct c2_quality {
 
 static const struct c2_quality c2_q[Q_COUNT] = {
     { { 0 }, 0, 0, "", "", "" },                                /* Q_NONE */
-    { { 0, 7 }, 2, 0, "5", "5", "5" },
     { { 0, 4, 7 }, 3, 0, "", "", "MAJ" },
-    { { 0, 4, 7, 9 }, 4, 0, "6", "6", "6" },
+    { { 0, 3, 7 }, 3, 0, "-", "-", "MIN" },
     { { 0, 4, 7, 11 }, 4, 0, "^7", "^7", "MAJ7" },
-    { { 0, 4, 9, 14 }, 4, 0, "6/9", "69", "6/9" },
-    { { 0, 4, 7, 14 }, 4, 0, "ADD9", "(9)", "ADD9" },
-    { { 4, 7, 11, 14 }, 4, 1, "^9", "^9", "MAJ9" },
-    { { 0, 2, 7 }, 3, 0, "SUS2", "S2", "SUS2" },
+    { { 0, 4, 7, 10 }, 4, 0, "7", "7", "7" },
+    { { 0, 3, 7, 10 }, 4, 0, "-7", "-7", "MIN7" },
+    { { 0, 3, 6, 10 }, 4, 0, "$7", "$", "MIN7&5" },
+    { { 0, 3, 6 }, 3, 0, "*", "*", "DIM" },
+    { { 0, 3, 6, 9 }, 4, 0, "*7", "*7", "DIM7" },
+    { { 0, 4, 7, 9 }, 4, 0, "6", "6", "6" },
+    { { 0, 3, 7, 9 }, 4, 0, "-6", "-6", "MIN6" },
+    { { 0, 3, 7, 11 }, 4, 0, "-^7", "-^", "MIN^7" },
     { { 0, 5, 7 }, 3, 0, "SUS4", "S4", "SUS4" },
+    { { 0, 2, 7 }, 3, 0, "SUS2", "S2", "SUS2" },
+    { { 0, 7 }, 2, 0, "5", "5", "5" },
     { { 0, 5, 7, 10 }, 4, 0, "7SUS4", "7S4", "7SUS4" },
     { { 5, 7, 10, 14 }, 4, 1, "9SUS4", "9S4", "9SUS4" },
-    { { 0, 4, 7, 10 }, 4, 0, "7", "7", "7" },
+    { { 0, 4, 7, 14 }, 4, 0, "ADD9", "(9)", "ADD9" },
+    { { 0, 4, 9, 14 }, 4, 0, "6/9", "69", "6/9" },
+    { { 4, 7, 11, 14 }, 4, 1, "^9", "^9", "MAJ9" },
     { { 4, 7, 10, 14 }, 4, 1, "9", "9", "9" },
+    { { 3, 7, 10, 14 }, 4, 1, "-9", "-9", "MIN9" },
+    { { 3, 10, 14, 17 }, 4, 1, "-11", "-11", "MIN11" },
     { { 4, 10, 14, 21 }, 4, 1, "13", "13", "13" },
     { { 0, 4, 10, 18 }, 4, 0, "7#11", "#11", "7#11" },
     { { 4, 7, 10, 13 }, 4, 1, "7&9", "7&9", "7&9" },
     { { 0, 4, 10, 15 }, 4, 0, "7#9", "7#9", "7#9" },
     { { 4, 10, 14, 20 }, 4, 1, "7&13", "&13", "7&13" },
     { { 0, 4, 8 }, 3, 0, "+", "+", "AUG" },
-    { { 0, 3, 7 }, 3, 0, "-", "-", "MIN" },
-    { { 0, 3, 7, 9 }, 4, 0, "-6", "-6", "MIN6" },
-    { { 0, 3, 7, 11 }, 4, 0, "-^7", "-^", "MIN^7" },
-    { { 0, 3, 7, 10 }, 4, 0, "-7", "-7", "MIN7" },
-    { { 3, 7, 10, 14 }, 4, 1, "-9", "-9", "MIN9" },
-    { { 3, 10, 14, 17 }, 4, 1, "-11", "-11", "MIN11" },
-    { { 0, 3, 6, 10 }, 4, 0, "$7", "$", "MIN7&5" },
-    { { 0, 3, 6 }, 3, 0, "*", "*", "DIM" },
-    { { 0, 3, 6, 9 }, 4, 0, "*7", "*7", "DIM7" },
 };
 
 enum { F_CLOSE, F_DROP2, F_DROP3, F_SPREAD, F_COUNT };
@@ -108,6 +108,7 @@ struct c2_diag {
     uint32_t split, lift, drop;     /* SPLIT / LIFT / DROP presses our press wrapper saw */
     uint32_t shift_up;              /* SHIFT releases our release wrapper saw */
     uint32_t sheds;                 /* notes or chords the voice budget let go */
+    uint32_t shift_dn;              /* SHIFT presses our press wrapper saw */
     int32_t voices;                 /* sounding notes we track (after the last key event) */
     int32_t load;                   /* C2_LOAD_* */
     int32_t load_seq;
@@ -119,7 +120,7 @@ enum { C2_LOAD_PENDING, C2_LOAD_NONE, C2_LOAD_A, C2_LOAD_B, C2_LOAD_BAD };
 enum { C2_SAVE_NONE, C2_SAVE_OK, C2_SAVE_OPEN, C2_SAVE_WRITE, C2_SAVE_CLOSE, C2_SAVE_TORN };
 
 enum { MSG_NONE, MSG_CLEARED, MSG_COPIED, MSG_PASTED, MSG_UNDONE, MSG_LEARNED, MSG_MAX4, MSG_EMPTY_CLIP, MSG_LATER,
-       MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_COUNT };
+       MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_REDONE, MSG_PINNED, MSG_UNPINNED, MSG_COUNT };
 
 #define C2_LEARN_MAX 8
 #define C2_FREEZE 64                /* frames (~2 s) the edited key stays fixed after a knob turn */
@@ -133,11 +134,13 @@ struct c2_state {
     struct c2_data undo;            /* the state before the last edit gesture (undo swaps the two) */
     uint32_t undo_ok;
     struct c2_chord clip;           /* LIFT copies, DROP pastes */
-    uint32_t gen;                   /* bumped by every edit of d */
+    volatile uint32_t gen;          /* bumped at the start and the end of every edit of d (the save checks it) */
     uint32_t edit_frame;            /* frame of the last edit (save 2 s after) */
     uint32_t knob_frame;            /* frame of the last knob turn (freeze, undo grouping) */
     volatile uint32_t loading;      /* GUI copying a loaded file into d: the keys play plain meanwhile */
     uint32_t loaded;
+    uint32_t load_tries;            /* loads that found no file at all (the disk may not be up yet) */
+    uint32_t learn_frame;           /* when the learn started */
     /* page */
     volatile uint32_t page;         /* CHORD page open */
     int32_t sel;                    /* edited key 0..23 */
@@ -172,6 +175,12 @@ struct c2_state {
     uint32_t save_tries;
     uint32_t save_frame;
     uint32_t fail_gen;              /* gen the last failed save tried */
+    int32_t last_tap;               /* the last key pressed on the page (SHIFT and DROP adopt it, even when frozen) */
+    uint32_t pinned;                /* SPLIT tapped alone: the edited key stays until SPLIT is tapped again */
+    uint32_t split_used;            /* a key was cleared while SPLIT was down (so its release does not pin) */
+    uint32_t shift_used;            /* this SHIFT press already did a combo (SHIFT+T2, +SPLIT, +knob ...): no learn */
+    uint32_t wall_frame;            /* TYPE at the first quality: the frame the wall was hit (a 2nd detent = NOTE) */
+    uint32_t redo;                  /* the last undo was itself undone: the next one says REDONE */
     uint32_t gesture_knob;          /* the undo snapshot was taken for a knob gesture */
     volatile uint32_t clock;        /* frames: the frame hook's (or our engine screen's, without it) */
     uint32_t ui_frame;              /* clock when ui_draw (our engine screen) last drew */

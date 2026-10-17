@@ -423,7 +423,8 @@ static void t_budget(void)
     CHECK(count_sounding() == 5, "NEO SOUL F: 4 tones + bass");
     key_dn(1);                            /* plain F#: 6 */
     key_dn(13);                           /* plain: 7 -> the bass goes, nothing else */
-    CHECK(count_sounding() == 6 && c2.key_cnt[0] == 4 && c2.key_cnt[1], "budget: BASS goes first");
+    CHECK(count_sounding() == 6 && c2.key_cnt[0] == 5 && !c2.key_cnt[1] && c2.key_cnt[13],
+          "budget: a melody note sheds the oldest plain note before the pad's BASS");
     all_up();
     /* fuzz: voices never above 6, no half chords, nothing hangs */
     uint32_t rnd = 12345;
@@ -470,7 +471,7 @@ static void t_budget(void)
     all_up();
     octave[0] = 0;
     CHECK(worst <= 6, "fuzz: never more than 6 voices (%d)", worst);
-    CHECK(bad_range == 0, "fuzz: no note out of range");
+    CHECK(bad_range == 0 && bad_off == 0, "fuzz: no note out of range, no note-off twice");
     CHECK(count_sounding() == 0 && c2_voice_count() == 0, "fuzz: everything released at the end (%d)", count_sounding());
     CHECK(half == 0, "fuzz: every tracked chord sounds whole (%d misses)", half);
 }
@@ -533,18 +534,19 @@ static void t_page(void)
     frames(C2_FREEZE + 2);
     /* TYPE scan with live audition on a held key */
     key_dn(7);                            /* C^7 sounding */
-    knob(1, -1);                          /* green left: 6 (C6: C E G A) */
-    CHECK(c2.d.maps[0][7].q == Q_6 && is_on(N0 + 16) && !is_on(N0 + 18) && count_sounding() == 4,
-          "TYPE left on a held C^7: C6 heard at once");
     int before = nons;
-    knob(1, 1);
-    CHECK(c2.d.maps[0][7].q == Q_MAJ7 && nons - before == 1, "TYPE back: only the changed note retriggers");
-    knob(1, -3);                          /* 6, MAJ, 5 */
-    CHECK(c2.d.maps[0][7].q == Q_5, "TYPE scans down to 5");
+    knob(1, 1);                           /* green right: 7 (C E G Bb) */
+    CHECK(c2.d.maps[0][7].q == Q_7 && is_on(N0 + 17) && !is_on(N0 + 18) && count_sounding() == 4 && nons - before == 1,
+          "TYPE right on a held C^7: C7 heard at once, only the changed note retriggers");
+    knob(1, -3);                          /* MAJ7, MIN, MAJ */
+    CHECK(c2.d.maps[0][7].q == Q_MAJ && count_sounding() == 3, "TYPE scans down to MAJ (3 notes)");
     knob(1, -1);
-    CHECK(c2.d.maps[0][7].q == Q_NONE && count_sounding() == 1, "left past the first quality: the key plays its note");
-    knob(1, 3);
-    CHECK(c2.d.maps[0][7].q == Q_6, "and up again from the note: 5, MAJ, 6");
+    CHECK(c2.d.maps[0][7].q == Q_MAJ, "a wall before NOTE: one detent stays on MAJ");
+    knob(1, -1);
+    CHECK(c2.d.maps[0][7].q == Q_NONE && count_sounding() == 1, "a second detent: the key plays its note");
+    knob(1, 2);
+    CHECK(c2.d.maps[0][7].q == Q_MIN, "and up again from the note: MAJ, MIN");
+    frames(40);
     knob(1, 100);
     CHECK(c2.d.maps[0][7].q == Q_COUNT - 1, "TYPE stops at the end of the list");
     key_up(7);
@@ -563,8 +565,8 @@ static void t_page(void)
     knob(0, 2);
     c2_name(b, &c2.d.maps[0][7], 7, 0, 0);
     knob(0, -2);
-    knob(1, -100);
-    knob(1, 4);                           /* back to ^7 */
+    knob(1, -100);                        /* through the wall to NOTE */
+    knob(1, Q_MAJ7);                      /* NOTE -> MAJ7 */
     CHECK(c2.d.maps[0][7].q == Q_MAJ7, "TYPE to ^7");
     knob(2, 2);
     int8_t iv[C2_NOTES];
@@ -593,10 +595,37 @@ static void t_page(void)
     c2.sel = 2;
     c2_press(0, KEY_LIFT);
     c2.sel = 3;
+    c2.last_tap = 3;
     c2_press(0, KEY_DROP);
     CHECK(c2.d.maps[0][3].q == Q_7 && c2.msg == MSG_PASTED, "LIFT on G, DROP on G#: G7's chord pasted");
     CHECK(te_press_calls == 0, "page open: LIFT / DROP / SPLIT never reach TE");
+    /* SPLIT tapped alone pins the edited key; SHIFT adopts the last tapped key unless pinned */
+    c2.sel = 7;
+    c2_press(0, KEY_SPLIT);
+    c2_release(0, KEY_SPLIT);
+    CHECK(c2.pinned && c2.msg == MSG_PINNED, "SPLIT tapped alone pins the edited key");
+    frames(C2_FREEZE * 3);
+    key_dn(9);
+    key_up(9);
+    shift(1);
+    shift(0);
+    CHECK(c2.sel == 7, "pinned: playing and SHIFT keep the edited key");
+    c2_press(0, KEY_SPLIT);
+    c2_release(0, KEY_SPLIT);
+    CHECK(!c2.pinned, "SPLIT again unpins");
+    knob(2, 1);
+    key_dn(11);
+    key_up(11);
+    CHECK(c2.sel == 7, "frozen after a knob turn: the tap does not move the edit...");
+    shift(1);
+    CHECK(c2.sel == 11, "...but SHIFT adopts the last tapped key (a learn goes there)");
+    shift(0);
+    shift_key(KEY_LIFT);
+    CHECK(c2.msg == MSG_UNDONE, "undo says UNDONE");
+    shift_key(KEY_LIFT);
+    CHECK(c2.msg == MSG_REDONE, "undo again says REDONE");
     /* T1..T4 close the page and go on */
+    te_press_calls = 0;
     c2_press(0, 6);
     CHECK(!c2.page && te_press_calls == 1 && last_te_key == 6, "T1 closes the page and goes on to TE");
     c2_press(0, KEY_LIFT);
@@ -656,7 +685,8 @@ static void t_learn(void)
     for (int k = 0; k < 6; k++)
         key_dn(k * 2);
     shift(0);
-    CHECK(c2.d.maps[0][7].n == 4 && c2.msg == MSG_MAX4, "6 notes: the lowest 4 kept, MAX 4 shown");
+    CHECK(c2.d.maps[0][7].n == 4 && c2.msg == MSG_MAX4 && c2.d.maps[0][7].iv[0] == -7 && c2.d.maps[0][7].iv[3] == 3,
+          "6 notes: the bass and the top 3 kept (melody kept), MAX 4 shown");
     all_up();
     /* one note maps a single note */
     shift(1);
@@ -664,6 +694,22 @@ static void t_learn(void)
     shift(0);
     CHECK(c2.d.maps[0][7].q == Q_CUSTOM && c2.d.maps[0][7].n == 1, "one note maps that note");
     all_up();
+    /* a SHIFT used for a combo (SHIFT+T2) does not learn the next note */
+    struct c2_chord keep = c2.d.maps[0][7];
+    shift(1);
+    hold_shiftkey(0, 7);
+    key_dn(4);
+    shift(0);
+    all_up();
+    CHECK(!memcmp(&keep, &c2.d.maps[0][7], sizeof keep), "SHIFT+T2 then a note under the same SHIFT: no learn");
+    /* knobs during a learn do nothing */
+    shift(1);
+    key_dn(4);
+    int mode_before = c2.d.mode[0];
+    knob(4, 1);
+    shift(0);
+    all_up();
+    CHECK(c2.d.mode[0] == mode_before, "SHIFT+blue during a learn does not change MODE");
     /* SHIFT pressed and released without notes: nothing */
     struct c2_chord was = c2.d.maps[0][7];
     shift(1);
@@ -675,8 +721,15 @@ static void t_learn(void)
     shift(0);
     CHECK(!c2.learning, "knob turns under SHIFT never learn");
     knob(4, -1);
-    /* off the page: CHORD1's gesture */
+    /* off the page in MAP: SHIFT + notes just play (no learn) */
     c2.page = 0;
+    shift(1);
+    key_dn(7);
+    shift(0);
+    all_up();
+    CHECK(c2.d.mode[0] == 2 && !c2.learning, "off the page in MAP: SHIFT + a note plays, the mode stays");
+    /* off the page from OFF: CHORD1's gesture */
+    c2.d.mode[0] = 0;
     shift(1);
     key_dn(0); key_dn(4); key_dn(7);
     shift(0);
@@ -693,6 +746,8 @@ static void t_learn(void)
     /* SHIFT's release not seen (fallback): the first plain note ends the learn */
     c2.d.mode[0] = 2;
     c2.page = 1;
+    key_dn(1);
+    key_up(1);                            /* a plain key: no SHIFT combo pending */
     c2.sel = 7;
     shift_down = 1;
     key_dn(4); key_dn(7);
@@ -712,7 +767,7 @@ static void fs_reset(void)
 static void boot(void)                    /* a power cycle: the image's state, then the first frames */
 {
     fresh(7);
-    frames(C2_LOAD_FRAME + 1);
+    frames(C2_LOAD_FRAME + 256 * 4 + 1);   /* with no file at all the load retries 3 times */
 }
 static void t_file(void)
 {
@@ -723,7 +778,7 @@ static void t_file(void)
     fresh(7);
     frames(10);
     CHECK(fs_calls == 0, "no disk access in the first frames after boot");
-    frames(C2_LOAD_FRAME);
+    frames(C2_LOAD_FRAME + 256 * 4);
     c2.d.mode[0] = 4;
     c2.d.maps[2][5].q = Q_7;
     c2_touch();
@@ -846,12 +901,42 @@ static void t_file(void)
     int good_slot = c2.file_slot;
     frames(300);
     CHECK(c2.dg.save_err == C2_SAVE_OK && c2.file_slot != good_slot, "a retry writes the other file");
+    /* the disk not readable at boot: the newest file must survive the first save */
+    fs_reset();
+    fs_dir = 1;
+    struct c2_data a10 = c2_boot.d;
+    a10.mode[3] = 7;
+    c2_serialize(fs_data[0], &a10, 10);
+    c2_serialize(fs_data[1], &c2_boot.d, 9);
+    fs_len[0] = fs_len[1] = C2_FILE;
+    fs_fail_open = 1;
+    boot();
+    CHECK(c2.loaded && c2.dg.load == C2_LOAD_NONE, "opens fail at boot: retried, then factory maps");
+    fs_fail_open = 0;
+    c2.d.mode[0] = 3;
+    c2_touch();
+    frames(C2_SAVE_DELAY + 1);
+    uint32_t sq;
+    CHECK(c2.dg.save_err == C2_SAVE_OK && c2_check(fs_data[0], fs_len[0], &sq) && sq == 10 &&
+          c2_check(fs_data[1], fs_len[1], &sq) && sq == 11, "the save goes over the older file (A seq 10 kept, B seq 11)");
+    /* notes near the top or bottom of the range are left out (an octave key could push them past 0..127) */
+    fresh(7);
+    c2.d.mode[0] = 2;
+    octave[0] = 4;
+    key_dn(23);
+    int top_ok = 1;
+    for (int i = 116; i < 128; i++)
+        top_ok &= !sounding[i];
+    key_up(23);
+    octave[0] = 0;
+    CHECK(top_ok && count_sounding() == 0, "no chord note above 115");
     /* no save while learning */
     fs_reset();
     fs_dir = 1;
     boot();
     c2_touch();
     c2.learning = 1;
+    c2.learn_frame = c2.clock;
     frames(C2_SAVE_DELAY * 2);
     CHECK(c2.dg.saves == 0, "no save while learning");
     c2.learning = 0;

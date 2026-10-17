@@ -369,8 +369,7 @@ void c2_frame(void)
  * the page (phase 1b: the page then shows on our engine screens only). */
 static void c2_engine_screen(void *r)
 {
-    int alive = c2.dg.frames != c2.ui_hook_seen;
-    c2.ui_hook_seen = c2.dg.frames;
+    int alive = c2.dg.frames != 0;     /* the frame hook counts from the first GUI frame */
     if (!alive) {
         c2.clock++;
         c2.dg.fb_frames++;

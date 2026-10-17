@@ -1,6 +1,7 @@
 # CHORD v2 and the key-chord map (firmware 246): scope
 
-Status: **design only** (2026-10-16). Nothing is built or flashed; shipped behaviour is unchanged.
+Status: **MVP built (2026-10-17), not yet on the device**: §12 "MVP as built" (test image CHORD2, LOG.md). Phases 2-4
+below are still design only.
 Mockups: `design/chord2/`:
 - `chord2_ui.h`: the draw code;
 - `chord2_model.h`: qualities, voicings, names, recognition, SMOOTH, fill;
@@ -368,3 +369,165 @@ Four rounds, each by a fresh subagent; the fixes are in the design above and in 
    the arp and sequencers)? This decides the order after phase 1.
 3. **Power-on:** once the TE-screen chip is proven, should each slot come back in its last mode (MAP 3 on the Rhodes
    slot), or always start OFF?
+
+## 12. MVP as built (2026-10-17)
+Code: `src/slot/chord2.h` (model, state), `chord2_impl.h` (engine, page keys and knobs, learn, undo, the file),
+`ui_chord2.h` (page, badge, chip), `ui.c` (`c2_frame`, the frame hook's C side), `hold_impl.h` / `hold.c` (dispatch),
+`entry.inc` `C2_HOOKS` (asm entries), `build_slot.py` (patches), `chord_font.h` (`gen_chord_font.py`). Feature bit
+`chord2` = 4 in `_feature_mask` (now 7); it only acts with `chord` (2). `apply.py --without chord2`: CHORD1 exactly, every
+new hook calls TE's function with the same arguments (simulator-checked).
+
+### Controls
+| where | control | does |
+|---|---|---|
+| synth screen | SHIFT + SPLIT | open / close the CHORD page (T1..T4 also close it and go to their page) |
+| page | press a key | plays as normal and becomes the edited key (unless frozen: padlock, 2 s after a knob turn; SHIFT and DROP still take the last key tapped) |
+| page | SPLIT tapped alone | pin / unpin the edited key (blue padlock): play the song, keep editing one chord |
+| page | blue | ROOT (semitones from the key; a learned chord transposes) |
+| page | green | TYPE: the scan (below); left past the first = the key plays its note |
+| page | white | TOP: each detent puts the next chord tone on top |
+| page | orange | VOICING: close, drop 2, drop 3, spread (the top note kept) |
+| page | SHIFT + blue | MODE of this synth slot: OFF, SHAPE, MAP 1..8 |
+| page | SHIFT + orange | BASS on / off for the map (the root an octave under, a 5th voice; shed first) |
+| page | SHIFT + green / white | STRUM / SMOOTH: "NOT IN THIS VERSION" (phase 2/3) |
+| page | hold SHIFT, play, let go of SHIFT | learn into the edited key (held notes; none held = all played; > 4 = the bass and the top 3, MAX 4) |
+| page | SPLIT + key | clear that key (the press plays nothing; afterwards the key plays its own note) |
+| page | LIFT / DROP | copy the edited key's chord / paste it onto the last key tapped |
+| page | SHIFT + LIFT | undo the last gesture (again = redo) |
+| page | SHIFT + DROP | WRITE: "NOT IN THIS VERSION" (phase 2) |
+| anywhere (synth) | SHIFT + notes (page closed) | slot OFF or SHAPE: CHORD1's gesture, learn a SHAPE (one note = slot OFF); MAP: just plays (never drops MAP mid-song) |
+| anywhere (synth) | SHIFT + T2 | HOLD: latches chords only (everything when the slot is OFF); a new chord replaces the held one |
+- Power-on: each slot comes back in its last mode (user decision 3). The image's default: every slot OFF.
+- Names: jazz symbols on the keys (C△7, A-7, Bø), spelled out in the big title where they fit ("C MAJ7", "A MIN7",
+  "G7"; else the symbol), user decision 1.
+
+### TYPE scan (Model:Cycles comparison, 2026-10-17)
+The user asked whether one knob that scans an ordered chord list (the Cycles CHORD machine's SHAPE) beats the scope's
+ROOT / TYPE / TOP / VOICING. Verdict: **hybrid (option b)**. The green knob is now a Cycles-style scan, and the other
+three knobs stay for precision.
+- The list (`chord2.h` enum order, 28 qualities, after UX round 1): NOTE | MAJ, MIN, MAJ7, 7, MIN7, ø7, DIM, DIM7 |
+  6, MIN6, MIN^7 | SUS4, SUS2, 5, 7SUS4, 9SUS4 | ADD9, 6/9, MAJ9, 9, MIN9, MIN11, 13 | 7#11, 7b9, 7#9, 7b13, AUG. The
+  everyday triads and sevenths are within 8 detents of NOTE (MAJ <-> MIN is one detent); then sixths, the open (no
+  third) group, the colour chords, the altered ones. Leaving MAJ for NOTE takes two detents within ~1 s (a wall), so a
+  scan can't clear a key by accident.
+- Audition: on a held (or HOLD-latched) key the chord changes as the knob turns. Only the notes that change retrigger,
+  so a scan is a smooth morph, not a stream of re-attacks. Nothing sounds from a knob alone (no stray notes on stage).
+- The title shows the full name; while green turns, a 29-tick strip replaces the green underline (taller ticks mark the
+  family starts, the current one green).
+- Why not the Cycles knob alone: the Cycles transposes one shape to the played note, which is what SHAPE mode does
+  (SHAPE uses the same scan). A map stores a different chord per key, and its value is the voice-led choices:
+  ii-V-I tops, drop-2s, slash basses. A single list would multiply 28 qualities by 4 voicings by ~8 tops. The scan
+  covers the fast, playful part; TOP and VOICING stay one knob each.
+
+### Hooks (all installed with --chord; checked against stock by build_slot.py / ldr_patch.py)
+| hook | site | stock | evidence | if the assumption is wrong on the device |
+|---|---|---|---|---|
+| frame | CALL at `0x019AB8B2` in the GUI loop `FUN_019ab880` | `FUN_019b2674` (render, then flush `0x01AA185C`, flip `0x01A2FB18`) | **Verified**: loop disassembly; R0 = the back buffer, reloaded after the call | page and chip don't show; the page falls back to our engine screens (`FB` on the diag line); no file I/O (factory maps, no save) |
+| press | synth controller vtable `0x01911994` +0x14 (`0x019119A8`) | `0x01A51058` | **Verified**: `FUN_019b6c74` calls +0x14 for presses without SHIFT, else the global `FUN_019ac4b4`; keys 2..0xB are a jump table (6..9 = T1..T4, 0xA LIFT, 0xB DROP), 0xC (SPLIT) and note keys (>= 0x3A) return 0 | SPLIT / LIFT / DROP counters stay 0 on the diag line; LIFT / DROP stay TE's |
+| release | +0x24 (`0x019119B8`) | `0x01A5056C` | **Verified**: called for every release before the global `FUN_019acd60` (which clears SHIFT at `0x019ACF94`); returns 0 except 0x24 / 0x25 | `UP` stays 0; learn then ends at the first plain note (fallback) |
+| encoder | +0x2C (`0x019119C0`) | `0x01A505BC` | **Verified**: `FUN_019b6c0c(knob, int16 *delta)` adds 4 with SHIFT (`FUN_019d7c6c` = `B[0x01DD7F78]`) and calls +0x2C; delta = (count & ~1) << 9 (`0x019C2E7C`) | `K` stays 0; knobs keep editing the sound under the page (seen at once) |
+| SHIFT slot | +0x1C (`0x019119B0`) | `0x01A50904` | CHORD1's, shipped | — |
+| note on / off | CALLs `0x019AC290` / `0x019AC3A6` | | CHORD1's, shipped | — |
+- Every hook runs in the KeyHandler thread except the frame hook (GUI thread). The GUI writes the maps only when it
+  loads the file (once; `loading` set: the keys play plain notes meanwhile).
+- Current controller: `[0x01DD8BC8]` (`FUN_019e9738` stores it, `FUN_019e97fc` reads it; Verified); its vtable at +4.
+  The frame hook closes the page off the synth controller, but only once that check has succeeded at least once (`CT`
+  on the diag line), so a wrong guess cannot stop the page from opening.
+
+### The file
+- `/yaffs2/user/overdub/chorda.bin` and `chordb.bin` (our own directory; nothing of TE's is opened for writing).
+  Written alternately, never over the newest good one. yaffs calls as TE's file copy (`0x0199FD40`): open
+  `0x01A997F4(path, 0 / 0x241, 0x100 / 0x180)`, read `0x01A99C90`, write `0x01A99F84`, close `0x01A99908`, mkdir
+  `0x01A9A886(path, 0)` (boot `0x0196F874`). All return -1 on errors; none asserts.
+- 2560 bytes: "OVDBCHRD", version 1, header size 24, sequence, payload size 2536, CRC-32; 8 maps x 24 x 12 bytes,
+  8 settings x 16, 8 shapes x 12, 8 slot modes. A file that is short, long, of another version, with the wrong magic
+  or a bad CRC is not used (the other one, else the factory maps). Every value read is clamped (a random payload
+  with a valid CRC is tested). The newest by sequence number (wrapping) wins.
+- Load: frame 150 (~5 s after boot), from the frame hook; if neither file can even be opened it retries 3 times,
+  256 frames apart (the disk may not be up), and only then uses the factory maps. No save before a load finished.
+  Every save re-reads both headers first and writes over the older one with the next sequence number. Save: 64 frames (~2 s) after the last edit, not while
+  learning, from the frame hook (between TE's render and the flush: TE holds no yaffs lock there). A failed save
+  retries after 256 frames, at most 8 times, then waits for the next edit.
+- Not handled: a save during tape recording (no flag known; one 2.5 KB write).
+
+### Voice budget, HOLD
+- Our tracking: per key the relative notes it sounds, reference counted (`rel_ref`), plain notes included.
+- Chord notes outside MIDI 12..115 are left out, so an octave key (TE transposes sounding voices) can't push one past
+  0..127, where its note-off could not be sent (code review #2).
+- Before a note-on would make more than 6 distinct notes: for a chord the oldest BASS note, then the oldest plain
+  note; for a plain (melody) note the oldest plain note, then the BASS; then the oldest whole chord is let go (whole: never half a chord). A let-go key's key-up does nothing. Release tails are not
+  counted. Common tones of a new chord are referenced before the old ones are released: never retriggered, never
+  stolen. Fuzz-tested: 20,000 random events, never above 6, every tracked chord whole, nothing left at the end.
+- Re-voicing a sounding key (knob audition) goes through the same budget.
+
+### Diagnostics (page, SHIFT held): what the morning test reads
+- Line 1: `HOOK F<frames> K<knob turns> D<last raw delta> SP<SPLIT> LI<LIFT> DR<DROP> UP<SHIFT releases> DN<SHIFT
+  presses> CT[0]`.
+- Line 2: `FILE <-|NONE|A|B|BAD> <seq> SAVE <count> <-|OK|OPEN|WRITE|CLOSE|TORN> MK<mkdir> VOX <voices> SHED <n>
+  [FB]` (`FB` = the frame hook does not run, page drawn by our engine screen).
+
+### Cut from the MVP (and why)
+- SMOOTH, STRUM, WRITE (scale fill, copy + transpose, factory restore): phase 2/3; user decision 2 puts these live
+  tools next.
+- "SEQ" on the badge and chip, MONO top-note: need flags not yet verified (sequencer enable, voice mode byte).
+- Map names are fixed (factory names; empty maps show none).
+
+### Factory maps as built
+- 1 DIATONIC C (close), 2 II-V-I with TOPs set so each group voice-leads (6 semitones of movement over its two
+  changes, found by search: e.g. G-7 TOP +2, C7 0, F^7 +2), 3 NEO SOUL on the lower octave only (F3..E4; the upper
+  octave plays plain notes for a melody over a held pad), BASS on, 4 POP. Maps 5..8 empty.
+
+### Review rounds (MVP)
+- **Code review** (fresh subagent: correctness, boot safety, threads, memory). Nothing can assert or write outside our
+  state and files. Fixed:
+  - a load that failed (disk not ready) made the first save overwrite the newest file: retries, no save before a
+    real load, and every save re-reads both headers;
+  - an octave change could push a sounding chord note past 0..127, so its note-off was never sent: notes kept
+    within 12..115;
+  - re-voicing could send a note-off twice: order fixed, and the fuzz checks it;
+  - the save's torn-edit check: `gen` bumped at an edit's start too (volatile), the save waits 2 s after it;
+  - the slash bass was clamped at +-24 on load: now +-60;
+  - stale `chord_down` after a lost key-up blocked HOLD replace;
+  - a learn stuck when SHIFT is let go on another screen: committed on the next press, never blocks the save;
+  - a false `FB`;
+  - edits racing the load.
+- **UX round 1** (an OP-1 owner who knows the Model:Cycles, jazz / neo-soul / house; the seven scenarios). The hybrid
+  scan is right; SHAPE uses the same scan; audition on a held key only is right. Adopted:
+  - the scan reordered (MAJ first, MAJ <-> MIN one detent), with a wall before NOTE;
+  - NEO SOUL on the lower octave (melody room);
+  - II-V-I voice-led by its factory TOPs;
+  - a SHIFT used for a combo (SHIFT+T2, SPLIT, a knob) no longer learns;
+  - off the page in MAP, SHIFT + notes no longer switches the slot to SHAPE / OFF;
+  - SHIFT and DROP take the last key tapped even while frozen;
+  - SPLIT tapped alone pins the edited key;
+  - > 4 learned notes keep the bass and the top 3;
+  - a melody note sheds plain notes before the pad's BASS;
+  - REDONE;
+  - knobs ignored during a learn;
+  - hints on the NOTE and OFF screens.
+  Not adopted: SHIFT+white as a map transpose (WRITE's copy + transpose is the plan, phase 2); slash basses on the key
+  labels (no room in 5 glyphs).
+- **UI review** (TE-style visual designer, on the C-path renders). Adopted:
+  - turned underlines keep their knob colour (wider instead of white);
+  - TOP / VOICING bigger when turned;
+  - the scan strip replaces the green underline (grey ticks, family starts taller);
+  - labels shrink to fit black keys;
+  - the diagnostic lines in a 96-byte buffer, grey, shrink to fit;
+  - long messages shrink so they stay clear of the ruler;
+  - SHAPE header blue, its chord tones as ruler-style marks instead of the "sounding" fill;
+  - red outside a learn is always boxed; BASS OFF grey; no underline on the B;
+  - fast text for static hints, HOLD, the sounding chord and the idle chip (0 AA);
+  - a narrow white-key neck outlined once;
+  - ruler colours swapped and marks thinner;
+  - LEARN tag aligned;
+  - the header baseline;
+  - AS PLAYED in the VOICING slot.
+
+### Checks
+- `src/slot/test/chord2_check.py`: the engine test (`chord2_test.c`, 142 checks: model, factory maps, play, budget
+  fuzz, HOLD, page, learn, file: missing / short / long / old version / magic / CRC / random payload / sequence wrap /
+  write failures, every feature mask) under the Blackfin simulator; the asm entries' ABI and pass-through
+  (`chord2_main.c`); hold.o calls no libgcc / libc.
+- `src/slot/test/hold_check.py`: CHORD1 unchanged with chord2 off.
+- `src/slot/test/chord2_screens.py OUTDIR`: the gallery from the device draw code; nothing outside the safe area,
+  <= 120 AA segments per scene (max 72), the frame hook's page rules.

@@ -202,6 +202,8 @@ void hold_keyup(int32_t *note)
 /* Synth screen SHIFT+key handler: SHIFT+T2 toggles hold, everything else goes to TE's handler. */
 int hold_shiftkey(void *self, int key)
 {
+    if (C2_ON())
+        c2.shift_used = 1;             /* a SHIFT combo: this SHIFT press no longer learns */
     if (key == KEY_T2 && (FEATURES & FEAT_HOLD)) {
         hold_on = !hold_on;
         if (!hold_on) {

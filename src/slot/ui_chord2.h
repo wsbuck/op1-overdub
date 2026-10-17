@@ -157,14 +157,17 @@ static void label2(void *r, const struct c2_chord *c, int key, int flats, fp32 c
     if (q == Q_NONE)
         return;
     const char *tag = q == Q_CUSTOM ? "?" : c2_q[q].tag;
-    fp32 ts = step;                 /* a long tag (7S4 on a black key) gets smaller, never wider than its key */
+    const char *root = (flats ? c2_pc_flat : c2_pc_sharp)[c2_key_pc(key + rt)];
+    fp32 ts = step, rs = step + (step >> 2);   /* long labels (7S4, Ab on a black key) get smaller, never wider */
     while (ctext_w(tag, ts) > maxw && ts > (FP(3) >> 2))
         ts -= FP(1) >> 3;
-    ctext_c(r, (flats ? c2_pc_flat : c2_pc_sharp)[c2_key_pc(key + rt)], cx, y, step + (step >> 2), colour, 1);
+    while (ctext_w(root, rs) > maxw && rs > step)
+        rs -= FP(1) >> 3;
+    ctext_c(r, root, cx, y, rs, colour, 1);
     ctext_c(r, tag, cx, y + 9 * step, ts, colour, 1);
 }
 
-/* keys: the chords to label (0 = none); sel: outlined key; lit: dark-blue keys */
+/* keys: the chords to label (0 = none); sel: outlined key; lit: dark-blue keys (sounding) */
 static void keyboard(void *r, const struct c2_chord *keys, int flats, int sel, uint32_t lit)
 {
     for (int k = 0; k < C2_KEYS; k++) {
@@ -196,7 +199,7 @@ static void keyboard(void *r, const struct c2_chord *keys, int flats, int sel, u
             int col = k == sel || (lit >> k & 1) ? WHITE : GREY;
             fp32 cx = kb_x(k) + FP(black ? KB_BK >> 1 : KB_WK >> 1);
             label2(r, &keys[k], k, flats, cx, black ? FP(KB_Y0 + 4) : FP(KB_YB + 5), col, FP(1) + (FP(1) >> 2),
-                   black ? FP(KB_BK - 3) : FP(KB_WK - 3));
+                   black ? FP(KB_BK - 5) : FP(KB_WK - 5));
         }
     if (sel >= 0 && sel < C2_KEYS) {   /* the edited key: its visible outline, 2 px, white */
         for (int d = 0; d < 2; d++) {
@@ -214,7 +217,8 @@ static void keyboard(void *r, const struct c2_chord *keys, int flats, int sel, u
             }
             py[2] = py[3] = py[6] = py[7] = FP(KB_YB) + in;
             for (int i = 0; i < 8; i++)
-                line_fast(r, px[i], py[i], px[(i + 1) & 7], py[(i + 1) & 7], WHITE);
+                if (!(d == 1 && px[1] - px[0] < FP(8) && (i == 7 || i == 0 || i == 1)))   /* a narrow neck: 1 pass */
+                    line_fast(r, px[i], py[i], px[(i + 1) & 7], py[(i + 1) & 7], WHITE);
         }
     }
 }
@@ -234,7 +238,7 @@ static void ruler(void *r, const int8_t *iv, int n, int key, int root_iv, int le
     for (int s = 0; s <= 36; s++) {
         int p = c2_mod12(s), black = (0x54A >> p) & 1;
         fp32 x = FP(RU_X0) + s * FP(4);
-        vline_fast(r, x, FP(RU_Y0), black ? FP(RU_Y0 + 5) : p == 0 ? FP(RU_Y1) : FP(RU_Y0 + 8), black ? PURPLEGREY : GREY);
+        vline_fast(r, x, FP(RU_Y0), black ? FP(RU_Y0 + 5) : p == 0 ? FP(RU_Y1) : FP(RU_Y0 + 8), black ? GREY : PURPLEGREY);
     }
     for (int i = 0; i < n; i++) {
         int s = key + iv[i] - base;
@@ -243,7 +247,7 @@ static void ruler(void *r, const int8_t *iv, int n, int key, int root_iv, int le
         fp32 x = FP(RU_X0) + s * FP(4);
         int root = c2_mod12(iv[i] - root_iv) == 0, top = i == n - 1;
         int col = learning ? RED : top ? WHITE : root ? BLUE : LIGHTBLUE;
-        line_fp(r, x, FP(RU_Y1 + 1), x, FP(RU_Y1 + (root ? 8 : 7)), FP(3), col);
+        line_fp(r, x, FP(RU_Y1 + 1), x, FP(RU_Y1 + (root ? 7 : 6)), FP(2), col);
     }
 }
 
@@ -283,13 +287,18 @@ static void padlock(void *r, fp32 x, fp32 y, int colour)   /* 5 x 7 */
  * when right != 0. */
 static void c2u_tag(void *r, const char *s, fp32 x, fp32 y, fp32 step, int frame, int colour, int right, int backing)
 {
+    int fast = backing >> 1;        /* backing 2|1: the text and frame in fast lines (the idle chip: 0 AA) */
+    backing &= 1;
     fp32 w = ctext_w(s, step), h = 6 * step, pad = step + FP(2), bw = w + 2 * pad, bh = h + 2 * step + FP(2);
     if (right)
         x -= bw;
     if (backing)
         c2u_fill(r, x, y, x + bw, y + bh, 1 /* black */);
-    frame_aa(r, x, y, x + bw, y + bh, FP(1), frame);
-    ctext(r, s, x + pad, y + step + FP(1), step, colour, 0);
+    if (fast)
+        frame_fast(r, x, y, x + bw, y + bh, frame);
+    else
+        frame_aa(r, x, y, x + bw, y + bh, FP(1), frame);
+    ctext(r, s, x + pad, y + step + FP(1), step, colour, fast);
 }
 
 static int c2u_mode(const struct c2_state *s, const struct c2_view *v)
@@ -324,26 +333,25 @@ static void c2u_header(void *r, const struct c2_state *s, const struct c2_view *
 {
     char b[16];
     int mode = c2u_mode(s, v), m = c2_mode_map(mode);
-    fp32 x = ctext(r, c2u_mode_name(mode, b), FP(8), FP(5), FP(2), m >= 0 ? BLUE : mode ? WHITE : GREY, 0);
+    fp32 x = ctext(r, c2u_mode_name(mode, b), FP(8), FP(5), FP(2), mode ? BLUE : GREY, 0);   /* SHIFT+blue sets it */
     if (m >= 0 && s->d.set[m].name[0]) {
         char nm[13];
         for (int i = 0; i < 12; i++)
             nm[i] = s->d.set[m].name[i];
         nm[12] = 0;
-        ctext(r, nm, x + FP(4), FP(9), FP(1), GREY, 1);
+        ctext(r, nm, x + FP(4), FP(11), FP(1), GREY, 1);
     }
     fp32 xr = FP(312);
     if (v->hold) {
         fp32 w = ctext_w("HOLD", FP(1) + (FP(1) >> 2));
         xr -= w + FP(6);
         frame_aa(r, xr, FP(4), xr + w + FP(5), FP(16), FP(1), RED);
-        ctext(r, "HOLD", xr + FP(3), FP(6) + (FP(1) >> 1), FP(1) + (FP(1) >> 2), RED, 0);
-        xr -= FP(8);
+        ctext(r, "HOLD", xr + FP(3), FP(6) + (FP(1) >> 1), FP(1) + (FP(1) >> 2), RED, 1);
+        xr -= FP(12);
     }
     if (m >= 0 && s->d.set[m].bass) {
         xr -= ctext_w("B", FP(1) + (FP(1) >> 2));
         ctext(r, "B", xr, FP(6), FP(1) + (FP(1) >> 2), ORANGE, 1);
-        line_fast(r, xr, FP(15), xr + FP(5), FP(15), ORANGE);
     }
 }
 
@@ -354,8 +362,11 @@ static const char *c2u_msg(const struct c2_state *s, int mode, char *b)
     case MSG_COPIED: return "COPIED  ] PASTES";
     case MSG_PASTED: return "PASTED  SHIFT+[ UNDOES";
     case MSG_UNDONE: return "UNDONE  AGAIN = REDO";
+    case MSG_REDONE: return "REDONE";
+    case MSG_PINNED: return "KEY PINNED  \\ UNPINS";
+    case MSG_UNPINNED: return "UNPINNED";
     case MSG_LEARNED: return "LEARNED  SHIFT+[ UNDOES";
-    case MSG_MAX4: return "MAX 4: LOWEST KEPT";
+    case MSG_MAX4: return "MAX 4: BASS + TOP 3";
     case MSG_EMPTY_CLIP: return "[ COPIES FIRST";
     case MSG_LATER: return "NOT IN THIS VERSION";
     case MSG_TURN_GREEN: return mode ? "TURN GREEN FOR A CHORD" : "SHIFT+BLUE: MODE";
@@ -367,18 +378,27 @@ static const char *c2u_msg(const struct c2_state *s, int mode, char *b)
 }
 
 /* SHIFT layer: the map's settings in knob colours, and the diagnostics (the device test reads them). */
+static void c2u_diag_line(void *r, const char *b, fp32 y)
+{
+    fp32 st = FP(1);
+    while (ctext_w(b, st) > FP(306) && st > (FP(1) >> 1))
+        st -= FP(1) >> 3;
+    ctext(r, b, FP(8), y, st, GREY, 1);
+}
+
 static const char *const c2u_load_name[5] = { "-", "NONE", "A", "B", "BAD" };
 static const char *const c2u_save_name[6] = { "-", "OK", "OPEN", "WRITE", "CLOSE", "TORN" };
 static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_view *v)
 {
-    char b[48], *p;
+    char b[96], *p;
     int mode = c2u_mode(s, v), m = c2_mode_map(mode);
     const char *lab[4] = { "MODE", "STRUM", "SMOOTH", "BASS" };
     const char *val[4] = { c2u_mode_name(mode, b), "-", "-", m < 0 ? "-" : s->d.set[m].bass ? "ON" : "OFF" };
     for (int i = 0; i < 4; i++) {
         fp32 x = FP(8 + 78 * i);
         ctext(r, lab[i], x, FP(24), FP(1), GREY, 1);
-        ctext(r, val[i], x, FP(33), FP(1) + (FP(1) >> 1), i == 1 || i == 2 ? GREY : c2u_knob_col[i], s->turned != i + 4);
+        int off = i == 1 || i == 2 || (i == 3 && (m < 0 || !s->d.set[m].bass));
+        ctext(r, val[i], x, FP(33), FP(1) + (FP(1) >> 1), off ? GREY : c2u_knob_col[i], 1);
     }
     const struct c2_diag *g = &s->dg;
     p = c2u_s(b, "HOOK F");
@@ -389,8 +409,9 @@ static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_v
     p = c2u_i(c2u_s(p, " LI"), (int32_t)g->lift);
     p = c2u_i(c2u_s(p, " DR"), (int32_t)g->drop);
     p = c2u_i(c2u_s(p, " UP"), (int32_t)g->shift_up);
+    p = c2u_i(c2u_s(p, " DN"), (int32_t)g->shift_dn);
     c2u_s(p, g->ctl_synth ? " CT" : " CT0");
-    ctext(r, b, FP(8), FP(45), FP(1), WHITE, 1);
+    c2u_diag_line(r, b, FP(48));
     p = c2u_s(b, "FILE ");
     p = c2u_s(p, c2u_load_name[g->load >= 0 && g->load < 5 ? g->load : 0]);
     p = c2u_i(c2u_s(p, " "), g->load_seq);
@@ -401,19 +422,22 @@ static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_v
     p = c2u_i(c2u_s(p, " SHED "), (int32_t)g->sheds);
     if (g->fb_frames)
         c2u_s(p, " FB");
-    ctext(r, b, FP(8), FP(54), FP(1), WHITE, 1);
+    c2u_diag_line(r, b, FP(57));
 }
 
-/* The TYPE scan strip: every quality as a tick, the current one tall green (Model:Cycles-like position). */
+/* The TYPE scan strip, in place of the green underline while green turns: every quality a tick, family starts taller,
+ * the current one green (the Model:Cycles-like position in the list). */
 static void c2u_scan(void *r, int q, fp32 x0, fp32 y)
 {
     for (int i = 0; i < Q_COUNT; i++) {
-        fp32 x = x0 + i * FP(5);
+        fp32 x = x0 + i * FP(4);
+        int fam = i == Q_MAJ || i == Q_6 || i == Q_SUS4 || i == Q_ADD9 || i == Q_7S11;
         if (i == q)
-            line_fp(r, x, y - FP(1), x, y + FP(4), FP(2), GREEN);
+            line_fp(r, x, y - FP(2), x, y + FP(4), FP(3), GREEN);
+        else if (fam)
+            vline_fast(r, x, y, y + FP(4), PURPLEGREY);
         else
-            vline_fast(r, x, y + FP(1), y + FP(3), i == Q_NONE ? GREY : (i == Q_MAJ || i == Q_SUS2 || i == Q_7 || i == Q_7B9 ||
-                                                                          i == Q_MIN || i == Q_HDIM) ? LIGHTBLUE : DARKBLUE);
+            vline_fast(r, x, y + FP(1), y + FP(3), GREY);
     }
 }
 
@@ -443,14 +467,23 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
     q = c ? c2_shown(c, &rt) : Q_NONE;
     c2u_s(rootname, (flats ? c2_pc_flat : c2_pc_sharp)[c2_key_pc(key + rt)]);
     fp32 big = FP(3);
+    int scanning = !learning && s->turned == 1 && v->now - s->knob_frame <= C2_FREEZE && c;
+    fp32 sx = FP(8);                /* where the TYPE scan strip goes (under the quality) */
     if (!c || q == Q_NONE) {
         if (learning)
             ctext(r, "...", FP(8), FP(24), big, RED, 0);
         else if (!mode) {
-            ctext(r, "SHIFT+BLUE: MODE", FP(8), FP(26), FP(1) + (FP(1) >> 1), WHITE, 0);
-            ctext(r, "SHIFT+NOTES: LEARN A SHAPE", FP(8), FP(39), FP(1), GREY, 1);
-        } else
-            ctext(r, "NOTE", FP(8), FP(24), big, GREY, 0);
+            fp32 x = ctext(r, "SHIFT+", FP(8), FP(26), FP(1) + (FP(1) >> 1), WHITE, 1);
+            x = ctext(r, "BLUE", x, FP(26), FP(1) + (FP(1) >> 1), BLUE, 1);
+            ctext(r, ": MODE", x, FP(26), FP(1) + (FP(1) >> 1), WHITE, 1);
+            ctext(r, "SHIFT+NOTES: LEARN A SHAPE", FP(8), FP(37), FP(1), GREY, 1);
+            ctext(r, "SHIFT+SPLIT: CLOSE", FP(8), FP(45), FP(1), GREY, 1);
+        } else {
+            fp32 x = ctext(r, "NOTE", FP(8), FP(24), big, GREY, 0);
+            x = ctext(r, "TURN ", x + FP(8), FP(33), FP(1), GREY, 1);
+            ctext(r, "GREEN", x, FP(33), FP(1), GREEN, 1);
+            sx = FP(8);
+        }
     } else {
         c2_name(name, c, key, flats, 2);                 /* spelled out where it fits left of the ruler */
         if (ctext_w(name, big) > FP(152))
@@ -458,48 +491,60 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
         if (ctext_w(name, big) > FP(152))
             big = FP(2);
         ctext(r, name, FP(8), FP(24), big, learning ? RED : WHITE, 0);
-        if (!learning) {            /* which knob edits which part of the name */
+        if (!learning) {            /* which knob edits which part of the name: the turned one wider */
             fp32 wr = ctext_w(rootname, big), wn = ctext_w(name, big);
             fp32 yu = FP(24) + 7 * big + FP(2);
-            line_fp(r, FP(8), yu, FP(8) + wr, yu, FP(2), s->turned == 0 ? WHITE : BLUE);
-            if (wn > wr + FP(6))
-                line_fp(r, FP(8) + wr + FP(6), yu, FP(8) + wn, yu, FP(2), s->turned == 1 ? WHITE : GREEN);
+            line_fp(r, FP(8), yu, FP(8) + wr, yu, s->turned == 0 ? FP(3) : FP(2), BLUE);
+            sx = FP(8) + wr + FP(6);
+            if (!scanning && wn > wr + FP(6))
+                line_fp(r, sx, yu, FP(8) + wn, yu, FP(2), GREEN);
+            if (scanning)
+                c2u_scan(r, c->q == Q_CUSTOM ? c2_custom_q(c) : c->q, sx, yu - FP(2));
         }
     }
-    /* the TYPE scan while green turns */
-    if (!learning && s->turned == 1 && v->now - s->knob_frame <= C2_FREEZE && c)
-        c2u_scan(r, c->q == Q_CUSTOM ? c2_custom_q(c) : c->q, FP(8), FP(50));
+    if (scanning && (!c || q == Q_NONE))
+        c2u_scan(r, Q_NONE, sx, FP(48));
     /* the key, frozen or not; learning: the red LEARN tag */
-    fp32 xe = FP(8);
+    fp32 xe = FP(8), ky = FP(56);
     if (learning) {
-        c2u_tag(r, "LEARN", FP(8), FP(52), FP(1) + (FP(1) >> 2), RED, RED, 0, 0);
-        xe = FP(8) + ctext_w("LEARN", FP(1) + (FP(1) >> 2)) + FP(10);
+        c2u_tag(r, "LEARN", FP(8), FP(53), FP(1), RED, RED, 0, 0);
+        xe = FP(8) + ctext_w("LEARN", FP(1)) + FP(9);
+        ky = FP(55);
     }
     if (mode) {
         c2u_note(b, v->octave, flats, key);
-        xe = ctext(r, b, xe, FP(56), FP(1) + (FP(1) >> 2), learning ? RED : GREY, 1);
+        xe = ctext(r, b, xe, ky, FP(1) + (FP(1) >> 2), learning ? RED : GREY, 1);
     }
-    int frozen = s->knob_frame && v->now - s->knob_frame <= C2_FREEZE;
+    int frozen = s->pinned || (s->knob_frame && v->now - s->knob_frame <= C2_FREEZE);
     if (frozen && !learning && mode) {
-        padlock(r, xe + FP(1), FP(54), WHITE);
+        padlock(r, xe + FP(1), FP(54), s->pinned ? BLUE : WHITE);
         xe += FP(8);
     }
     const char *msg = v->now - s->msg_frame <= C2_FLASH ? c2u_msg(s, mode, b) : 0;
-    if (!msg && learning && s->learn_n > C2_MAX)
-        msg = "MAX 4: LOWEST KEPT";
-    if (!msg && !learning && c && c->q == Q_CUSTOM)
-        msg = "AS PLAYED";
-    if (msg)
-        ctext(r, msg, xe + FP(10), FP(56), FP(1) + (FP(1) >> 2), learning || s->msg == MSG_MAX4 ? RED :
-              s->msg && v->now - s->msg_frame <= C2_FLASH ? WHITE : GREY, 1);
+    int red = learning || s->msg == MSG_MAX4;
+    if (!msg && learning && s->learn_n > C2_MAX) {
+        msg = "MAX 4: BASS + TOP 3";
+        red = 1;
+    }
+    if (msg) {
+        fp32 st = FP(1) + (FP(1) >> 2), gap = FP(6);
+        if (xe + gap + ctext_w(msg, st) > FP(160))
+            st = FP(1);
+        if (red && !learning)                            /* red outside a learn is always boxed */
+            c2u_tag(r, msg, xe + gap, FP(53), FP(1), RED, RED, 0, 0);
+        else
+            ctext(r, msg, xe + gap, FP(56), st, red ? RED : WHITE, 1);
+    }
     if (n)
         ruler(r, iv, n, key + 12 * v->octave, rt, learning);
     if (!learning && c && q != Q_NONE && n) {   /* TOP (white knob) and VOICING (orange knob), under the ruler */
         c2u_note(b, v->octave, flats, key + iv[n - 1]);
-        fp32 x = ctext(r, b, FP(RU_X0), FP(46), FP(1) + (FP(1) >> 2), WHITE, s->turned != 2);
+        fp32 ts = s->turned == 2 ? FP(3) >> 1 : FP(1) + (FP(1) >> 2), vs = s->turned == 3 ? FP(3) >> 1 : FP(1) + (FP(1) >> 2);
+        fp32 x = ctext(r, b, FP(RU_X0), FP(46), ts, WHITE, s->turned != 2);
         if (c->q < Q_COUNT)
-            ctext(r, c2_fam_name[c->fam < F_COUNT ? c->fam : 0], x + FP(8), FP(46), FP(1) + (FP(1) >> 2), ORANGE,
-                  s->turned != 3);
+            ctext(r, c2_fam_name[c->fam < F_COUNT ? c->fam : 0], x + FP(8), FP(46), vs, ORANGE, s->turned != 3);
+        else
+            ctext(r, "AS PLAYED", x + FP(8), FP(46), FP(1) + (FP(1) >> 2), GREY, 1);
     }
     /* the chord sounding, when it is not the edited one */
     int pk = s->last_key;
@@ -508,7 +553,7 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
         if (pc && pc->q != Q_NONE) {
             c2_name(name, pc, pk, flats, 0);
             fp32 w = ctext_w(name, FP(1) + (FP(1) >> 1));
-            ctext(r, name, FP(312) - w, FP(54), FP(1) + (FP(1) >> 1), LIGHTBLUE, 0);
+            ctext(r, name, FP(312) - w, FP(54), FP(1) + (FP(1) >> 1), LIGHTBLUE, 1);
         }
     }
 }
@@ -530,11 +575,18 @@ static void c2_draw_page(void *r, const struct c2_state *s, const struct c2_view
     else if (mode == 1) {           /* SHAPE: the keyboard lights where its notes fall from the edited key */
         int8_t iv[C2_NOTES];
         int bi, n = c2_notes(&s->d.shape[v->slot], 0, iv, &bi);
-        uint32_t lit = 0;
-        for (int i = 0; i < n; i++)
-            if (key + iv[i] >= 0 && key + iv[i] < 24)
-                lit |= 1u << (key + iv[i]);
-        keyboard(r, 0, flats, key, lit);
+        keyboard(r, 0, flats, key, s->sounding);
+        int rt;
+        c2_shown(&s->d.shape[v->slot], &rt);
+        for (int i = 0; i < n; i++) {   /* the shape's notes from the edited key: ruler-style marks on the keys */
+            int k = key + iv[i];
+            if (k < 0 || k >= 24)
+                continue;
+            int black = kb_is_black(k), col = i == n - 1 ? WHITE : c2_mod12(iv[i] - rt) == 0 ? BLUE : LIGHTBLUE;
+            fp32 cx = kb_x(k) + FP(black ? KB_BK >> 1 : KB_WK >> 1), y0 = black ? FP(96) : FP(130);
+            for (int d = -1; d <= 1; d++)
+                vline_fast(r, cx + d * (FP(3) >> 2), y0, y0 + FP(4), col);
+        }
     } else
         keyboard(r, 0, 0, -1, 0);
 }
@@ -592,7 +644,7 @@ static void c2_draw_chip(void *r, const struct c2_state *s, const struct c2_view
         c2u_tag(r, nm, FP(314), FP(3), FP(2), c2_mode_map(mode) >= 0 ? BLUE : WHITE, fresh ? WHITE : GREY, 1, 1);
         return;
     }
-    c2u_tag(r, c2u_mode_name(mode, b), FP(314), FP(4), FP(1) + (FP(1) >> 2), GREY, GREY, 1, 1);
+    c2u_tag(r, c2u_mode_name(mode, b), FP(314), FP(4), FP(1) + (FP(1) >> 2), GREY, GREY, 1, 3);   /* fast: 0 AA */
 }
 
 /* The frame hook's bookkeeping (ui.c c2_frame): count the frame, and close the page once the synth screens are left

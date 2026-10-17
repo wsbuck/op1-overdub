@@ -30,6 +30,7 @@
 
 /* ---- the state, with the factory maps (static, so they are there from the first key event) ---- */
 #define FC(k, r, qq) [k] = { (r), (qq), 0, 0, { 0 }, 0, 0, 0, 0 }
+#define FT(k, r, qq, t) [k] = { (r), (qq), 0, (t), { 0 }, 0, 0, 0, 0 }
 #define SH { 0, Q_MAJ, 0, 0, { 0 }, 0, 0, 0, 0 }
 struct c2_state c2 RAM = {
     .d = {
@@ -40,18 +41,20 @@ struct c2_state c2 RAM = {
                 FC(9, 0, Q_MIN7), FC(11, 0, Q_MIN7), FC(12, 0, Q_MAJ7), FC(14, 0, Q_7), FC(16, 0, Q_MIN7),
                 FC(18, 0, Q_HDIM), FC(19, 0, Q_MAJ7), FC(21, 0, Q_MIN7), FC(23, 0, Q_MIN7),
             },
-            /* 2 II-V-I in F, Bb, Eb, C on groups of three white keys; D D# E = the minor ii-V-i to C minor */
+            /* 2 II-V-I in F, Bb, Eb, C on groups of three white keys; D D# E = the minor ii-V-i to C minor. TOPs set so
+             * each group voice-leads (6 semitones of movement over the two changes; SMOOTH is phase 2) */
             [1] = {
-                FC(0, 2, Q_MIN7), FC(2, 5, Q_7), FC(4, -4, Q_MAJ7), FC(6, 1, Q_MIN7), FC(7, 5, Q_7),
-                FC(9, -4, Q_MAJ7), FC(11, 1, Q_MIN7), FC(12, 5, Q_7), FC(14, -4, Q_MAJ7), FC(16, 5, Q_MIN7),
-                FC(18, -4, Q_7), FC(19, 0, Q_MAJ7), FC(21, 0, Q_HDIM), FC(22, 4, Q_7B9), FC(23, -4, Q_MIN6),
+                FT(0, 2, Q_MIN7, 2), FT(2, 5, Q_7, 0), FT(4, -4, Q_MAJ7, 2),
+                FT(6, 1, Q_MIN7, 0), FT(7, 5, Q_7, -2), FT(9, -4, Q_MAJ7, 0),
+                FT(11, 1, Q_MIN7, -1), FT(12, 5, Q_7, -3), FT(14, -4, Q_MAJ7, -1),
+                FT(16, 5, Q_MIN7, -4), FT(18, -4, Q_7, -2), FT(19, 0, Q_MAJ7, -4),
+                FT(21, 0, Q_HDIM, -4), FT(22, 4, Q_7B9, -7), FT(23, -4, Q_MIN6, -3),
             },
-            /* 3 NEO SOUL: m9 / maj9 / 13 / 7#9 colours around Eb major / C minor, flat-root chords on the black keys */
+            /* 3 NEO SOUL: m9 / maj9 / 13 / 7#9 colours around Eb major / C minor on the lower octave (flat roots on the
+             * black keys); the upper octave plays plain notes for a melody over a held pad */
             [2] = {
                 FC(0, 0, Q_MIN9), FC(2, 0, Q_7S9), FC(3, 0, Q_MAJ9), FC(5, 0, Q_13), FC(7, 0, Q_MIN9),
-                FC(8, 0, Q_MAJ9), FC(9, 0, Q_MIN7), FC(10, 0, Q_MAJ9), FC(11, 0, Q_HDIM), FC(12, 0, Q_MIN11),
-                FC(14, 0, Q_7B9), FC(15, 0, Q_6), FC(17, 0, Q_7SUS4), FC(19, 0, Q_MIN11), FC(20, 0, Q_MAJ7),
-                FC(21, 0, Q_HDIM), FC(22, 0, Q_6),
+                FC(8, 0, Q_MAJ9), FC(9, 0, Q_MIN7), FC(10, 0, Q_MAJ9), FC(11, 0, Q_HDIM),
             },
             /* 4 POP: C major triads on the white keys, borrowed chords on the black ones */
             [3] = {
@@ -68,6 +71,7 @@ struct c2_state c2 RAM = {
     .sel = 7, .turned = -1, .last_key = -1, .file_slot = -1,
 };
 #undef FC
+#undef FT
 #undef SH
 
 /* ---- small helpers (struct copies go through c2_copy: GCC would call memcpy, which the slot block lacks) ---- */
@@ -112,15 +116,20 @@ static void c2_touch(void)
 /* Undo: the whole state before an edit gesture (knob turns within C2_FREEZE frames are one gesture). */
 static void c2_snapshot(int knob)
 {
+    c2.gen++;                          /* an edit starts: a save running now is retried (and waits 2 s) */
+    c2.edit_frame = c2_now();
     if (knob && c2.gesture_knob && c2_now() - c2.knob_frame <= C2_FREEZE)
         return;
     c2_copy(&c2.undo, &c2.d, sizeof c2.d);
     c2.undo_ok = 1;
+    c2.redo = 0;
     c2.gesture_knob = (uint32_t)knob;
 }
 
 static void c2_undo(void)
 {
+    c2.gen++;
+    c2.edit_frame = c2_now();
     if (!c2.undo_ok) {
         c2_flash(MSG_NOTHING_UNDO, 0);
         return;
@@ -133,7 +142,8 @@ static void c2_undo(void)
     }
     c2.gesture_knob = 0;
     c2_touch();
-    c2_flash(MSG_UNDONE, 0);
+    c2_flash(c2.redo ? MSG_REDONE : MSG_UNDONE, 0);
+    c2.redo = !c2.redo;
 }
 
 /* The chord the page edits: the edited key's in MAP mode, the slot's shape in SHAPE mode; 0 when OFF. */
@@ -147,7 +157,7 @@ static struct c2_chord *c2_target(void)
     return 0;
 }
 
-static int c2_frozen(void) { return c2.knob_frame && c2_now() - c2.knob_frame <= C2_FREEZE; }
+static int c2_frozen(void) { return c2.pinned || (c2.knob_frame && c2_now() - c2.knob_frame <= C2_FREEZE); }
 
 /* ---- playing: our own voice tracking, by key ---- */
 
@@ -210,8 +220,8 @@ static int c2_key_notes(int key, uint8_t *rel, int *chord, int *bass)
             continue;
         int32_t note[5];
         te_make_note(note, r - REL_OFS, 0x7F);
-        if (note[0] < 0 || note[0] > 127)
-            continue;
+        if (note[0] < 12 || note[0] > 115)
+            continue;                  /* an octave key can move a sounding note by 12: keep it inside 0..127 */
         for (int j = 0; j < out; j++)
             dup |= rel[j] == r;
         if (dup)
@@ -260,12 +270,16 @@ static void c2_shed_bass(int k)
 
 /* The voice budget: the keys to let go (whole) so that `rel` fits in C2_VOICES with what sounds; BASS notes are
  * shed on the spot (first). Order: the oldest BASS voice, the oldest plain note, the oldest whole chord. */
-static uint32_t c2_budget(int key, const uint8_t *rel, int n, uint32_t victims)
+static uint32_t c2_budget(int key, const uint8_t *rel, int n, uint32_t victims, int chord)
 {
+    /* a chord sheds the oldest BASS note first; a plain (melody) note sheds the oldest plain note before the BASS */
+    static const uint8_t order_chord[3] = { 0, 1, 2 }, order_plain[3] = { 1, 0, 2 };
+    const uint8_t *order = chord ? order_chord : order_plain;
     for (int guard = 0; guard < 2 * C2_KEYS && c2_count_after(victims, rel, n) > C2_VOICES; guard++) {
         int pick = -1, kind = 0;
         uint32_t best = 0;
-        for (int pass = 0; pass < 3 && pick < 0; pass++)
+        for (int i = 0; i < 3 && pick < 0; i++) {
+            int pass = order[i];
             for (int k = 0; k < C2_KEYS; k++) {
                 if (k == key || (victims >> k & 1) || !c2.key_cnt[k])
                     continue;
@@ -276,6 +290,7 @@ static uint32_t c2_budget(int key, const uint8_t *rel, int n, uint32_t victims)
                     kind = pass;
                 }
             }
+        }
         if (pick < 0)
             break;
         if (kind == 0)
@@ -323,7 +338,7 @@ static void c2_play(int key, const uint8_t *rel, int n, int chord, int bass)
     uint32_t bit = 1u << key, victims = 0;
     if (chord && hold_on && !(c2.chord_down & ~bit))
         victims |= hold_keys;                      /* a new HOLD gesture replaces the latched chords */
-    victims = c2_budget(key, rel, n, victims & ~bit);
+    victims = c2_budget(key, rel, n, victims & ~bit, chord);
     uint8_t need[C2_NOTES];
     int nn = 0;
     for (int i = 0; i < n && i < C2_NOTES; i++)
@@ -360,10 +375,10 @@ static void c2_revoice(int key)
         if (c2.rel_ref[rel[j]]++ == 0 && !had)
             need[nn++] = rel[j];
     }
-    c2_let_go(c2_budget(key, rel, 0, 0));
-    for (int i = 0; i < on; i++)
+    for (int i = 0; i < on; i++)       /* before the budget's victims: a shared note goes off exactly once */
         if (!c2.rel_ref[old[i]])
             rel_note(old[i] - REL_OFS, 0);
+    c2_let_go(c2_budget(key, rel, 0, 0, chord));
     c2_track(key, rel, n, chord, bass);
     for (int i = 0; i < nn; i++)
         rel_note(need[i] - REL_OFS, 1);
@@ -391,8 +406,12 @@ static void c2_release_held(void)
 static void c2_purge_stale(void)
 {
     for (int k = 0; k < C2_KEYS; k++)
+    {
         if (c2.key_cnt[k] && !KEY_DOWN[k] && !(hold_keys >> k & 1))
             c2_release_key(k);
+        if (!KEY_DOWN[k])
+            c2.chord_down &= ~(1u << k);
+    }
 }
 
 /* ---- learn: SHIFT + notes; written when SHIFT is let go ---- */
@@ -401,6 +420,7 @@ static void c2_learn_note(int key, int32_t note)
 {
     if (!c2.learning) {
         c2.learning = 1;
+        c2.learn_frame = c2_now();
         c2.learn_n = 0;
         c2.learn_over = 0;
         c2.learn_page = (int32_t)c2.page;
@@ -443,8 +463,12 @@ static int c2_learn_take(int8_t *iv, int *over)
     }
     c2_sort(v, n);
     *over = n > C2_MAX || c2.learn_over;
-    if (n > C2_MAX)
-        n = C2_MAX;
+    if (n > C2_MAX) {                  /* the bass and the top 3: the melody note is kept, inner notes go */
+        iv[0] = v[0];
+        for (int i = 1; i < C2_MAX; i++)
+            iv[i] = v[n - C2_MAX + i];
+        return C2_MAX;
+    }
     for (int i = 0; i < n; i++)
         iv[i] = v[i];
     return n;
@@ -452,7 +476,7 @@ static int c2_learn_take(int8_t *iv, int *over)
 
 static void c2_learn_commit(void)
 {
-    if (!c2.learning)
+    if (!c2.learning || c2.loading)
         return;
     c2.learning = 0;
     int8_t iv[C2_MAX];
@@ -505,7 +529,7 @@ static void c2_keydown(int32_t *note)
     c2.dead &= ~bit;
     if (c2.page && c2.split_down) {    /* SPLIT + key: clear that key's chord, play nothing */
         c2.sel = key;
-        struct c2_chord *t = c2_target();
+        struct c2_chord *t = c2.loading ? 0 : c2_target();
         if (t) {
             c2_snapshot(0);
             c2_clear(t);
@@ -513,12 +537,18 @@ static void c2_keydown(int32_t *note)
             c2_revoice_all();
         }
         c2_flash(MSG_CLEARED, key);
+        c2.split_used = 1;
         c2.dead |= bit;
         return;
     }
     uint8_t rel[C2_NOTES];
     int chord = 0, bass = -1, n;
-    if (SHIFT_DOWN) {                  /* learn: SHIFT + notes, which sound as played */
+    if (!SHIFT_DOWN)
+        c2.shift_used = 0;             /* also without the press hook: a plain key ends any SHIFT combo */
+    int learn = SHIFT_DOWN && !c2.shift_used && (c2.page || c2_mode() <= 1);
+    if (SHIFT_DOWN && !learn)
+        c2.shift_used = 1;             /* SHIFT + note in MAP off the page, or after a combo: just play */
+    if (learn) {                       /* learn: SHIFT + notes, which sound as played */
         c2_learn_note(key, note[0]);
         rel[0] = (uint8_t)(key + REL_OFS);
         c2_play(key, rel, 1, 0, -1);
@@ -526,8 +556,11 @@ static void c2_keydown(int32_t *note)
     }
     if (c2.learning)
         c2_learn_commit();             /* SHIFT's release was not seen: the first plain note ends the learn */
-    if (c2.page && !c2_frozen())
-        c2.sel = key;
+    if (c2.page) {
+        c2.last_tap = key;
+        if (!c2_frozen())
+            c2.sel = key;
+    }
     n = c2_key_notes(key, rel, &chord, &bass);
     if (!n)
         return;
@@ -566,6 +599,7 @@ static void c2_keyup(int32_t *note)
 /* SHIFT + key on the synth screen (CHORD1's shift slot): 1 = handled. */
 static int c2_shiftkey(int key)
 {
+    c2.shift_used = 1;                 /* any SHIFT + key combo: this SHIFT press no longer learns */
     if (key == KEY_SPLIT) {
         c2.page = !c2.page;
         c2.split_down = 0;
@@ -576,6 +610,8 @@ static int c2_shiftkey(int key)
     if (!c2.page)
         return 0;
     if (key == KEY_LIFT) {
+        if (c2.loading)
+            return 1;
         c2_undo();
         c2_revoice_all();
         return 1;
@@ -589,6 +625,8 @@ static int c2_shiftkey(int key)
 
 static int c2_press_key(int key)
 {
+    if (c2.learning && !SHIFT_DOWN)
+        c2_learn_commit();             /* SHIFT was let go where our release slot didn't see it */
     if (key == KEY_SPLIT)
         c2.dg.split++;
     else if (key == KEY_LIFT)
@@ -596,17 +634,24 @@ static int c2_press_key(int key)
     else if (key == KEY_DROP)
         c2.dg.drop++;
     if (key == KEY_SHIFT) {
+        c2.dg.shift_dn++;
+        c2.shift_used = 0;
         c2.knob_frame = 0;             /* SHIFT ends the freeze, so a learn goes to the last key tapped */
+        if (c2.page && !c2.pinned && c2.last_tap >= 0 && c2.last_tap < C2_KEYS)
+            c2.sel = c2.last_tap;
         return 0;
     }
     if (!c2.page)
         return 0;
     if (key == KEY_SPLIT) {
         c2.split_down = 1;
+        c2.split_used = 0;
         return 1;
     }
+    if (key == KEY_DROP && !c2.pinned && c2.last_tap >= 0 && c2.last_tap < C2_KEYS)
+        c2.sel = c2.last_tap;          /* LIFT on one key, tap another, DROP: pasted where you tapped */
     if (key == KEY_LIFT || key == KEY_DROP) {
-        struct c2_chord *t = c2_target();
+        struct c2_chord *t = c2.loading ? 0 : c2_target();
         if (!t)
             c2_flash(MSG_TURN_GREEN, 0);
         else if (key == KEY_LIFT) {
@@ -630,8 +675,13 @@ static int c2_press_key(int key)
 
 static void c2_release_key_ev(int key)
 {
-    if (key == KEY_SPLIT)
+    if (key == KEY_SPLIT) {
+        if (c2.split_down && !c2.split_used && c2.page) {   /* SPLIT tapped alone: pin / unpin the edited key */
+            c2.pinned = !c2.pinned;
+            c2_flash(c2.pinned ? MSG_PINNED : MSG_UNPINNED, c2.sel);
+        }
         c2.split_down = 0;
+    }
     else if (key == KEY_SHIFT) {
         c2.dg.shift_up++;
         c2_learn_commit();
@@ -661,7 +711,16 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
         int q = c->q == Q_CUSTOM ? c2_custom_q(c) : c->q;
         if (c->q == Q_CUSTOM)
             c2_structure(c, q);
-        q = c2_clampi(q + steps, Q_NONE, Q_COUNT - 1);
+        int to = c2_clampi(q + steps, Q_NONE, Q_COUNT - 1);
+        if (to == Q_NONE && q > Q_NONE) {          /* a wall before NOTE: a second detent left within ~1 s */
+            if (!c2.wall_frame || c2_now() + 1 - c2.wall_frame > 32) {
+                c2.wall_frame = c2_now() + 1;
+                to = Q_NONE + 1;
+            } else
+                c2.wall_frame = 0;
+        } else
+            c2.wall_frame = 0;
+        q = to;
         if (q == Q_NONE) {
             c2_clear(c);
         } else {
@@ -671,7 +730,7 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
             }
             c->q = (uint8_t)q;
             int nt = c2_q[q].n;
-            c->top = (int8_t)c2_clampi(c->top, -nt, 2 * nt);
+            c->top = (int8_t)c2_clampi(c->top, -2 * nt, 2 * nt);
         }
     } else if (c->q == Q_NONE) {
         c2_flash(MSG_TURN_GREEN, 0);
@@ -711,7 +770,7 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
         c->root = (int8_t)r;
     } else if (knob == 2) {
         int nt = c2_q[c->q].n;
-        c->top = (int8_t)c2_clampi(c->top + steps, -nt, 2 * nt);
+        c->top = (int8_t)c2_clampi(c->top + steps, -2 * nt, 2 * nt);
     } else
         c->fam = (uint8_t)c2_clampi(c->fam + steps, 0, F_COUNT - 1);
     if (!c2_in_range(c, bass)) {
@@ -727,8 +786,10 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
 
 static void c2_knob_turn(int knob, int steps)
 {
-    if (c2.loading || knob < 0 || knob > 7)
-        return;
+    if (c2.loading || c2.learning || knob < 0 || knob > 7)
+        return;                        /* knob turns during a learn do nothing (MODE can't change mid-learn) */
+    if (knob >= 4)
+        c2.shift_used = 1;
     int s = c2_slot();
     c2.turned = knob;
     if (knob >= 4) {                   /* SHIFT layer: the map's settings */
@@ -788,7 +849,7 @@ static void c2_knob_turn(int knob, int steps)
 #define C2_HDR 24
 #define C2_PAYLOAD (C2_MAPS * C2_KEYS * 12 + C2_MAPS * 16 + C2_SLOTS * 12 + C2_SLOTS)
 #define C2_FILE (C2_HDR + C2_PAYLOAD)
-#define C2_LOAD_FRAME 90               /* ~3 s after boot: TE is up, the disk mounted */
+#define C2_LOAD_FRAME 150              /* ~5 s after boot: TE is up, the disk mounted (TE reads it from boot) */
 #define C2_SAVE_DELAY 64               /* frames after the last edit */
 #define C2_O_RDONLY 0
 #define C2_O_WRITE 0x241               /* WRONLY | CREAT | TRUNC, as TE's own writes (0x019AD3C4, 0x0199FD68) */
@@ -847,7 +908,7 @@ static void c2_sanitize_chord(struct c2_chord *c)
     if (c->q != Q_CUSTOM)
         c->n = 0;
     c->has_slash = c->has_slash != 0 && c->q != Q_CUSTOM;
-    c->slash = (int8_t)c2_clampi(c->slash, -24, 24);
+    c->slash = (int8_t)c2_clampi(c->slash, -60, 60);
     if (!c2_in_range(c, 1)) {
         c->top = 0;
         c->fam = F_CLOSE;
@@ -961,33 +1022,44 @@ static int c2_read(int i)
     return n;
 }
 
-static void c2_load(void)
+/* The newest valid file: its index (or -1) and its sequence number; *seen = some file could be opened. */
+static int c2_newest(uint32_t *seq_out, int *seen)
 {
     uint32_t seq[2] = { 0, 0 };
-    int ok[2], seen = 0;
+    int ok[2];
+    *seen = 0;
     for (int i = 0; i < 2; i++) {
         int n = c2_read(i);
-        seen |= n >= 0;
+        *seen |= n >= 0;
         ok[i] = n >= 0 && c2_check(c2_buf, n, &seq[i]);
     }
     int pick = ok[0] && ok[1] ? ((int32_t)(seq[1] - seq[0]) > 0) : ok[1] ? 1 : ok[0] ? 0 : -1;
+    *seq_out = pick >= 0 ? seq[pick] : 0;
+    return pick;
+}
+
+static void c2_load(void)
+{
+    uint32_t seq;
+    int seen, pick = c2_newest(&seq, &seen);
+    if (!seen && ++c2.load_tries < 4)
+        return;                        /* nothing opened: maybe the disk isn't up yet; try again in ~8 s */
+    c2.loading = 1;                    /* the keys play plain notes; edits wait */
     int n = pick >= 0 ? c2_read(pick) : -1;
-    if (n >= 0 && c2_check(c2_buf, n, &seq[pick])) {
-        c2_parse(c2_buf, &c2.undo);    /* scratch: undo is not meaningful before the first edit anyway */
-        c2.loading = 1;
-        c2_copy(&c2.d, &c2.undo, sizeof c2.d);
-        c2.loading = 0;
+    if (n >= 0 && c2_check(c2_buf, n, &seq)) {
+        c2_parse(c2_buf, &c2.d);
         c2.file_slot = pick;
-        c2.file_seq = seq[pick];
+        c2.file_seq = seq;
         c2.dg.load = pick ? C2_LOAD_B : C2_LOAD_A;
-        c2.dg.load_seq = (int32_t)seq[pick];
+        c2.dg.load_seq = (int32_t)seq;
     } else {
         c2.dg.load = seen ? C2_LOAD_BAD : C2_LOAD_NONE;   /* factory maps (already in d) */
-        c2.file_slot = ok[0] ? 0 : ok[1] ? 1 : -1;
-        c2.file_seq = seq[0] > seq[1] ? seq[0] : seq[1];
+        c2.file_slot = pick;
+        c2.file_seq = seq;
     }
     c2.undo_ok = 0;
     c2.saved_gen = c2.gen;
+    c2.loading = 0;
     c2.loaded = 1;
 }
 
@@ -997,6 +1069,17 @@ static void c2_save(void)
     uint32_t seq = c2.file_seq + 1;
     int n = c2_serialize(c2_buf, &c2.d, seq);
     if (c2.gen != g) {                 /* edited while we copied: try again next frame */
+        c2.dg.save_err = C2_SAVE_TORN;
+        return;
+    }
+    uint32_t disk_seq;                 /* what is on the disk now decides: never write over the newest good file */
+    int seen, newest = c2_newest(&disk_seq, &seen);
+    if (newest >= 0 && (int32_t)(disk_seq - c2.file_seq) > 0)
+        seq = disk_seq + 1;
+    if (newest >= 0)
+        c2.file_slot = newest;
+    n = c2_serialize(c2_buf, &c2.d, seq);   /* c2_newest used the buffer */
+    if (c2.gen != g) {
         c2.dg.save_err = C2_SAVE_TORN;
         return;
     }
@@ -1033,11 +1116,11 @@ void c2_gui_tick(void)
         return;
     uint32_t now = c2_now();
     if (!c2.loaded) {
-        if (now >= C2_LOAD_FRAME)
+        if (now >= C2_LOAD_FRAME + 256 * c2.load_tries)
             c2_load();
         return;
     }
-    if (c2.gen == c2.saved_gen || c2.learning || now - c2.edit_frame < C2_SAVE_DELAY)
+    if (c2.gen == c2.saved_gen || (c2.learning && now - c2.learn_frame < 256) || now - c2.edit_frame < C2_SAVE_DELAY)
         return;
     if (c2.save_tries >= 8) {          /* the disk refuses: stop until the next edit */
         if (c2.gen == c2.fail_gen)
