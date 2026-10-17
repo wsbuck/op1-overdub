@@ -1408,3 +1408,53 @@
   7. With the LFO's FX target on and the FX switched off, the screen shows the stored knobs and stays still.
   8. The `--svg-cost` numbers on each screen while modulated are no higher than FX4's.
 - Result: _pending user flash_.
+
+## 2026-10-17 — Test image 82: DRUMFM4.OP1 (fmdrum harsh zones, fifth kit "fm industrial")
+- fmdrum goes far into harsh, industrial metal with the same 8 knobs (notes/drum-engine.md "fmdrum harsh zones"):
+  - white FM: detents 0-20 the old musical index (now 0..16 rad over 20 detents), FEEDBACK 1-7 at 21-27 (DX7-style
+    modulator self-feedback, grit -> noise), SQUARE 1-5 at 28-32 (a clipped, deliberately aliasing carrier). Readouts
+    `FM 4.0`, `FM FEEDBACK 3` / `FB3`, `FM SQUARE 2` / `SQ2`. TE's LFO sweeps it smoothly.
+  - SHIFT+orange NOISE: OFF 0, AIR 1-4, SNARE 5-9, HAT 10-14, CLAP 15-19, METAL 20-25 (the 808's six squares,
+    band-passed, ring-modulated with the voice), GRIND 26-32 (ring mod with noise and a jittery square). Each zone's
+    first detent is already that zone. METAL keys on 10-13 choke like hats.
+  - screen: FEEDBACK tears the drum head and throws sparks, SQUARE flattens the rosette, METAL hex nuts on the shell,
+    GRIND angle-grinder sparks; titles GRIND / CRASH.
+  - fifth kit `fm industrial` (drive / square / sub kicks, pipe toms, snare, grind snare, clank, clap, 808-style
+    hats, sheet crash, china, anvil, ratchet, steam, scream, broken motor, pipe drop, slam, ping).
+  - the four old kits are remapped and sound as before (against FX4's renders: residual <= -51 dB, third octaves
+    within 0.08 dB).
+- Sim: fmdrum_check (feedback stability and DC, METAL/GRIND spectra and levels, zone joins, slow and fast turns,
+  old-kit match `--ref`, new kit peaks <= -0.2 dBFS, choke incl. METAL, cycles, no libgcc), drumhooks_check,
+  knobhook_check, drumprobe_check, drum_browser_check (29 factory drum sounds), apply_check: all pass. Cycles per render
+  call: clean keys as before (~172 per sample worst), harsh keys up to 292; 12 voices all harsh: worst block 440 k sim
+  cycles (fm industrial's 12 heaviest keys 409 k; old kits 220-251 k). DRUMPROBE's device/sim ratio was 2.3 x, so a
+  block of 12 harsh voices may be near the device's ~0.96 M limit: listen for crackle (step 4 below).
+- Two sound and two UX review rounds (log in notes/drum-engine.md).
+- `firmware/images/DRUMFM4.OP1` = `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum
+  --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+  --db-trim harmonic=6 --db-trim fm4=6 --svg-cost --name DRUMFM4` (all FX) from commit ca4e44a in a clean
+  `git archive` (includes LFOFX1's FX/LFO fix). te-boot identical to stock. sha256
+  002b1bb58f5a8ac70950cb0d659dc97004db3c456ee3b11256806bfa5b6d98fe.
+- **Before flashing: you must have 29 or fewer saved drum sounds** (snapshots in the drum browser's `user` column):
+  29 factory drum presets now (was 28), and factory + saved over 58 stops the OP-1 at boot (patch.cpp:656).
+- **Your saved fmdrum sounds will change**: they keep their stored values, which now mean the new scales. FM gives more
+  index (high FM settings land in FEEDBACK / SQUARE) and NOISE values land in other zones (old HAT -> CLAP/METAL, old
+  CLAP -> METAL/GRIND). The factory kits are remapped and unchanged; re-tune or reload saves.
+- Device checklist (drum mode). Tell me how it feels:
+  1. Boot; drum slots load. The browser's `fmdrum` column lists five kits; load `fm 808`, `fm 909`, `fm metal`,
+     `fm zaps`: they should sound as on DRUMFM3 / FX4.
+  2. Load `fm industrial`; play keys F .. E in order. Kicks, pipe toms, snares, clank, clap, hats (the four hat keys
+     cut each other), crash, china, anvil, ratchet, steam, scream, broken motor, pipe drop, slam, ping. Is it harsh
+     enough? Is the balance usable (any key too loud or too quiet, hats cutting through)?
+  3. On one key turn white FM from 0 to the top, one detent at a time: does each detent feel like a step? Does
+     FEEDBACK 1 (detent 21) start where you expect, does FEEDBACK 7 scream, does SQUARE get harsher or just fatter? Is
+     one detent = one level (watch the readout)? Do the same with SHIFT+orange NOISE (CLAP at 15, METAL at 20, GRIND
+     at 26).
+  4. CPU: hold the open hat and crashes while playing kicks, hats and grind keys fast (many voices with FEEDBACK /
+     METAL / GRIND). Any crackle, dropouts or UI lag?
+  5. Put TE's LFO on FM (FM with a long note at detent ~22): smooth sweep through the zones, no zipper or clicks?
+  6. Screen: torn head and sparks on FEEDBACK, calmer clipped petals on SQUARE, hex nuts on the shell for METAL,
+     sparks off the right rim for GRIND; the title and value readouts. Anything unreadable or colliding?
+  7. Edit a key, save a snapshot, reload, power-cycle: edits back.
+- **Cleanup before an image without fmdrum**: as DRUMFM1 (fmdrum and dprobe sounds in slots and saves).
+- Result: _pending user flash_.
