@@ -66,6 +66,10 @@ extern const int16_t wt_data[] __attribute__((weak));         /* wt engine's tab
 extern uint8_t voice_ram[];               /* engines' per-voice RAM (FREE region 0, 0x00810000) */
 extern uint32_t hold_on;                  /* hold.c */
 extern uint32_t chord_on, chord_learning; /* hold.c: CHORD mode and its learned shape */
+/* CHORD v2 (hold.c, chord2_impl.h; weak: the host previews link without it) */
+extern struct c2_state c2 __attribute__((weak));
+extern void c2_gui_tick(void) __attribute__((weak));
+extern const volatile uint32_t feature_mask __attribute__((weak));   /* slot.S: bit 1 CHORD, bit 2 CHORD v2 */
 extern int32_t chord_n, chord_iv[];
 extern const uint8_t ui_kind[];           /* screen kind per engine id 15.. (build_slot.py, from engines.json) */
 enum { KIND_VA = 1, KIND_WAVETABLE = 2, KIND_MODAL = 3, KIND_GRAIN = 4, KIND_INPROBE = 5, KIND_SPROBE = 6, KIND_AMP = 7,
@@ -294,6 +298,92 @@ static void chord_badge(void *r)
         fp32 x = x0 + (chord_iv[i] - lo) * step;
         line_fp(r, x, FP(37), x, FP(39) + (FP(1) >> 1), FP(2), i ? colour : WHITE);
     }
+}
+
+/* ---- CHORD v2: the page, the badge, the chip (ui_chord2.h) and the frame hook ---- */
+#include "ui_chord2.h"
+
+#ifndef C2_HOST
+#define C2_PLAY_MODE (*(volatile int32_t *)0x01DE4C40)   /* 0 synth, 1 drum, 2 game */
+#define C2_SLOT (*(volatile int32_t *)0xFF8016D4)        /* the slot the keyboard plays (hold_impl.h SLOT) */
+#define C2_OCTAVE(s) (*(volatile int32_t *)(0x01DFE4E0 + (s) * 4))
+#define C2_SHIFT (*(volatile uint8_t *)0x01DD7F78)
+#define C2_CTL (*(volatile uint32_t *)0x01DD8BC8)        /* current controller (FUN_019e9738 sets it, 019e97fc reads) */
+#endif
+#define C2_SYNTH_CTL_VT 0x01911994u                      /* the synth controller's vtable (at the object + 4) */
+#define C2_DRAW_FRAME 120                                /* nothing drawn in the first ~4 s after boot */
+
+static int c2_active(void)
+{
+    return &c2 != 0 && &feature_mask != 0 && (feature_mask & 6u) == 6u;
+}
+
+static void c2_view_now(struct c2_view *v)
+{
+    int32_t s = C2_SLOT;
+    v->slot = s >= 0 && s < C2_SLOTS ? (int)s : -1;
+    int32_t o = v->slot >= 0 ? C2_OCTAVE(v->slot) : 0;
+    v->octave = o >= -4 && o <= 4 ? (int)o : 0;
+    v->hold = hold_on != 0;
+    v->shift = C2_SHIFT != 0;
+    v->now = c2.clock;
+}
+
+/* Is the synth controller the current one? Read-only, every pointer checked; if the check never succeeds on the
+ * device (dg.ctl_synth stays 0) the page does not depend on it. */
+static int c2_synth_ctl(void)
+{
+    uint32_t c = C2_CTL;
+    if ((c & 3) || c < 0x1000u || c >= 0x04000000u)
+        return 0;
+    return *(volatile const uint32_t *)(uintptr_t)(c + 4) == C2_SYNTH_CTL_VT;
+}
+
+/* The frame hook (slot.S _c2_frame_hook, which replaces the GUI loop's CALL FUN_019b2674 at 0x019AB8B2): TE has just
+ * rendered the frame into the back buffer; before the cache flush we draw the page or the chip on top, and the file
+ * is loaded / saved (c2_gui_tick). With CHORD v2 left out it returns at once. */
+void c2_frame(void);
+void c2_frame(void)
+{
+    if (!c2_active())
+        return;
+    c2_frame_state(&c2, c2_synth_ctl(), C2_PLAY_MODE);
+    if (&c2_gui_tick)
+        c2_gui_tick();
+    int ours = c2.ui_frame;          /* our engine screen drew the badge this frame */
+    c2.ui_frame = 0;
+    if (c2.clock < C2_DRAW_FRAME)
+        return;
+    void *r = te_raster();
+    if (!raster_ok((const int32_t *)r))
+        return;
+    struct c2_view v;
+    c2_view_now(&v);
+    if (c2.page)
+        c2_draw_page(r, &c2, &v);
+    else if (!ours && C2_PLAY_MODE == 0)
+        c2_draw_chip(r, &c2, &v);
+}
+
+/* From ui_draw (our engine screens, inside TE's render): the badge; without a working frame hook also the clock and
+ * the page (phase 1b: the page then shows on our engine screens only). */
+static void c2_engine_screen(void *r)
+{
+    int alive = c2.dg.frames != c2.ui_hook_seen;
+    c2.ui_hook_seen = c2.dg.frames;
+    if (!alive) {
+        c2.clock++;
+        c2.dg.fb_frames++;
+    }
+    struct c2_view v;
+    c2_view_now(&v);
+    if (c2.page) {
+        if (!alive)
+            c2_draw_page(r, &c2, &v);
+        return;
+    }
+    c2_draw_badge(r, &c2, &v);
+    c2.ui_frame = 1;
 }
 
 /* ---- wavetable: waterfall of the bank's frames, current frame bright ---- */
@@ -2430,7 +2520,9 @@ void ui_draw(int engine, int slot)
         draw_amp(r, k);
     if (hold_on)
         hold_badge(r);
-    if (chord_on || chord_learning)
+    if (c2_active())
+        c2_engine_screen(r);
+    else if (chord_on || chord_learning)
         chord_badge(r);
 #ifdef UI_DEBUG
     diagnostics(r, t0, k, live);

@@ -12,7 +12,8 @@ Without --all/--only/--without, apply.py shows a checklist when run in a termina
 
 What leaving a feature out does: a synth or drum engine, or an FX, stays in the firmware (its name and id are kept, so
 a sound saved with it still loads) but is not listed: its database rows (engine/FX list entry, presets, kits) are
-not installed. HOLD and CHORD are turned off: their keys behave as on stock firmware.
+not installed. HOLD and CHORD are turned off: their keys behave as on stock firmware. CHORD v2 (chord2) left out:
+CHORD works as CHORD1 and its extra hooks pass straight to TE.
 
 The patch (DIR, default: the `patch` folder next to this script) holds only our own code, our database rows and
 our SVG screens; TE's firmware is never part of it. Every step is checked: the stock image's sha256, the patched
@@ -53,7 +54,8 @@ import op1pack  # noqa: E402
 
 LDR_MEMBER, DB_MEMBER = "OP1_vdk.ldr", "content/op1_factory.db"
 KINDS = {"synth": "synth engine", "drum": "drum engine", "fx": "FX", "key": "key mode"}
-ABOUT = {"hold": "SHIFT+T2 latches notes", "chord": "SHIFT + keys learn a chord"}
+ABOUT = {"hold": "SHIFT+T2 latches notes", "chord": "SHIFT + keys learn a chord",
+         "chord2": "CHORD v2: chord maps and the CHORD page, SHIFT+SPLIT; needs chord; without it CHORD works as CHORD1"}
 
 
 def sha(b):

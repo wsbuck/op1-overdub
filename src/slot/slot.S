@@ -171,8 +171,13 @@ _fx_ui_update:
     C_ENTRY _hold_keyup_entry, _hold_keyup
     C_ENTRY _hold_shiftkey_entry, _hold_shiftkey
     C_ENTRY _chord_keydown_entry, _chord_keydown       /* CHORD (build_slot.py --chord) */
+/* CHORD v2 (hold.c, chord2_impl.h; installed with --chord): the synth controller's press (+0x14), release (+0x24)
+ * and encoder (+0x2C) slots, and the frame hook (entry.inc C2_HOOKS). */
+    C2_HOOKS
+    .text
 
-/* Feature mask read by the HOLD and CHORD hooks (hold_impl.h FEAT_*): bit 0 HOLD, bit 1 CHORD. Built with every bit
+/* Feature mask read by the HOLD and CHORD hooks (hold_impl.h FEAT_*): bit 0 HOLD, bit 1 CHORD, bit 2 CHORD v2
+ * (chord2_impl.h FEAT_CHORD2; needs bit 1). Built with every bit
  * set; tools/apply.py clears the bits of the hooks the user leaves out, after checking the magic in front of it and
  * the patched OP1_vdk.ldr's sha256 (tools/mkpatch.py records where the word is). Read only, never written at run time. */
     .align 4
@@ -180,7 +185,7 @@ _fx_ui_update:
 _feature_magic:
     .ascii "OVDBMASK"
 _feature_mask:
-    .long 3
+    .long 7
 
 /* FX factory case for one of our ids. Entered by JUMP from TE's mono (FUN_01a1b6d0) or stereo (FUN_01a1b5f0) FX
  * factory with its frame live: R7 = the fixed placement address, saved R7 at [SP + 12]. Constructs TE's

@@ -19,7 +19,8 @@ src/slot/slot.S is assembled at --slot-addr with tables generated into DIR/slot_
 image (TE data, never committed). TE's name lookup, producer factory, ScreenId, knob-range and
 per-engine flag-table code is repointed at the grown tables by checked halfword patches
 (tools/ldr_patch.py --half). iter (id 14) stays stock. See notes/engine-slot.md.
-Writes DIR/features.json: the address of slot.S's feature mask word and the hooks installed (--hold, --chord), for
+Writes DIR/features.json: the address of slot.S's feature mask word and the hooks installed (--hold; --chord installs
+chord and chord2, CHORD v2's press / release / encoder slots and frame hook), for
 tools/mkpatch.py (apply.py clears the mask bits of hooks the user leaves out).
 With --db-in/--db-out, adds each engine's synth_types row and presets (tools/add_engine_db.py), optionally
 enables TE's hidden filter FX (--db-enable-filter), keeps
@@ -80,6 +81,12 @@ ITER_VTABLE, ITER_RENDER, ITER_GET, ITER_INIT = 0x019103CC, 0x019B99D4, 0x019B9B
 HOLD_KEYUP_CALL, TE_NOTE_OFF = 0x019AC3A6, 0x01A85840
 CHORD_KEYDOWN_CALL, TE_NOTE_ON = 0x019AC290, 0x01A85750   # keyboard note-on CALL (notes/seq-chord.md)
 SYNTH_SHIFTKEY_SLOT, TE_SYNTH_SHIFTKEY = 0x019119B0, 0x01A50904
+# CHORD v2 (notes/chord2.md "MVP as built"): the synth controller's press / release / encoder slots (vtable 0x01911994
+# +0x14, +0x24, +0x2C) and the GUI loop's frame render CALL (FUN_019ab880 -> FUN_019b2674)
+SYNTH_PRESS_SLOT, TE_SYNTH_PRESS = 0x019119A8, 0x01A51058
+SYNTH_RELEASE_SLOT, TE_SYNTH_RELEASE = 0x019119B8, 0x01A5056C
+SYNTH_KNOB_SLOT, TE_SYNTH_KNOB = 0x019119C0, 0x01A505BC
+FRAME_RENDER_CALL, TE_FRAME_RENDER = 0x019AB8B2, 0x019B2674
 # Screen: iter's screen page vtable 0x019103FC, slot +0x1C = update (notes/screen.md)
 ITER_PAGE_UPDATE_SLOT, ITER_PAGE_UPDATE = 0x01910418, 0x019B9EA4
 # FX screen: the filter FX screen page (object 0x01DD8B44) vtable 0x01910CD4, slot +0x1C = update (notes/fx-slot.md)
@@ -102,11 +109,15 @@ MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum pre
 STOCK_DRUM_PRESETS = 24
 MAX_FACTORY_DRUM_PRESETS = 29              # stock 24 + 5 kits: leaves the user room for 29 saved drum sounds (stock 34)
 MAX_FOLDER_LABEL = 13                      # the preset browser prints a column label with snprintf(buf, 14, "%s")
-FEATURE_BITS = {"hold": 1, "chord": 2}            # slot.S _feature_mask; must match hold_impl.h FEAT_*
+FEATURE_BITS = {"hold": 1, "chord": 2, "chord2": 4}   # slot.S _feature_mask; must match hold_impl.h / chord2_impl.h FEAT_*
 FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4}   # by source; must match ui.c's FX_* enum
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
          "_te_note_off": 0x01A85840, "_te_note_on": 0x01A85750, "_te_make_note": 0x01A85014, "_te_synth_shiftkey": 0x01A50904,
+         "_te_synth_press": TE_SYNTH_PRESS, "_te_synth_release": TE_SYNTH_RELEASE, "_te_synth_knob": TE_SYNTH_KNOB,
+         "_te_frame_render": TE_FRAME_RENDER,
+         # yaffs direct API (TE's file copy 0x0199FD40..: open, read, write, close; mkdir at boot 0x0196F874)
+         "_te_yaffs_read": 0x01A99C90, "_te_yaffs_write": 0x01A99F84, "_te_yaffs_mkdir": 0x01A9A886,
          "_voice_ram": 0x00810000,       # engines' per-voice RAM in FREE region 0 (src/engine/build.sh)
          "_te_engine_ids": 0xFF8016E4, "_te_ssamp": 0x01DF6F78, "_te_knobs": 0xFF8013C4,
          "_te_synth_slot": 0x01AAAC0C,   # grain_source.h
@@ -199,7 +210,7 @@ def main():
     ap.add_argument("--db-out")
     ap.add_argument("--db-trim", action="append", default=[], metavar="FOLDER=N")
     ap.add_argument("--hold", action="store_true", help="install the HOLD hooks (SHIFT+T2 on the synth screen)")
-    ap.add_argument("--chord", action="store_true", help="install the CHORD note-on hook (needs --hold)")
+    ap.add_argument("--chord", action="store_true", help="install the CHORD hooks, CHORD1 and v2 (needs --hold)")
     ap.add_argument("--svg-cost", action="store_true", help="show the SVG render cost (kilocycles) on SVG FX screens")
     ap.add_argument("--staged-screens", action="store_true", help="crush screen: layer-by-layer bring-up (CRUSH_STAGED)")
     ap.add_argument("--test-card", action="store_true", help="crush screen: the SVG test card first (CRUSH_TEST_CARD)")
@@ -490,6 +501,12 @@ def main():
         calls.append((HOLD_KEYUP_CALL, TE_NOTE_OFF, "_hold_keyup_entry"))
         if a.chord:
             calls.append((CHORD_KEYDOWN_CALL, TE_NOTE_ON, "_chord_keydown_entry"))
+            # CHORD v2: every hook passes through to TE's function when the mask leaves chord2 out
+            for slot_addr, stock, ours in ((SYNTH_PRESS_SLOT, TE_SYNTH_PRESS, "_c2_press_entry"),
+                                           (SYNTH_RELEASE_SLOT, TE_SYNTH_RELEASE, "_c2_release_entry"),
+                                           (SYNTH_KNOB_SLOT, TE_SYNTH_KNOB, "_c2_knob_entry")):
+                cmd += ["--pointer", f"0x{slot_addr:08x}=0x{stock:08x}:0x{sym[ours]:08x}"]
+            calls.append((FRAME_RENDER_CALL, TE_FRAME_RENDER, "_c2_frame_hook"))
     if hooked:
         calls.append((KNOB_APPLY_CALL, TE_KNOB_APPLY, "_knob_hook"))
     if drums:
@@ -520,7 +537,7 @@ def main():
     if sym.get("_feature_magic") != sym["_feature_mask"] - 8:
         sys.exit("slot.S: _feature_magic must sit right before _feature_mask")
     json.dump({"mask_addr": sym["_feature_mask"], "mask_bits": FEATURE_BITS,
-               "hooks": [h for h, on in (("hold", a.hold), ("chord", a.chord)) if on]},
+               "hooks": [h for h, on in (("hold", a.hold), ("chord", a.chord), ("chord2", a.chord)) if on]},
               open(os.path.join(a.build, "features.json"), "w"), indent=1)
     print(f"{len(halves)} halfword patches; slot symbols:",
           ", ".join(f"{k} 0x{v:08x}" for k, v in sorted(sym.items(), key=lambda kv: kv[1]) if v >= a.slot_addr))

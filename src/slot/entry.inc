@@ -155,3 +155,25 @@ _knob_hook:
     FX_STEREO_ENTRY _knob_hook_entry, _knobhook_turn
     .endm
 
+
+/* CHORD v2 hooks (hold.c, chord2_impl.h; ui.c c2_frame), instantiated by slot.S and by the simulator test
+ * (test/chord2_abi.S): C entries for the synth controller's press / release / encoder slots (R0 this, R1 key or knob,
+ * R2 int16 *delta), and the frame hook, which replaces the GUI loop's CALL FUN_019b2674(buf) at 0x019AB8B2: TE's
+ * render first with R0 (buf) untouched, then c2_frame through its C entry, which returns to the loop (the loop reloads
+ * R0-R2 after the call, 0x019AB8B6). */
+    .macro C2_HOOKS
+    .text
+    .align 4
+    C_ENTRY _c2_press_entry, _c2_press
+    C_ENTRY _c2_release_entry, _c2_release
+    C_ENTRY _c2_knob_entry, _c2_knob
+    C_ENTRY _c2_frame_c, _c2_frame
+    .global _c2_frame_hook
+_c2_frame_hook:
+    [--SP] = RETS;
+    SP += -12;
+    CALL _te_frame_render;
+    SP += 12;
+    RETS = [SP++];
+    JUMP.L _c2_frame_c;
+    .endm

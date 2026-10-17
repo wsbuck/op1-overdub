@@ -14,7 +14,7 @@ static int offs[64], noffs, shift_calls, ons[64], nons, sounding[128], bad_range
 #define KEY_DOWN key_down
 #define VOICECTL_LOCKED locked
 #define SHIFT_DOWN shift_down
-static uint32_t features = 3;                      /* slot.S _feature_mask: FEAT_HOLD | FEAT_CHORD */
+static uint32_t features = 3;                      /* slot.S _feature_mask without FEAT_CHORD2: CHORD1 (apply.py --without chord2) */
 #define FEATURES features
 
 void te_make_note(int32_t *n, int key, int vel) { n[0] = key + 0x35 + 12 * OCTAVE(SLOT); n[1] = vel; }
@@ -35,6 +35,15 @@ void te_note_on(int32_t *n, int flags)
     sounding[n[0]]++;
 }
 int te_synth_shiftkey(void *self, int key) { (void)self; (void)key; shift_calls++; return 0; }
+/* CHORD v2's other hooks and the file (chord2_impl.h; tested by chord2_test.c): never reached with FEAT_CHORD2 off */
+int te_synth_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_synth_release(void *self, int key) { (void)self; (void)key; return 0; }
+int te_synth_knob(void *self, int knob, int16_t *delta) { (void)self; (void)knob; (void)delta; return 0; }
+int te_yaffs_open(const char *path, int flags, int mode) { (void)path; (void)flags; (void)mode; return -1; }
+int te_yaffs_read(int fd, void *buf, unsigned n) { (void)fd; (void)buf; (void)n; return -1; }
+int te_yaffs_write(int fd, const void *buf, unsigned n) { (void)fd; (void)buf; (void)n; return -1; }
+int te_yaffs_close(int fd) { (void)fd; return -1; }
+int te_yaffs_mkdir(const char *path, int mode) { (void)path; (void)mode; return -1; }
 
 #define HOLD_HOST_TEST
 #include "../hold_impl.h"

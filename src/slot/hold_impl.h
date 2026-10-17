@@ -15,6 +15,7 @@
 
 #define FEAT_HOLD 1u                   /* SHIFT+T2 toggles hold; off: SHIFT+T2 goes to TE's handler as in stock */
 #define FEAT_CHORD 2u                  /* SHIFT + notes learn a chord; off: notes play as stock (no learning) */
+/* FEAT_CHORD2 4u (chord2_impl.h): CHORD v2, needs FEAT_CHORD; off: CHORD1 exactly */
 
 #define KEY_T2 7
 #define CHORD_MAX 4                    /* notes in a shape (6 voices) */
@@ -98,6 +99,8 @@ static int note_key(const int32_t *note)
     return key >= 0 && key < 24 ? key : -1;
 }
 
+static void c2_reset(void);
+
 /* Play mode switches clear TE's key state without note-offs (FUN_019ac3c8): forget ours too. */
 static int synth_mode(void)
 {
@@ -105,6 +108,7 @@ static int synth_mode(void)
     if (mode != last_mode) {
         last_mode = mode;
         chord_reset();
+        c2_reset();
         hold_keys = 0;
     }
     return mode == 0;
@@ -120,9 +124,15 @@ static void purge_stale(void)
             key_release(k, 0);
 }
 
+#include "chord2_impl.h"
+
 /* Replaces the keyboard's note-on call (FUN_019ac0b0 -> FUN_01a85750(note, 0)). */
 void chord_keydown(int32_t *note)
 {
+    if (C2_ON()) {
+        c2_keydown(note);
+        return;
+    }
     int key = synth_mode() ? note_key(note) : -1;
     if (key < 0) {
         te_note_on(note, 0);
@@ -173,6 +183,10 @@ void chord_keydown(int32_t *note)
 /* Replaces the keyboard's note-off call: note = {note, velocity, flag, ...} from FUN_01a85014. */
 void hold_keyup(int32_t *note)
 {
+    if (C2_ON()) {
+        c2_keyup(note);
+        return;
+    }
     int key = synth_mode() ? note_key(note) : -1;
     if (key < 0) {
         te_note_off(note);
@@ -190,9 +204,44 @@ int hold_shiftkey(void *self, int key)
 {
     if (key == KEY_T2 && (FEATURES & FEAT_HOLD)) {
         hold_on = !hold_on;
-        if (!hold_on)
-            release_held();
+        if (!hold_on) {
+            if (C2_ON())
+                c2_release_held();
+            else
+                release_held();
+        }
         return 1;
     }
+    if (C2_ON() && c2_shiftkey(key))
+        return 1;
     return te_synth_shiftkey(self, key);
+}
+
+/* CHORD v2 hooks on the synth controller's press, release and encoder slots: with FEAT_CHORD2 off (or FEAT_CHORD),
+ * each is TE's own function, called with the same arguments. */
+int c2_press(void *self, int key)
+{
+    if (C2_ON() && c2_press_key(key))
+        return 1;
+    return te_synth_press(self, key);
+}
+
+int c2_release(void *self, int key)
+{
+    int r = te_synth_release(self, key);
+    if (C2_ON())
+        c2_release_key_ev(key);
+    return r;
+}
+
+int c2_knob(void *self, int knob, int16_t *delta)
+{
+    if (!C2_ON() || !c2.page)
+        return te_synth_knob(self, knob, delta);
+    c2.dg.knobs++;
+    c2.dg.knob_delta = *delta;
+    int32_t steps = hook_steps(&c2.dg.knob_dmin, *delta, 1);
+    if (steps)
+        c2_knob_turn(knob, steps);
+    return 0;
 }
