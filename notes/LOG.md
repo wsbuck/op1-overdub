@@ -1598,4 +1598,11 @@
   6. **LIFT / DROP off the page:** to see TE's own sound copy / paste, LIFT on one synth slot, pick another slot, DROP
      there; compare with NIGHT2SAFE.
   7. Quick repeat of NIGHT1's passing steps: boot, file (FILE A/B, SAVE OK), chip, voices, HOLD.
-- Result: _pending user flash_.
+- Result (2026-10-17, device): all pass.
+  - Learn works: `LEARN S:1 OK:1 X:0 B:0 END:U CB:0C`.
+  - The edit target follows the last key with no wait. Pin and unpin work. The notes view lights the chord on the keyboard.
+  - Factory restore (SHIFT+DROP, DROP) and its undo work.
+  - NIGHT1 earlier passed: boot; frame hook (F: counting, CT); knob swallow (K:511 D:1024); key counters; file A/B with
+    the mode restored after a power cycle (SAVE 30 OK, MK:-1); chip clear of TE's screens; voice budget (a second
+    held chord replaces the first, accepted); HOLD with a melody over the pad; no hung notes at the octave extremes.
+  - User: "extremely useful and exciting".
