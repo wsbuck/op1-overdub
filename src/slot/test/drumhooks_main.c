@@ -44,6 +44,11 @@ void fx_ui_draw(int i, int m, int s) { (void)i; (void)m; (void)s; }
 void hold_keyup(void) {}
 void hold_shiftkey(void) {}
 void chord_keydown(void) {}
+void c2_press(void) {}                              /* CHORD v2's hooks (entry.inc C2_HOOKS) */
+void c2_release(void) {}
+void c2_knob(void) {}
+void c2_frame(void) {}
+void te_frame_render(void) {}
 int te_json_eq(void *a, void *b) { (void)a; (void)b; return 0; }
 void *te_json_str(void *v, const char *s) { (void)s; return v; }
 void te_json_free(void *v, int f) { (void)v; (void)f; }

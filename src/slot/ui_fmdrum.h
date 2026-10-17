@@ -112,7 +112,7 @@ static int32_t fd_log2_q8(uint32_t x)
     return (n << 8) + (int32_t)frac;
 }
 
-/* 0.1 ms units -> "450MS" below 1 s, "1.2SEC" above (no division: at most 4 subtractions per digit) */
+/* 0.1 ms units -> "450MS" below 1 s, "1.2S" above (no division: at most 9 subtractions per digit) */
 static char *fd_put_time(char *p, uint32_t t10)
 {
     if (t10 < 9995)
@@ -306,7 +306,7 @@ static void draw_fmdrum(int slot)
     if (fmdrum_voice)
         for (int v = 0; v < FD_VOICES; v++) {
             const struct fd_voice *vv = &fmdrum_voice[v];
-            if (!vv->age || (uint32_t)vv->key >= FD_KEYS)
+            if (!vv->age || !vv->aenv || (uint32_t)vv->key >= FD_KEYS)   /* (aenv 0: only the DC blocker's decay) */
                 continue;
             int32_t a = vv->aenv >> 15;
             lit[vv->key] = a > lit[vv->key] ? a : lit[vv->key];
