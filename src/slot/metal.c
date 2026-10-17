@@ -599,9 +599,19 @@ static int16_t mt_s[BLOCK] RAM;
     "W [P1++] = R0;\n"                                                                                              \
     "2:\t" NEXT "\n\t"                                                                                              \
     "[%[c] + 52] = R7;\n\t[%[c] + 32] = R6;\n\t"
+/* the post gain (the envelope and DRIVE's level: I1 += M1, Q12 << 16) on s (R1), then the exciter, dry; y Q23 in R0 */
+#define OUT_GAIN                                                                                                     \
+    "R2 = I1;\n\t"                                                                                                  \
+    "A0 = R1.L * R2.H (IS);\n\t"                                                                                    \
+    "A0 = A0 >>> 12;\n\t"                                                                                           \
+    "R0.L = A0 (IS) || R1.L = W [I2++];\n\t"                                                                        \
+    "R0.L = R0.L + R1.L (S);\n\t"                                                                                   \
+    "I1 += M1;\n\t"                                                                                                 \
+    "R0 = R0.L (X);\n\t"                                                                                            \
+    "R0 <<= 8;\n\t"
 #define OUT_ARGS                                                                                                     \
     : : [c] "a"(&k)                                                                                                 \
-    : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "P4", "I0", "I1", "I2", "I3", "A0", "A1",   \
+    : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "P4", "I0", "I1", "I2", "I3", "M1", "A0", "A1", \
       "LC0", "LT0", "LB0", "CC", "memory"
 #endif
 
@@ -613,7 +623,7 @@ struct outk {                               /* the output passes' constants and 
     uint32_t shph, hinc;                    /* 32 36 */
     int32_t shv;                            /* 40 */
     uint32_t c0r;                           /* 44: the ring's (1 - rw) / 2 << 16 */
-    int32_t pad1;                           /* 48 */
+    int32_t dgp2;                           /* 48: dgp again, in a short load's reach (pass_drive) */
     int32_t lp, pad2, pad3;                 /* 52: the DC blocker's low-pass, Q23 */
     int32_t knee, top, one;                 /* 64 68 72 */
     const uint32_t *tab;                    /* 76 */
@@ -621,13 +631,16 @@ struct outk {                               /* the output passes' constants and 
     const int16_t *rn, *ex, *mo;            /* 84 88 92 */
     int16_t *out, *sb;                      /* 96 100 */
     int32_t n;                              /* 104 */
+    int32_t gp, dgp;                        /* 108 112: the post gain (Q12 << 16) and its ramp */
 };
 
 /* the clean output: s = the modes + the exciter -> DC -> knee */
-static void pass_clean(struct mt_voice *v, int16_t *out, int n)
+static void pass_clean(struct mt_voice *v, int16_t *out, int n, int32_t dgp)
 {
 #ifdef __bfin__
     struct outk k;
+    k.gp = v->gp;
+    k.dgp = dgp;
     k.lp = v->dcy;
     k.knee = KNEE_T;
     k.top = KNEE_T + 2 * (32767 - KNEE_T);
@@ -639,25 +652,26 @@ static void pass_clean(struct mt_voice *v, int16_t *out, int n)
     __asm__ volatile(
         "R7 = [%[c] + 52];\n\t"
         "R0 = [%[c] + 80];\n\tI0 = R0;\n\tR0 = [%[c] + 88];\n\tI2 = R0;\n\tP1 = [%[c] + 96];\n\tP2 = [%[c] + 104];\n\t"
+        "R0 = [%[c] + 108];\n\tI1 = R0;\n\tR0 = [%[c] + 112];\n\tM1 = R0;\n\t"
         "R3 = [I0++];\n\t"
         "LSETUP (1f, 2f) LC0 = P2;\n"
-        "1:\tR3 >>>= 16;\n\t"
-        "R2.L = W [I2++];\n\t"
-        "R3.L = R3.L + R2.L (S);\n\t"
-        "R0 = R3.L (X);\n\t"
-        "R0 <<= 8;\n\t"
+        "1:\tR1 = R3 >>> 16;\n\t"
+        OUT_GAIN
         OUT_DC("R3 = [I0++];")
         OUT_ARGS);
     v->dcy = k.lp;
+    v->gp = (int32_t)((uint32_t)v->gp + (uint32_t)dgp * (uint32_t)n);
 #else
-    int32_t lp = v->dcy;
+    int32_t lp = v->dcy, gp = v->gp;
     for (int i = 0; i < n; i++) {
-        int32_t s = sat16((mt_acc[i] >> 16) + mt_ex[i]);
+        int32_t s = sat16(sat16(((mt_acc[i] >> 16) * (gp >> 16)) >> 12) + mt_ex[i]);
+        gp = (int32_t)((uint32_t)gp + (uint32_t)dgp);
         int32_t y = (s << 8) - lp;                                   /* Q23, the DC blocker */
         lp += y >> 11;
         out[i] = soft_knee(y >> 8);
     }
     v->dcy = lp;
+    v->gp = gp;
 #endif
 }
 
@@ -665,20 +679,17 @@ static void pass_clean(struct mt_voice *v, int16_t *out, int n)
 #define DRIVE_HEAD                                                                                                   \
     "R7 = [%[c] + 0];\n\tR5 = [%[c] + 8];\n\tR4 = [%[c] + 12];\n\tR3 = [%[c] + 16];\n\tP4 = [%[c] + 76];\n\t"       \
     "R0 = [%[c] + 80];\n\tI0 = R0;\n\tR0 = [%[c] + 84];\n\tI1 = R0;\n\tR0 = [%[c] + 88];\n\tI2 = R0;\n\t"           \
-    "R0 = [%[c] + 92];\n\tI3 = R0;\n\tP1 = [%[c] + 100];\n\tP2 = [%[c] + 104];\n\t"                                 \
+    "R0 = [%[c] + 92];\n\tI3 = R0;\n\tP1 = [%[c] + 100];\n\tP2 = [%[c] + 104];\n\tR3 = [%[c] + 108];\n\t"           \
     "R6 = [I0++];\n\tR1.L = W [I1++];\n\t"                                                                          \
     "LSETUP (1f, 2f) LC0 = P2;\n"                                                                                  \
     "1:\t"
 #define DRIVE_RN                                        /* s x 2 ((1 - g) / 2 + g rn): g R7.H, (1 - g) / 2 R7.L */     \
-    "R1.L = R7.H * R1.L || R2.L = W [I2++];\n\t"                                                                    \
+    "R1.L = R7.H * R1.L;\n\t"                                                                                       \
     "R1.L = R1.L + R7.L (S) || R0 = [%[c] + 4];\n\t"                                                                \
     "R6.H = R6.H * R1.L;\n\t"                                                                                       \
     "R6 = R6 << 1 (V, S);\n\t"                                                                                      \
-    "R7 = R7 +|+ R0 (S);\n\t"                                                    /* the ramps */                   \
-    "R6.H = R6.H + R2.L (S);\n\t"
-#define DRIVE_EX                                                                                                     \
-    "R2.L = W [I2++];\n\t"                                                                                          \
-    "R6.H = R6.H + R2.L (S);\n\t"
+    "R7 = R7 +|+ R0 (S);\n\t"                                                    /* the ramps */
+#define DRIVE_EX ""
 #define DRIVE_FOLD(MLOAD)                               /* s += fw (sin(pi / 2 fg s) - s), mt_sin1k (P4) */           \
     "A0 = R6.H * R5.H (IS);\n\t"                                                                                    \
     "R0 = A0;\n\t"                                                                                                  \
@@ -696,24 +707,30 @@ static void pass_clean(struct mt_voice *v, int16_t *out, int n)
     "R1.L = R1.L + R0.H (S);\n\t"                                                                                   \
     "R6.H = R6.H * R1.L;\n\t"                                                                                       \
     "R6 = R6 << 1 (V, S);\n\t"
-#define DRIVE_CLIP                                      /* sat(s cg >> 10) lv >> 12 */                                \
+#define DRIVE_CLIP                                      /* sat(s cg >> 10) */                                         \
     "A0 = R6.H * R4.H (IS);\n\t"                                                                                    \
     "A0 = A0 >>> 10;\n\t"                                                                                           \
-    "R6.L = A0 (IS);\n\t"                                                                                           \
-    "A0 = R6.L * R3.H (IS);\n\t"                                                                                    \
-    "A0 = A0 >>> 12;\n\t"                                                                                           \
-    "R0.L = A0 (IS) || R6 = [I0++];\n"
+    "R0.L = A0 (IS) || R6 = [I0++];\n\t"
 #define DRIVE_NOCLIP                                                                                                 \
     "R0 = R6 >>> 16;\n\t"                                                                                           \
-    "R6 = [I0++];\n"
+    "R6 = [I0++];\n\t"
+/* the post gain (R3: Q12 << 16, + [P5 + 48] a sample) and the exciter, dry (without GRIT; with it pass_out does this
+ * after the crush) */
+#define DRIVE_GAIN                                                                                                   \
+    "A0 = R0.L * R3.H (IS) || R2 = [%[c] + 48] || R1.L = W [I2++];\n\t"                                            \
+    "A0 = A0 >>> 12;\n\t"                                                                                           \
+    "R0.L = A0 (IS);\n\t"                                                                                           \
+    "R0.L = R0.L + R1.L (S);\n\t"                                                                                   \
+    "R3 = R3 + R2 (NS);\n"
 #define DRIVE_TAIL(RN)                                                                                               \
     "2:\t" RN "\n\t"                                                                                                \
-    "[%[c] + 0] = R7;\n\t"
+    "[%[c] + 0] = R7;\n\t[%[c] + 108] = R3;\n\t"
 #define DRIVE_STORE_RN "MNOP || W [P1++] = R0 || R1.L = W [I1++];"
 #define DRIVE_STORE "W [P1++] = R0;"
 #endif
 
-static void pass_drive(struct mt_voice *v, int n, const struct post *c, int32_t dgrn, int RN, int DRV, int RING)
+static void pass_drive(struct mt_voice *v, int n, const struct post *c, int32_t dgrn, int32_t dgp, int RN, int DRV,
+                       int RING, int GAIN)
 {
     int32_t g = v->grn, c0 = (32767 - g) >> 1, dg = dgrn, dc0 = -(dgrn >> 1);   /* the resonant noise's factor */
     const int32_t c0r = (32767 - c->rw) >> 1;                     /* the ring's */
@@ -724,7 +741,6 @@ static void pass_drive(struct mt_voice *v, int n, const struct post *c, int32_t 
     k.c0r = (uint32_t)(uint16_t)c0r << 16;
     k.fwfg = (uint16_t)c->fw | (uint32_t)(uint16_t)c->fg << 16;
     k.rwcg = (uint16_t)c->rw | (uint32_t)(uint16_t)c->cg << 16;
-    k.ctlv = (uint32_t)(uint16_t)c->lv << 16;
     k.tab = (const uint32_t *)(const void *)mt_sin1k;
     k.acc = mt_acc;
     k.rn = mt_rn;
@@ -732,22 +748,30 @@ static void pass_drive(struct mt_voice *v, int n, const struct post *c, int32_t 
     k.mo = mt_m;
     k.sb = mt_s;
     k.n = n;
+    k.gp = v->gp;
+    k.dgp = dgp;
+    k.dgp2 = dgp;
+#define DV(RNP, FOLD, RINGP, CLIPP, G, ST) __asm__ volatile(DRIVE_HEAD RNP FOLD RINGP CLIPP G DRIVE_TAIL(ST) OUT_ARGS)
+#define DV2(RNP, FOLD, RINGP, CLIPP, ST) do { if (GAIN) DV(RNP, FOLD, RINGP, CLIPP, DRIVE_GAIN, ST); \
+                                             else DV(RNP, FOLD, RINGP, CLIPP, "", ST); } while (0)
     if (RN && RING)
-        __asm__ volatile(DRIVE_HEAD DRIVE_RN DRIVE_FOLD(" || R1.L = W [I3++]") DRIVE_RING DRIVE_CLIP
-                         DRIVE_TAIL(DRIVE_STORE_RN) OUT_ARGS);
+        DV2(DRIVE_RN, DRIVE_FOLD(" || R1.L = W [I3++]"), DRIVE_RING, DRIVE_CLIP, DRIVE_STORE_RN);
     else if (RN && DRV)
-        __asm__ volatile(DRIVE_HEAD DRIVE_RN DRIVE_FOLD("") DRIVE_CLIP DRIVE_TAIL(DRIVE_STORE_RN) OUT_ARGS);
+        DV2(DRIVE_RN, DRIVE_FOLD(""), "", DRIVE_CLIP, DRIVE_STORE_RN);
     else if (RN)
-        __asm__ volatile(DRIVE_HEAD DRIVE_RN DRIVE_NOCLIP DRIVE_TAIL(DRIVE_STORE_RN) OUT_ARGS);
+        DV2(DRIVE_RN, "", "", DRIVE_NOCLIP, DRIVE_STORE_RN);
     else if (RING)
-        __asm__ volatile(DRIVE_HEAD DRIVE_EX DRIVE_FOLD(" || R1.L = W [I3++]") DRIVE_RING DRIVE_CLIP
-                         DRIVE_TAIL(DRIVE_STORE) OUT_ARGS);
+        DV2("", DRIVE_FOLD(" || R1.L = W [I3++]"), DRIVE_RING, DRIVE_CLIP, DRIVE_STORE);
     else if (DRV)
-        __asm__ volatile(DRIVE_HEAD DRIVE_EX DRIVE_FOLD("") DRIVE_CLIP DRIVE_TAIL(DRIVE_STORE) OUT_ARGS);
+        DV2("", DRIVE_FOLD(""), "", DRIVE_CLIP, DRIVE_STORE);
     else
-        __asm__ volatile(DRIVE_HEAD DRIVE_EX DRIVE_NOCLIP DRIVE_TAIL(DRIVE_STORE) OUT_ARGS);
-    (void)k.grn;
+        DV2("", "", "", DRIVE_NOCLIP, DRIVE_STORE);
+#undef DV2
+#undef DV
+    if (GAIN)
+        v->gp = k.gp;
 #else
+    int32_t gp = v->gp;
     for (int i = 0; i < n; i++) {
         int32_t s = mt_acc[i] >> 16;
         if (RN) {                           /* the modes AM-ed by the low-passed noise: s x 2 (c0 + g rn), c0 = (1 - g) / 2 */
@@ -756,7 +780,6 @@ static void pass_drive(struct mt_voice *v, int n, const struct post *c, int32_t 
             c0 = sat16(c0 + dc0);
             g = sat16(g + dg);
         }
-        s = sat16(s + mt_ex[i]);
         if (DRV) {
             int32_t f = mt_sin1k[((uint32_t)(s * c->fg) << 4) >> 22];   /* sin(pi / 2 x fg s) */
             s = sat16(s + mulr(sat16(f - s), c->fw));
@@ -765,14 +788,19 @@ static void pass_drive(struct mt_voice *v, int n, const struct post *c, int32_t 
                 s = sat16(mulr(s, f2) << 1);
             }
             s = sat16((s * c->cg) >> 10);                           /* the clip */
-            s = sat16((s * c->lv) >> 12);
+        }
+        if (GAIN) {                         /* the post gain, the exciter dry (without GRIT) */
+            s = sat16(sat16((s * (gp >> 16)) >> 12) + mt_ex[i]);
+            gp = (int32_t)((uint32_t)gp + (uint32_t)dgp);
         }
         mt_s[i] = (int16_t)s;
     }
+    if (GAIN)
+        v->gp = gp;
 #endif
 }
 
-static void pass_out(struct mt_voice *v, int16_t *out, int n, const struct post *c, int GRIT, int SAT)
+static void pass_out(struct mt_voice *v, int16_t *out, int n, const struct post *c, int32_t dgp, int GRIT, int SAT)
 {
     const int32_t h = 1 << (15 - c->bi), m = -(h << 1);            /* crush: bits bi, step 2^(16 - bi), rounded */
     const int32_t bfq = c->bf >= 256 ? 32767 : c->bf << 7;
@@ -789,11 +817,15 @@ static void pass_out(struct mt_voice *v, int16_t *out, int n, const struct post 
     k.top = KNEE_T + 2 * (32767 - KNEE_T);
     k.one = 32767;
     k.sb = mt_s;
+    k.ex = mt_ex;
     k.out = out;
     k.n = n;
+    k.gp = v->gp;
+    k.dgp = dgp;
 #define OUT_HEAD                                                                                                     \
     "R7 = [%[c] + 52];\n\tR6 = [%[c] + 32];\n\tR5 = [%[c] + 36];\n\tR4 = [%[c] + 20];\n\tR3 = [%[c] + 24];\n\t"     \
     "R0 = [%[c] + 100];\n\tI0 = R0;\n\tP1 = [%[c] + 96];\n\tP2 = [%[c] + 104];\n\t"                                 \
+    "R0 = [%[c] + 88];\n\tI2 = R0;\n\tR0 = [%[c] + 108];\n\tI1 = R0;\n\tR0 = [%[c] + 112];\n\tM1 = R0;\n\t"      \
     "R0.L = W [I0++];\n\t"                                                                                          \
     "LSETUP (1f, 2f) LC0 = P2;\n"                                                                                  \
     "1:\t"
@@ -808,13 +840,13 @@ static void pass_out(struct mt_voice *v, int16_t *out, int n, const struct post 
     "CC = AC0;\n\t" \
     "R0 = R0.L (X);\n\t" \
     "IF CC R1 = R0;\n\t" \
-    "[%[c] + 40] = R1;\n\t" \
-    "R0 = R1 << 8;\n\t"
+    "[%[c] + 40] = R1;\n\t"
 #define OUT_PLAIN "R0 = R0.L (X);\n\tR0 <<= 8;\n\t"
+
     if (GRIT && SAT)
-        __asm__ volatile(OUT_HEAD OUT_GRIT OUT_DC_SAT("R0.L = W [I0++];") OUT_ARGS);
+        __asm__ volatile(OUT_HEAD OUT_GRIT OUT_GAIN OUT_DC_SAT("R0.L = W [I0++];") OUT_ARGS);
     else if (GRIT)
-        __asm__ volatile(OUT_HEAD OUT_GRIT OUT_DC("R0.L = W [I0++];") OUT_ARGS);
+        __asm__ volatile(OUT_HEAD OUT_GRIT OUT_GAIN OUT_DC("R0.L = W [I0++];") OUT_ARGS);
     else if (SAT)
         __asm__ volatile(OUT_HEAD OUT_PLAIN OUT_DC_SAT("R0.L = W [I0++];") OUT_ARGS);
     else
@@ -822,7 +854,10 @@ static void pass_out(struct mt_voice *v, int16_t *out, int n, const struct post 
     v->shph = k.shph;
     v->shv = k.shv;
     v->dcy = k.lp;
+    if (GRIT)
+        v->gp = (int32_t)((uint32_t)v->gp + (uint32_t)dgp * (uint32_t)n);
 #else
+    int32_t gp = v->gp;
     int32_t lp = v->dcy, shv = v->shv;
     uint32_t shph = v->shph;
     for (int i = 0; i < n; i++) {
@@ -836,10 +871,15 @@ static void pass_out(struct mt_voice *v, int16_t *out, int n, const struct post 
             shph = ph;
             s = shv;
         }
+        if (GRIT) {                         /* the post gain, the exciter dry (after the crush) */
+            s = sat16(sat16((s * (gp >> 16)) >> 12) + mt_ex[i]);
+            gp = (int32_t)((uint32_t)gp + (uint32_t)dgp);
+        }
         int32_t y = (s << 8) - lp;                                   /* Q23, the DC blocker */
         lp += y >> 11;
         out[i] = (int16_t)(SAT ? sat16(y >> 8) : soft_knee(y >> 8));
     }
+    v->gp = gp;
     v->dcy = lp;
     v->shv = shv;
     v->shph = shph;
@@ -850,7 +890,7 @@ struct blk {
     struct pre pr;
     struct post po;
     int32_t a1[8];                          /* the modes' gains at the run's end */
-    int32_t sq, dgrn;
+    int32_t sq, dgrn, dgp;
     int op, md, rn, drv, ring, grit, noise;
 };
 
@@ -891,18 +931,19 @@ static void run(struct mt_voice *v, int16_t *out, int n, struct blk *b)
         for (int i = 0; i < n; i++)
             mt_acc[i] = 0;
     if (!b->rn && !b->drv && !b->grit) {
-        pass_clean(v, out, n);
+        pass_clean(v, out, n, b->dgp);
     } else {
+        int gn = !b->grit;                  /* the post gain in pass_drive, or after the crush in pass_out */
         if (b->ring)
-            b->rn ? pass_drive(v, n, &b->po, b->dgrn, 1, 1, 1) : pass_drive(v, n, &b->po, b->dgrn, 0, 1, 1);
+            b->rn ? pass_drive(v, n, &b->po, b->dgrn, b->dgp, 1, 1, 1, gn) : pass_drive(v, n, &b->po, b->dgrn, b->dgp, 0, 1, 1, gn);
         else if (b->drv)
-            b->rn ? pass_drive(v, n, &b->po, b->dgrn, 1, 1, 0) : pass_drive(v, n, &b->po, b->dgrn, 0, 1, 0);
+            b->rn ? pass_drive(v, n, &b->po, b->dgrn, b->dgp, 1, 1, 0, gn) : pass_drive(v, n, &b->po, b->dgrn, b->dgp, 0, 1, 0, gn);
         else
-            b->rn ? pass_drive(v, n, &b->po, b->dgrn, 1, 0, 0) : pass_drive(v, n, &b->po, b->dgrn, 0, 0, 0);
+            b->rn ? pass_drive(v, n, &b->po, b->dgrn, b->dgp, 1, 0, 0, gn) : pass_drive(v, n, &b->po, b->dgrn, b->dgp, 0, 0, 0, gn);
         if (b->drv)                         /* driven: clipped already, a plain saturation */
-            b->grit ? pass_out(v, out, n, &b->po, 1, 1) : pass_out(v, out, n, &b->po, 0, 1);
+            b->grit ? pass_out(v, out, n, &b->po, b->dgp, 1, 1) : pass_out(v, out, n, &b->po, b->dgp, 0, 1);
         else
-            b->grit ? pass_out(v, out, n, &b->po, 1, 0) : pass_out(v, out, n, &b->po, 0, 0);
+            b->grit ? pass_out(v, out, n, &b->po, b->dgp, 1, 0) : pass_out(v, out, n, &b->po, b->dgp, 0, 0);
     }
 }
 
@@ -946,7 +987,7 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
         }
         for (int k = 0; k < 8; k++)
             v->env[k] = ENV1;
-        v->exenv = ENV1;
+        v->exenv = v->benv = ENV1;
         v->age = 1;                         /* before seen: active() never reads 0 for a starting note */
         v->seen = v->trig;
         if (!v->seed) {
@@ -997,7 +1038,8 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
 
     /* ---- pitch: PITCH plus the BOOM drop (decaying with the exciter); e from the block's highest pitch, the rest
      * as a per-sample factor (md) ---- */
-    int32_t q0 = v->q, q1 = p[MT_PITCH] + ((bend0 * (ex1 >> 15)) >> 15);
+    v->benv = env_step(v->benv, exp2neg(LERP(mt_strike, MT_STRIKE_W, ks, 12)));    /* the drop's own decay */
+    int32_t q0 = v->q, q1 = p[MT_PITCH] + ((bend0 * (v->benv >> 15)) >> 15);
     int32_t qh = q0 > q1 ? q0 : q1;
     int32_t md0 = (ratio_down(q0 - qh) - 32767) << 16, md1 = (ratio_down(q1 - qh) - 32767) << 16;
 
@@ -1036,12 +1078,18 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
                 a = 0;
                 qk = MT_MODE_TOP;
             } else if (qk > MT_MODE_FADE) {
-                a = (a * (((MT_MODE_TOP - qk) * 10923) >> 12)) >> 15; /* x (TOP - q) / (TOP - FADE) */
+                a = (a * (((MT_MODE_TOP - qk) * MT_MODE_FADE_MUL) >> 12)) >> 15;   /* x (TOP - q) / (TOP - FADE) */
             }
             if (qk > fcq)                   /* `slope` octaves of level per octave above the strike's corner */
                 a = (a * (exp2neg((int32_t)((((((uint32_t)(qk - fcq) * 683u) >> 10) * (uint32_t)slope) >> 8))) >> 15))
                     >> 15;
             v->wk[k] = (int16_t)a;
+            int32_t boost = LERP(mt_strike, MT_STRIKE_W, ks, 13);      /* HAMMER's tilt up */
+            if (boost && v->lk[k] > 0) {
+                a = (a * ratio_up_q12((v->lk[k] * boost) >> 12)) >> 12;
+                a = a > 32767 ? 32767 : a;
+                v->wk[k] = (int16_t)a;
+            }
             n2 += (uint32_t)(a * a) >> 4;
             v->et[k] = e_q23(inc_of(qk));
         }
@@ -1064,6 +1112,10 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
         v->env[k] = e1;
     }
     int32_t gv = (v->g * (v->vel >> 1)) >> 14;                         /* Q14 */
+    if (p[MT_PITCH] > MT_TRIM_Q) {                                     /* -3 dB per octave above 500 Hz, to -9 dB */
+        uint32_t u = (((uint32_t)(p[MT_PITCH] - MT_TRIM_Q) * 683u) >> 7);  /* log2 Q16 x 1/2 */
+        gv = (gv * (exp2neg((int32_t)(u > 98304u ? 98304u : u)) >> 15)) >> 15;
+    }
     int32_t atk1 = v->atk + v->atkd;
     atk1 = atk1 > 32767 ? 32767 : atk1;
 
@@ -1075,7 +1127,14 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
         b.a1[k] = (((full[k] * (v->env[k] >> 15)) >> 15) * atk1) >> 15;
         amax = v->env[k] > amax && full[k] > 64 ? v->env[k] : amax;
     }
-    if (amax < SILENT && !fresh)            /* the note's last block: the modes fade to 0 (no step when it ends) */
+    /* The note ends at -70 dB, or once every mode's gain is under the gains' ramp resolution (their 16-bit ramps step
+     * every 4 samples: a gain rests within +-16 of its target, which DRIVE's clip gain would turn into a buzz) with the
+     * exciter quiet. Its last block fades the modes and then the output to 0. */
+    int32_t amx = 0;
+    for (int k = 0; k < 8; k++)
+        amx = b.a1[k] > amx ? b.a1[k] : amx;
+    int last = !fresh && (amax < SILENT || (amx < 24 && ex1 < (1 << 30) >> 9));     /* (the exciter at -54 dB) */
+    if (last)
         for (int k = 0; k < 8; k++)
             b.a1[k] = 0;
 
@@ -1119,6 +1178,23 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
     b.ring = drv && b.po.rw;
     b.rn = grn1 || v->grn;
     b.noise = b.rn || gex1 || v->gex || fresh;
+
+    /* The modes run at the strike's level: their gains x R / m (R the strike's loudest mode, m the loudest now, at least
+     * R / 256), and the post gain m / R x DRIVE's level puts the envelope back after the drive and the grit, so a
+     * decaying note keeps its drive and grit and its attack its punch (the shaper never squashes the transient into the
+     * tail), and the post gain's 32 bits carry the decay (the modes' 16-bit gains don't stall). The last block keeps the
+     * post gain and fades out at the end. */
+    int32_t rmax = 64;
+    for (int k = 0; k < 8; k++)
+        rmax = full[k] > rmax ? full[k] : rmax;
+    int32_t mlev = amx > rmax >> 8 ? amx : rmax >> 8;
+    mlev = mlev < 1 ? 1 : mlev;
+    int32_t scl = (rmax * (recip_q22((uint32_t)mlev) >> 4)) >> 6;       /* Q12: R / m */
+    for (int k = 0; k < 8; k++)
+        b.a1[k] = (b.a1[k] * scl) >> 12;                                  /* (a1 <= m: at most R) */
+    int32_t gq = (int32_t)(((uint32_t)mlev * (uint32_t)recip_q22((uint32_t)rmax)) >> 7);   /* Q15: m / R */
+    gq = gq > 32767 ? 32767 : gq;
+    int32_t gp1 = last ? v->gp : ((b.po.lv * gq) >> 15) << 16;
     v->mdv = md0;
     int split = 0;
     if (fresh) {
@@ -1129,9 +1205,11 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
                 v->amp[k] = (int16_t)((full[k] * (32767 - b.sq)) >> 15);
                 v->ampq[k] = (int16_t)((full[k] * b.sq) >> 15);
             }
-        } else if (att < BLOCK) {
+        } else if (att < BLOCK - 16) {      /* (both runs at least 16 samples: an asm loop of 0 is no loop of none) */
             split = (att + 15) & ~15;
         }
+        if (from_silence)                   /* the post gain: at once for a hammer, else the attack's ramp */
+            v->gp = att <= 8 ? gp1 : 0;
         if (from_silence) {                 /* the exciter starts at its full level */
             v->gex = (((((exg * 32767) >> 15) * vel12) >> 12) * gate >> 15) << 16;
             v->grn = (rnw * gate) >> 15;
@@ -1142,15 +1220,21 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
     b.pr.dmdv = (md1 - md0) >> 7;
     v->oinc = oinc1;                        /* the operator: this block's increment and feedback depth */
     v->gf = gf1;
-    if (split) {
+    if (split) {                            /* to the strike's full level over `split` samples, then the block */
         struct blk b1 = b;
+        int32_t gfull = b.po.lv << 16;
         for (int k = 0; k < 8; k++)
             b1.a1[k] = full[k];
+        b1.dgp = (((gfull - v->gp) >> 12) * (int32_t)mt_recip16[(split >> 4) - 1]) >> 4;
+        b.dgp = (((gp1 - gfull) >> 12) * (int32_t)mt_recip16[((BLOCK - split) >> 4) - 1]) >> 4;
         run(v, out, split, &b1);
+        v->gp = gfull;
         run(v, out + split, BLOCK - split, &b);
     } else {
+        b.dgp = (gp1 - v->gp) >> 7;
         run(v, out, BLOCK, &b);
     }
+    v->gp = gp1;
     v->gex = gex1;                          /* land on the block's end values */
     v->grn = grn1;
     v->mdv = md1;
@@ -1179,7 +1263,11 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
 
     v->age++;
     v->aenv = amax;
-    if (amax < SILENT) {                    /* silent: the DC blocker's decay next, or the voice ends */
+    if (last) {                             /* the output faded out over the block: no step when it ends */
+        for (int i = 0; i < BLOCK; i++)
+            out[i] = (int16_t)((out[i] * (BLOCK - 1 - i)) >> 7);
+    }
+    if (last || amax < SILENT) {            /* silent: the DC blocker's decay next, or the voice ends */
         v->aenv = 0;
         if (v->dcy > -TAIL_END && v->dcy < TAIL_END)
             v->age = 0;

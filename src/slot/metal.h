@@ -31,6 +31,7 @@ struct mt_voice {
     int32_t env[8];                         /* the modes' ring envelopes, Q30 */
     int32_t aenv;                           /* the loudest of env[] and exenv, Q30; 0 with age: the DC tail plays out */
     int32_t exenv;                          /* the exciter's envelope (NDECAY), Q30 */
+    int32_t benv;                           /* BOOM's drop's envelope (its own decay, STRIKE), Q30 */
     int32_t atk, atkd;                      /* attack Q15 and its step per block */
     int32_t q;                              /* pitch at the end of the last block (K0 units, with the BOOM drop) */
     uint32_t seed;                          /* noise */
@@ -52,6 +53,9 @@ struct mt_voice {
     int32_t lk[8], fk[8], et[8];
     int16_t ak[8], wk[8];
     int32_t alpha, g;
+    int32_t gp;                             /* the post gain: the modes run at the strike's level (the drive and the
+                                             * grit see it whole), this applies their envelope and DRIVE's level after,
+                                             * Q12 << 16 */
 };
 
 struct mt_diag {

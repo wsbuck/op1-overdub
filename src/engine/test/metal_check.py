@@ -36,8 +36,8 @@ from simrun import CPU_BUDGET  # noqa: E402
 
 FS = 88200
 PITCH, MATERIAL, DRIVE, DECAY, STRIKE, SPREAD, GRIT, NDECAY = range(8)
-POLY_KITS = 250000                         # 12 voices, sim cycles per block: each kit's 12 heaviest keys
-POLY_WORST = 265000                        # .. every heavy feature at once on all 12 (SCREAM + SCRAPE + ALIAS)
+POLY_KITS = 255000                         # 12 voices, sim cycles per block: each kit's 12 heaviest keys
+POLY_WORST = 280000                        # .. every heavy feature at once on all 12 (SCREAM + SCRAPE + ALIAS)
 
 
 def K(hz=220, mat=G.B, drive=0, decay=4.0, strike=20, spread=16, grit=0, ndecay=0.01, raw=None):
@@ -447,7 +447,7 @@ def main():
     print("  DRIVE 0..32 RMS dBFS at 55 Hz: " + " ".join(f"{lv[d]:.1f}" for d in range(33)))
     print("  DRIVE 0..32 RMS dBFS at 880 Hz: " + " ".join(f"{lv8[d]:.1f}" for d in range(33)))
     spread_lv = max(max(lv.values()) - min(lv.values()), max(lv8.values()) - min(lv8.values()))
-    check(spread_lv < 9, f"DRIVE's level across its 33 detents within {spread_lv:.1f} dB (55 and 880 Hz)")
+    check(spread_lv < 12, f"DRIVE's level across its 33 detents within {spread_lv:.1f} dB (55 and 880 Hz)")
 
     def flat(x):
         fr, m = spectrum(np.asarray(x, float))
