@@ -106,7 +106,10 @@ Every knob adds damage clockwise (RATE and BITS too: their top is the clean end)
     the knob's colour, at title size 2 (y 7 .. 19, above the sun at 24; the longest, 15 characters, ends at x 184): `RATE 11.0KHZ`, `BITS 8`, `BITS 7.5`, `BITS 8 MU-LAW`
     (only on the full mu-law plateau; the font has no mu), `BITS 8 MU 50%` / `BITS 7.5 MU 75%` (morphing),
     `SQUASH 4.0:1` / `20:1` / `OFF`, `JITTER 40%` (lower half), `FLIP 25%` (upper half), `GRIT OFF`. Not on entering
-    the screen or switching sound / mode.
+    the screen or switching sound / mode, and never from TE's LFO alone (it fires on stored-knob turns; the value shown
+    is the live, smoothed one).
+  - Knobs drawn: `crush_state.k` only while crush runs (`crush_pub` block count moving, ui.c `fx_live`), else the
+    stored knobs. So the pyramid follows TE's LFO (notes/fx-slot.md "LFO").
   - Clock: the frame counter at 30 fps (t = frames / 30); jitter is ui.c's `jit()` hash (the header allows any).
 - `crush_state[mode == 3]` (`struct crush`, `src/slot/crush.h`; `[0]` synth/drum, `[1]` master), updated once per block:
   `gr` (0 .. 32767 = 0 .. 30 dB, smoothed), `k[4]` (smoothed knobs), `rate_hz`, `bits_q12`, `mu` (Q15), `flips`

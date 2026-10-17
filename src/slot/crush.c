@@ -33,6 +33,7 @@
  */
 #include <stdint.h>
 #include "crush.h"
+#include "fxpub.h"
 
 #ifdef __bfin__
 #define RAM __attribute__((section(".data")))
@@ -49,6 +50,7 @@ void crush_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
 #define CRUSH0 {0, {0, 0, 0, 0}, 44100, 16 << 12, 0, 0, 0, {0, 0, 0, 0}, {0, 0, 0, 0}, ONE, 0, 0, 0, 0x2545F491u, 0, \
                 32768, 8192, 1, {{0, 0, 0, 0}, {0, 0, 0, 0}}}
 struct crush crush_state[2] RAM = {CRUSH0, CRUSH0};
+struct fx_pub crush_pub[2] RAM = {{{0}, 0}, {{0}, 0}};   /* the knobs each instance used last (fxpub.h) */
 
 /* Output level compensation per knob (Q12) at k = 0, 2048, .. 32767, linearly interpolated: the inverse of the mean
  * level change measured in the simulator (sines at 1 kHz -6 / -12 dBFS and 440 Hz, saws at 220 / 110 Hz), smoothed;
@@ -578,6 +580,7 @@ void crush_mono(void *self, int16_t *buf, const int16_t *p)
     (void)self;
     int16_t *io[1] = {buf};
     crush(&crush_state[0], io, 1, p);
+    fx_publish(&crush_pub[0], p);
 }
 
 void crush_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
@@ -585,4 +588,5 @@ void crush_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
     (void)self;
     int16_t *io[2] = {l, r};
     crush(&crush_state[1], io, 2, p);
+    fx_publish(&crush_pub[1], p);
 }

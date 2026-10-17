@@ -24,6 +24,7 @@
  */
 #include <stdint.h>
 #include "pingpong.h"
+#include "fxpub.h"
 
 #define RAM __attribute__((section(".data")))
 #define BLOCK 64
@@ -42,6 +43,7 @@ void pingpong_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
 extern int16_t pingpong_ram[];
 
 struct pp pingpong_state[2] RAM = {{0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0}};
+struct fx_pub pingpong_pub[2] RAM = {{{0}, 0}, {{0}, 0}};   /* the knobs each instance used last (fxpub.h) */
 #define mono_st pingpong_state[0]
 #define st_st pingpong_state[1]
 
@@ -121,6 +123,7 @@ void pingpong_mono(void *self, int16_t *buf, const int16_t *p)
     int16_t *ring = pingpong_ram + 2 * RING;
     int32_t dt, gt, tt, mt;
     targets(s, p, &dt, &gt, &tt, &mt);
+    fx_publish(&pingpong_pub[0], p);
     int32_t dg = (gt - s->g) / BLOCK, dtn = (tt - s->tone) / BLOCK, dm = (mt - s->mix) / BLOCK;
     int32_t d = s->d, g = s->g, tn = s->tone, mix = s->mix, lp = s->lp[0];
     uint32_t w = s->w, filled = s->filled;
@@ -155,6 +158,7 @@ void pingpong_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
     int16_t *rl = pingpong_ram, *rr = pingpong_ram + RING;
     int32_t dt, gt, tt, mt;
     targets(s, p, &dt, &gt, &tt, &mt);
+    fx_publish(&pingpong_pub[1], p);
     int32_t dg = (gt - s->g) / BLOCK, dtn = (tt - s->tone) / BLOCK, dm = (mt - s->mix) / BLOCK;
     int32_t d = s->d, g = s->g, tn = s->tone, mix = s->mix, lpl = s->lp[0], lpr = s->lp[1];
     uint32_t w = s->w, filled = s->filled;

@@ -5,6 +5,10 @@ FX contract and slot mechanics: fx-slot.md. Confidence: **Measured** = simulator
 
 ## Knobs
 
+TE's LFO: before test image 81 it modulated the wrong distortion knob, because TE's per-FX LFO flag table overran
+at FX id 10. Since 81 it reaches blue..orange like any FX knob, and the screen follows (notes/fx-slot.md "LFO").
+
+
 | knob | role |
 |---|---|
 | blue | drive, through `drive_taper()` (t = 1 − (1 − k)²(1 − 0.3k): the upper half of the knob is the heavy range, half way is already +27 dB; DIST2). Tube / muff / fuzz / clip: 0.5 × 2^(7t), 0.5 … 64 (−6 … +36 dB): a −6 dBFS sine goes from a quarter of the clip level (clean) to 32× over it. Fold and crush have their own laws (below). Loudness is compensated per character, so blue changes the dirt, not the volume. Blue also darkens the top: a shelf above ~4 kHz, to −9 dB at max (fizz control; half that in crush) |

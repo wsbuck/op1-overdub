@@ -32,6 +32,7 @@
 #include "ensemble.h"
 #include "pingpong.h"
 #include "crush.h"
+#include "fxpub.h"
 #include "inprobe.h"
 #include "drumprobe.h"
 #include "sprobe.h"
@@ -79,6 +80,9 @@ extern const char *distortion_mode_name(const int16_t *p) __attribute__((weak));
 extern struct ens ensemble_state[2] __attribute__((weak));
 extern struct pp pingpong_state[2] __attribute__((weak));
 extern struct crush crush_state[2] __attribute__((weak));   /* crush.c: gain reduction and smoothed knobs */
+/* The knobs each FX used last (fxpub.h): after TE's LFO, which the stored knobs never show */
+extern struct fx_pub ensemble_pub[2] __attribute__((weak)), pingpong_pub[2] __attribute__((weak)),
+    distortion_pub[2] __attribute__((weak)), crush_pub[2] __attribute__((weak));
 extern struct dp_diag drumprobe_diag __attribute__((weak));     /* drumprobe.c, only in builds with the drum probe */
 /* Our drum engines (build_slot.py): ids drum_first .. + drum_count, screen kind per id (DRUM_KINDS) */
 extern const int32_t drum_first, drum_count;
@@ -2087,13 +2091,14 @@ static void crush_readout(char *p, int knob, const struct crush *st, const int32
         put_str(put_dec(put_str(p, "FLIP "), (uint32_t)(((k[3] - 16384) * 200 + 16384) >> 15)), "%");
 }
 
-static void draw_pyramid(void *r, const int16_t *kraw, int stereo, int ctx)
+static void draw_pyramid(void *r, const int16_t *kraw, int running, int stereo, int ctx)
 {
     const struct crush *st = crush_state ? &crush_state[stereo] : 0;
-    /* every input clamped to what crush.c publishes (crush_fuzz_check.py: no state makes degenerate geometry) */
+    /* every input clamped to what crush.c publishes (crush_fuzz_check.py: no state makes degenerate geometry). The
+     * knobs: crush's smoothed ones (after TE's LFO) while it runs, else the stored ones (kraw: FX off, other sound) */
     int32_t k[4];
     for (int i = 0; i < 4; i++)
-        k[i] = st ? clamp_i(st->k[i], 0, 32767) : knob_pos(kraw[i]);
+        k[i] = st && running ? clamp_i(st->k[i], 0, 32767) : knob_pos(kraw[i]);
     int32_t rr = k[0], s = k[2], o = k[3];
     /* bit depth (Q12) and mu-law as the DSP has them (without the DSP state: pristine) */
     int32_t nb = st ? clamp_i(st->bits_q12, 4096, 16 << 12) : 16 << 12;
@@ -2306,12 +2311,38 @@ static int draw_card(void *r)
 #define draw_card(r) 0
 #endif
 
+/* The knobs the FX used (fxpub.h) instead of the stored ones, so the screen moves with TE's LFO: TE modulates only its
+ * per-block copy 0xFF801724 that process gets (notes/fx-slot.md "LFO"). Trusted while the FX runs, i.e. its block
+ * count moved since this screen's frame before (~23 blocks per 30 fps frame); else (FX off, the screen just opened
+ * after a gap, nothing published) the stored knobs. Knobs 4..7 (no LFO reaches them) stay the stored ones. */
+static uint32_t fx_frame RAM = 0;
+static uint32_t fx_seen_n[4][2] RAM = { { 0 } }, fx_seen_f[4][2] RAM = { { 0 } };
+static const int16_t *fx_live(int kind, int stereo, const int16_t *stored, int16_t *buf)
+{
+    struct fx_pub *const pubs[4] = { ensemble_pub, pingpong_pub, distortion_pub, crush_pub };
+    const struct fx_pub *u = kind >= 1 && kind <= 4 ? pubs[kind - 1] : 0;
+    if (!u)
+        return stored;
+    u += stereo;
+    uint32_t n = u->blocks, f = ++fx_frame;
+    int run = n != fx_seen_n[kind - 1][stereo] && fx_seen_f[kind - 1][stereo] == f - 1;
+    fx_seen_n[kind - 1][stereo] = n;
+    fx_seen_f[kind - 1][stereo] = f;
+    if (!run)
+        return stored;
+    for (int i = 0; i < 8; i++)
+        buf[i] = i < 4 ? u->k[i] : stored[i];
+    return buf;
+}
+
 /* FX screen: id = our FX id (8..), mode = edit mode (0 synth, 1 drum, 3 master), slot = sound slot. */
 void fx_ui_draw(int id, int mode, int slot)
 {
     void *r = te_raster();
-    const int16_t *k = FX_KNOBS(mode, slot);
+    const int16_t *stored = FX_KNOBS(mode, slot);
     int kind = id >= 8 && id < 8 + fx_count ? fx_kind[id - 8] : 0;
+    int16_t live[8];
+    const int16_t *k = fx_live(kind, mode == 3, stored, live);  /* drawing; the crush readout fires on stored turns */
     if (kind == FX_ENSEMBLE) {
         if (choir_ready())
             draw_choir(r, k, mode == 3);
@@ -2334,7 +2365,7 @@ void fx_ui_draw(int id, int mode, int slot)
         if (draw_card(r))
             (void)0;
         else if (pyramid_ready())
-            draw_pyramid(r, k, mode == 3, mode << 4 | slot);
+            draw_pyramid(r, stored, k != stored, mode == 3, mode << 4 | slot);
         else
             draw_crush(r, k, mode == 3);
     }

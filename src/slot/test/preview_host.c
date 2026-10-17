@@ -7,6 +7,7 @@
 #include <string.h>
 #include "pingpong.h"
 #include "crush.h"
+#include "fxpub.h"
 #include "drumprobe.h"
 #include "fmdrum.h"
 #include "fmdrum_tables.h"
@@ -149,14 +150,33 @@ const int32_t fx_count = 4;
  * turns a raw knob before that frame (the readout). */
 void crush_mono(void *self, int16_t *buf, const int16_t *p);
 void crush_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
+/* What the FX get as params (fxpub.h): FX_LIVE="k0,k1,k2,k3" stands for TE's LFO-modulated copy (the stored knobs stay
+ * K0..K3, so the crush readout and the stored-knob fallback can be told apart); else the stored knobs. Every frame
+ * (host_tick) the FX publish these as their last block's knobs, ~23 blocks a frame, like running FX (FX_OFF=1: they
+ * don't, as when the FX is switched off). */
+struct fx_pub ensemble_pub[2], pingpong_pub[2], distortion_pub[2];
+extern struct fx_pub crush_pub[2];                                  /* the real crush.c's */
+static const int16_t *fx_params(void)
+{
+    static int16_t p[8];
+    const char *s = getenv("FX_LIVE");
+    for (int i = 0; i < 8; i++)
+        p[i] = host_knobs[i];
+    for (int i = 0; s && i < 4; i++) {
+        p[i] = (int16_t)atoi(s);
+        s = strchr(s, ',');
+        s = s ? s + 1 : 0;
+    }
+    return p;
+}
 static void crush_settle(void)
 {
     int16_t l[64], r[64];
     for (int b = 0; b < 200; b++) {
         memset(l, 0, sizeof l);
         memset(r, 0, sizeof r);
-        crush_mono(0, l, host_knobs);
-        crush_stereo(0, l, r, host_knobs);
+        crush_mono(0, l, fx_params());
+        crush_stereo(0, l, r, fx_params());
     }
     const char *g = getenv("CRUSH_GR"), *lv = getenv("CRUSH_LEVEL");
     crush_state[0].gr = crush_state[1].gr = g ? atoi(g) : 0;
@@ -185,6 +205,13 @@ static void host_tick(int i)
 {
     (void)i;
     for (int s = 0; s < 2; s++) {
+        struct fx_pub *pubs[3] = { &ensemble_pub[s], &pingpong_pub[s], &distortion_pub[s] };
+        for (int j = 0; j < 3 && !getenv("FX_OFF"); j++) {   /* FX_OFF: the FX not running (switched off) */
+            fx_publish(pubs[j], fx_params());
+            pubs[j]->blocks += 22;
+        }
+        if (!getenv("FX_OFF"))
+            crush_pub[s].blocks += 23;                      /* its knobs: what crush.c was given (crush_settle) */
         ensemble_state[s].vib += 0x0DDDDDDDu;               /* 6.5 Hz / 30 fps */
         ensemble_state[s].lfo += 0x01000000u;
         pingpong_state[s].w += 1470;
@@ -192,7 +219,7 @@ static void host_tick(int i)
             struct pp *q = &pingpong_state[s];
             int div, fold;
             q->spb = (int32_t)(2646000.0f / (getenv("PP_BPM") ? (float)atof(getenv("PP_BPM")) : 120.0f) * 16384.0f);
-            q->dt = q->d = pp_target(host_knobs[0] < 0 ? 0 : host_knobs[0], q->spb, &div, &fold);
+            q->dt = q->d = pp_target(fx_params()[0] < 0 ? 0 : fx_params()[0], q->spb, &div, &fold);
             q->div = (int16_t)div;
             q->fold = (int16_t)fold;
         }
@@ -438,6 +465,8 @@ int main(int argc, char **argv)
                 seed = seed * 1103515245u + 12345u;
                 c->flips += pat == 6 ? seed >> 8 : seed >> 28;
             }
+            for (int st = 0; st < 2 && i; st++)
+                crush_pub[st].blocks += 23;                /* crush runs: the screen takes crush_state's knobs */
             for (int j = 0; j < 4; j++) {
                 seed = seed * 1103515245u + 12345u;
                 host_knobs[j] = i % 11 == 3 ? (int16_t)(seed >> 16) : i % 11 == 5 ? -32768 : (int16_t)((seed >> 17) & 0x7FFF);

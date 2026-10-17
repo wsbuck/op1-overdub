@@ -302,6 +302,8 @@ const char *distortion_mode_name(const int16_t *p)
 #ifndef DISTORTION_CURVE_ONLY
 /* ======================================== the DSP (Blackfin) ======================================== */
 
+#include "fxpub.h"
+
 #define RAM __attribute__((section(".data")))
 #define WMAX (60 << 20)                 /* shape input clamp (Q20) */
 #define DC(d) ((d) >> 10)               /* DC blocker low-pass step: 6.9 Hz */
@@ -367,6 +369,7 @@ struct dist {
 #define DIST0 {{[G_CL] = 1 << 29, [G_CB] = 1 << 29, [G_CH] = 1 << 29}, 0, 0, 16384, 0, 0, 0, {CHAN0, CHAN0}}
 static struct dist mono_st RAM = DIST0;
 static struct dist st_st RAM = DIST0;
+struct fx_pub distortion_pub[2] RAM = {{{0}, 0}, {{0}, 0}};   /* the knobs each instance used last (fxpub.h) */
 
 /* Scratch, shared by the mono and the stereo instance (TE calls them one after the other, never nested). */
 static struct {
@@ -1208,6 +1211,7 @@ void distortion_mono(void *self, int16_t *buf, const int16_t *p)
     (void)self;
     int16_t *io[1] = {buf};
     dist(&mono_st, io, 1, p);
+    fx_publish(&distortion_pub[0], p);
 }
 
 void distortion_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
@@ -1215,5 +1219,6 @@ void distortion_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
     (void)self;
     int16_t *io[2] = {l, r};
     dist(&st_st, io, 2, p);
+    fx_publish(&distortion_pub[1], p);
 }
 #endif

@@ -28,6 +28,7 @@
  */
 #include <stdint.h>
 #include "ensemble.h"
+#include "fxpub.h"
 
 #define RAM __attribute__((section(".data")))
 #define BLOCK 64
@@ -68,6 +69,7 @@ struct chan {
 static struct chan mono_ch RAM = {{0}, 0, 0, 0, 0, 0, 0, 0};
 static struct chan st_ch[2] RAM = {{{0}, 0, 0, 0, 0, 0, 0, 0}, {{0}, 0, 0, 0, 0, 0, 0, 0}};
 struct ens ensemble_state[2] RAM = {{0, 0, 0, 0, 0, 0, {{0}}, 0, 0}, {0, 0, 0, 0, 0, 0, {{0}}, 0, 0}};   /* mono, stereo */
+struct fx_pub ensemble_pub[2] RAM = {{{0}, 0}, {{0}, 0}};   /* the knobs each instance used last (fxpub.h) */
 
 static const uint32_t exp2_frac[17] = {   /* (2^(i/16) - 1) in Q16 */
     0, 2902, 5932, 9096, 12400, 15850, 19454, 23216, 27146, 31249, 35534, 40009, 44682, 49562, 54658, 59979, 65536,
@@ -343,6 +345,7 @@ void ensemble_mono(void *self, int16_t *buf, const int16_t *p)
     (void)self;
     int16_t *io[1] = {buf};
     ensemble(&ensemble_state[0], &mono_ch, io, 1, p);
+    fx_publish(&ensemble_pub[0], p);
 }
 
 void ensemble_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
@@ -350,4 +353,5 @@ void ensemble_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
     (void)self;
     int16_t *io[2] = {l, r};
     ensemble(&ensemble_state[1], st_ch, io, 2, p);
+    fx_publish(&ensemble_pub[1], p);
 }

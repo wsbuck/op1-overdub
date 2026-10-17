@@ -195,3 +195,95 @@ The first version was a Juno/Solina string ensemble (LOG test image 32); the use
     0.517 Hz (I), 16384 = 0.894 Hz (II, 3.5 % fast); DUAL at depth 20206 (+-1.85 ms) spans 1.66 .. 5.36 ms.
 - Checks `src/slot/test/ensemble_check.py`; cycles: CE default 14.3 k per stereo call (223 per frame), DUAL ~14 k,
   white max 21.2 k (old ensemble 21 k), mono 8 .. 12.3 k.
+
+## LFO on our FX (2026-10-16; user report: "when LFOs are linked to FX screens, they don't move")
+Tags as above; **Verified** = read at the call site in the disassembly (`firmware/work/elf/OP1_vdk_246_dec.dis`).
+
+### What TE does
+- **Synth FX (play mode 0, the voice-loop branch of `FUN_ffa017ec`)**, after the voices (`CALL FUN_ffa009a0`
+  `0xFFA02798`) and the decimator, in the timed "LFO + FX" stage (`0xFFA0296A`). **Verified**:
+  1. It copies the slot's 8 stored FX knobs `0xFF801444 + slot*16` into the params scratch `0xFF801724`
+     (`0xFFA0297E..94`). This is the same scratch the voices got their engine knobs in.
+  2. If the sound's LFO is on, it calls the LFO object's apply (vtable +0x14, `CALL (P0)` `0xFFA029C8`).
+     - The LFO object is `[0x01AAAC44]` (`[FP-4] = 0x01AAAC0C`, +0x38), and on-ness is byte `0x01AAAC28 + slot`.
+     - Arguments: R1 = lfo_params `0xFF8014C4 + slot*16`, R2 = 2 (synth).
+  3. The element LFO's FX target (`lfo_params[1] >> 11 == 2`, `0x019CA5CC`):
+     - FX id = `[0xFF801734 + slot*4]` (drum: `[0xFF801754 + dslot*4]`);
+     - knob = `lfo_params[0] >> 12`, or `>> 11` when the per-FX flag `B[0x018E143C + id]` is nonzero;
+     - `FUN_01a1de68(&delta, &fx_range[id][knob], 0xFF801724 + 2*knob)`: `knob = clamp(knob + delta * scale)` with
+       the row's min/max. Our rows are {0, 32767, 0x7FFF}: the full range, scale ~1.
+     - It returns 1 when it modulated something.
+  4. On 1, if the DSP->GUI mailbox is empty (byte `0xFF8010D4` = 0), it posts the modulated params
+     (`0xFFA029CE..0xFFA02A3A`, staged in `0xFF8010D8`):
+     - layout at `0xFF8010B8`: params[8] (16 B), slot +0x10, FX id +0x14, mode +0x18 (2 synth, 5 drum), full +0x1C.
+  5. `process(this, 0xFF800BB4, R2 = [FP+0xC] = 0xFF801724)` (`0xFFA02B34`).
+  - **So TE's LFO does modulate a synth FX's audio, through the copy only. The stored knobs never move.**
+- **Drum FX (mode 1)**: the same, **Verified**, `0xFFA0254A..0xFFA02618`:
+  - the copy is from `0xFF8015C4 + dslot*16`;
+  - the drum LFO is called with R1 = `0xFF801644 + dslot*16`, R2 = 5;
+  - the mailbox mode is 5.
+- **Mode 2** (`0xFFA01D60`, an engine at `[0x01AAAD18]` on the stored synth knobs): it copies the FX knobs, then calls
+  process with no LFO call in between. Confirmed. What mode 2 is: Hypothesis.
+- **Master FX**: `process(..., [SP+0xC] = 0xFF8016C4)`, the stored knobs (`0xFFA017E6`, Verified above).
+  - No LFO module (`0x019C9000..0x019D0500`) references `0xFF801090` (the master FX id) or `0xFF8016C4`. Confirmed.
+  - **The LFO cannot target the master FX.** Its screen and its sound both use the stored knobs.
+- **TE's own FX screens** follow the LFO through the mailbox. **Verified**:
+  - FX ReadInterface `FUN_01a28da0` reads the stored knobs (synth `0x01A291A4`, drum `0x01A28F94`).
+  - It then pops the mailbox with `FUN_0196749c(R1 = record)`: copies 28 B, clears the flag, returns 1
+    (`0x01A29212` / `0x01A29002`).
+  - When slot, mode (2 / 5) and FX id match, it replaces the knobs with the modulated ones. Master (mode 3) reads
+    `0xFF8016C4` only.
+  - There is one mailbox and TE consumes it, so we don't pop it (ui.c's earlier attempt: LOG.md 2026-10-08).
+
+### Why our screens stood still (Confirmed)
+- `fx_ui_draw` drew every FX from `FX_KNOBS(mode, slot)`, the stored `0xFF801444 / 0xFF8015C4 / 0xFF8016C4`, which
+  the LFO never writes.
+  - Exception: the crush pyramid drew from `crush_state.k`, crush's smoothed copy of the params it got, so it already
+    followed the LFO. But it also drew those stale values while crush wasn't running.
+- **Distortion (FX id 10) was also modulated on the wrong knob.**
+  - Each of the five LFO modules with an FX target reads an 8-byte per-FX flag table as `B[table + id]`:
+    `0x018E143C` (`0x019CA612`), `0x018E152C` (`0x019CB5AE`), `0x018E1720` (`0x019CD276`),
+    `0x018E183C` (`0x019CDF92`), `0x018E1A0C` (`0x019D0112`).
+  - Each table is followed by another (referenced at table + 10: `0x018E1446`, ...).
+  - Ids 8, 9 and 11 read 0, but **id 10 read 5**. So for distortion the LFO's knob was `lfo_params[0] >> 11`
+    (0..7, about twice the intended index) instead of `>> 12`: it moved another knob, or unused knobs 4..7.
+  - The sixth module (range read `0x019CF0E4`) modulates all 8 knobs and has no such table.
+  - The other three FX got the right knob. Their sound followed the LFO; only the screen didn't.
+
+### Fix (2026-10-16)
+- `src/slot/fxpub.h`: every FX publishes `struct fx_pub <source>_pub[2]` ([0] mono, [1] master).
+  - Contents: `k[4]`, the params[0..3] its process call got for the latest block (after the LFO), and `blocks`, a
+    count of calls.
+  - ensemble, pingpong, distortion and crush call `fx_publish(&pub, p)` once per process call.
+- ui.c `fx_live`: the screens draw from the published knobs while the FX runs, i.e. while its block count moves.
+  - "Moves" means changed since this screen's previous frame, which is about 23 blocks per 30 fps frame.
+  - Otherwise they draw the stored knobs: FX off, nothing published, or the first frame after reopening the screen.
+  - Knobs 4..7 stay the stored ones.
+  - Per FX:
+    - ensemble (choir / lines): rate, depth, character and mix from the live knobs;
+    - pingpong (tennis / lines): feedback, tone and mix from the live knobs (the time was already the DSP's
+      `pingpong_state.dt`);
+    - distortion (pedals / curve): everything, including `distortion_curve` and the mode name;
+    - crush: the pyramid draws `crush_state.k` (smoothed) only while crush runs, else the stored knobs; the line
+      fallback draws the live knobs.
+- **Readouts**: crush's 1.5 s value pop-up still fires only on stored-knob turns (>= 512 raw); an LFO on its own never
+  raises it.
+  - An LFO moves the knobs all the time, so a pop-up driven by it would never go away.
+  - While up, the pop-up shows the live value, i.e. what is heard.
+  - pingpong's time readout is always shown and is the DSP's, so it moves with an LFO on blue.
+- build_slot.py `FX_FLAG_TABLES`: copies of the five tables with 0 for every id we add, and the five `.L/.H` pairs
+  repointed. Now the LFO targets knob `>> 12` for all our FX, as for TE's.
+- Modulation range and smoothing are unchanged:
+  - range: full (TE's row clamp, 0..32767);
+  - steps: the LFO writes a new value once per 64-frame block;
+  - smoothing, as for knob turns: ensemble slews depth and centre and glides character and mix; pingpong glides
+    time, feedback, tone and mix; distortion slews drive and character 2048 per block and green 1024; crush uses
+    two one-poles.
+  - The FX checks' ramps (1024 raw per block) and jumps cover the LFO's steps (< 300 raw per block for a 3 Hz
+    full-range triangle).
+- Check: `src/slot/test/fx_lfo_check.py`:
+  - simulator: published = each block's params under a per-block LFO, mono and stereo, and crush's smoothed knobs
+    follow them;
+  - host: screen with stored S + live M = screen with stored M, != stored S, and FX off = stored S;
+  - crush's readout: the LFO alone doesn't raise it.
+- Device: _pending_ (LOG.md test image 81).

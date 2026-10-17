@@ -158,6 +158,17 @@ FX_FILTER_MONO_VT, FX_FILTER_STEREO_VT = 0x01910C94, 0x01910CB4
 # stereo factories and ScreenId fx (ids)
 FX_NAME_BOUNDS = [0x019AAD40, 0x019AAE02, 0x019AAE5A]
 FX_ID_BOUNDS = [0x01A1B6DE, 0x01A1B5F0, 0x01A3BEC8]
+# Per-FX byte flags, one 8-byte table per LFO module, read as B[table + FX id] next to the range-table read: nonzero
+# makes the LFO's target knob lfo_params[0] >> 11 instead of >> 12 (like the engine flags). Each is followed by
+# another table, so ids 8.. read its bytes (id 10 read 5: the LFO moved the wrong knob of the FX). Grown copies with
+# 0 for ours (notes/fx-slot.md "LFO"); the 6th LFO module (range read 0x019CF0E4) has no such table.
+FX_FLAG_TABLES = {
+    0x018E143C: [0x019CA612],
+    0x018E152C: [0x019CB5AE],
+    0x018E1720: [0x019CD276],
+    0x018E183C: [0x019CDF92],
+    0x018E1A0C: [0x019D0112],
+}
 FX_TABLE_REFS = {                          # (table address as loaded, offset) -> first insn of each .L/.H pair
     (FX_NAME_TABLE, 4): [0x019AAD38],      # id->name walks the id column
     (FX_NAME_TABLE, 0): [0x019AAE06, 0x019AAE4A],
@@ -364,6 +375,11 @@ def main():
         g += ["    .global _fx_screens", "_fx_screens:", longs(screen_jt).rstrip("\n")]
         g += [f"    .long 0x{screen_jt[FX_FILTER]:08x}    /* filter's screen */" for _ in range(n_fx)]
         g += ["    .global _fx_ranges", "_fx_ranges:", f"    .space {FX_ID} * 0x30"] + ["    FX_RANGE_ROW"] * n_fx
+        for j, t in enumerate(FX_FLAG_TABLES):
+            if rd(t, FX_ID) != bytes(FX_ID):
+                sys.exit(f"unexpected stock FX flag table 0x{t:08x}")
+            g += [f"    .global _fx_flags{j}", f"_fx_flags{j}:", "    .byte " + ", ".join(["0"] * (FX_ID + n_fx)),
+                  "    .align 4"]
         for i, f in enumerate(fxs):
             g += ["    .align 4", f"_fx_name{FX_ID + i}:", f"    .asciz \"{f['name']}\""]
         for j, (al, _) in enumerate(fx_aliases):
@@ -446,6 +462,8 @@ def main():
                   FX_SCREEN_JT: "_fx_screens", FX_RANGE_TABLE: "_fx_ranges"}
         for (table, off), sites in FX_TABLE_REFS.items():
             halves += [p for s in sites for p in repoint(s, table + off, sym[new_of[table]] + off)]
+        for j, (table, sites) in enumerate(FX_FLAG_TABLES.items()):
+            halves += [p for s in sites for p in repoint(s, table, sym[f"_fx_flags{j}"])]
 
     cmd = [sys.executable, os.path.join(ROOT, "tools", "ldr_patch.py"), a.stock, a.out]
     # Runtime RAM that is not loaded but must not be overlapped by code (ldr_patch.py checks it).
