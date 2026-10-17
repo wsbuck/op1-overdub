@@ -1,12 +1,12 @@
 /* The knob hook and the drum type compare (entry.inc), instantiated as slot_gen.inc / slot.S do, for knobhook_main.c:
- * engine ids 20 (sprobe), 21 (harm), 22 (fm4) hooked, drum types "dprobe" and "fmdrum". */
+ * engine ids 20 (sprobe), 21 (harm), 22 (fm4) hooked, drum types "dprobe", "fmdrum" and "metal". */
     .include "entry.inc"
 
     KNOB_HOOK 20, 21, 22
 
     .text
     .align 4
-    DRUM_TYPE_EQ _dname, _fname
+    DRUM_TYPE_EQ _dname, _fname, _mname
 
     .data
     .align 4
@@ -15,3 +15,6 @@ _dname:
     .align 4
 _fname:
     .asciz "fmdrum"
+    .align 4
+_mname:
+    .asciz "metal"

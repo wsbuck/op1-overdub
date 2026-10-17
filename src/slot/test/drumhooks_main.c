@@ -1,4 +1,5 @@
-/* Simulator driver for drumhooks_check.py: slot.S's DRUM_HOOKS for two drum engines (ids 23, 24; drumhooks/slot_gen.inc)
+/* Simulator driver for drumhooks_check.py: slot.S's DRUM_HOOKS for three drum engines (ids 23 .. 25: dprobe, fmdrum,
+ * metal; drumhooks/slot_gen.inc)
  * against stand-ins for TE: the drum factory (TE's frame, dbox voice constructor and index setter, the assert path),
  * the validator's name lookup, and the dbox screen update. Every call goes through fx_abi.S's sentinel check (R4-R7,
  * P3-P5, FP, SP, loops, L preserved). Prints "ok/FAIL what" lines and "abi <mask>"; exit 1 on a failure. */
@@ -9,13 +10,13 @@
 typedef void (*entry_t)(void);
 int fx_abi_call(entry_t entry, void *self, void *a1, void *a2, void *a3);
 extern void factory_call(void), drum_validate_lookup(void), drum_ui_update(void);
-extern uint32_t drum_vtable23[], drum_vtable24[];
+extern uint32_t drum_vtable23[], drum_vtable24[], drum_vtable25[];
 extern uint32_t dp_type_hits[2];
 
 /* TE stand-ins */
 uint32_t assert_r0;
 static uint32_t voices[12][18];
-static int built, indexed, init_calls[2], init_slot[2];
+static int built, indexed, init_calls[3], init_slot[3];
 void *te_dbox_voice(int32_t i)                    /* FUN_0197189c: dbox voice i, built in place */
 {
     built++;
@@ -31,6 +32,7 @@ void te_dbox_index(uint32_t *v, int32_t i)        /* FUN_01970da8: +0x14 = i */
 }
 void drumA_slot_init(int32_t slot) { init_calls[0]++; init_slot[0] = slot; }
 void drumB_slot_init(int32_t slot) { init_calls[1]++; init_slot[1] = slot; }
+void drumC_slot_init(int32_t slot) { init_calls[2]++; init_slot[2] = slot; }
 static int32_t lookup_ret;
 int32_t te_engine_lookup(const char *name) { (void)name; return lookup_ret; }     /* FUN_019b9810 */
 static int dbox_updates, draws, draw_slot, draw_id;
@@ -63,8 +65,8 @@ static void expect(int ok, const char *what)
 static void factory(int id, int slot, uint32_t **out)
 {
     memset(out, 0, 13 * sizeof *out);
-    built = indexed = init_calls[0] = init_calls[1] = 0;
-    init_slot[0] = init_slot[1] = -1;
+    built = indexed = init_calls[0] = init_calls[1] = init_calls[2] = 0;
+    init_slot[0] = init_slot[1] = init_slot[2] = -1;
     assert_r0 = 0;
     mask |= fx_abi_call(factory_call, (void *)(intptr_t)id, out, (void *)(intptr_t)slot, 0);
 }
@@ -110,25 +112,31 @@ int main(void)
            && init_calls[1] == 0 && !assert_r0, "factory id 23: engine A's slot init (slot 5), 12 dbox voices on vtable 23");
     factory(24, 2, out);
     expect(voices_ok(out, drum_vtable24) && built == 12 && init_calls[1] == 1 && init_slot[1] == 2 && init_calls[0] == 0
-           && !assert_r0, "factory id 24: engine B's slot init (slot 2), 12 dbox voices on vtable 24");
-    int ids[] = { 22, 25, 10, 0, -1, 0x10017 };
+           && init_calls[2] == 0 && !assert_r0, "factory id 24: engine B's slot init (slot 2), 12 dbox voices on vtable 24");
+    factory(25, 7, out);
+    expect(voices_ok(out, drum_vtable25) && built == 12 && init_calls[2] == 1 && init_slot[2] == 7 && init_calls[0] == 0
+           && init_calls[1] == 0 && !assert_r0, "factory id 25: engine C's slot init (slot 7), 12 dbox voices on vtable 25");
+    int ids[] = { 22, 26, 10, 0, -1, 0x10017, 0x10019 };
     for (unsigned i = 0; i < sizeof ids / sizeof ids[0]; i++) {
         factory(ids[i], 1, out);
         char what[80];
         snprintf(what, sizeof what, "factory id %d: TE's assert path (R0.L = 0x5A40), nothing built", ids[i]);
-        expect((assert_r0 & 0xFFFF) == 0x5A40 && built == 0 && init_calls[0] + init_calls[1] == 0 && !out[0], what);
+        expect((assert_r0 & 0xFFFF) == 0x5A40 && built == 0 && init_calls[0] + init_calls[1] + init_calls[2] == 0
+               && !out[0], what);
     }
-    expect(lookup(23) == 9 && lookup(24) == 9, "validator lookup: ids 23, 24 read as dbox (9)");
-    expect(lookup(22) == 22 && lookup(25) == 25 && lookup(9) == 9 && lookup(8) == 8 && lookup(-1) == -1,
+    expect(lookup(23) == 9 && lookup(24) == 9 && lookup(25) == 9, "validator lookup: ids 23, 24, 25 read as dbox (9)");
+    expect(lookup(22) == 22 && lookup(26) == 26 && lookup(9) == 9 && lookup(8) == 8 && lookup(-1) == -1,
            "validator lookup: other ids unchanged");
     ui(3, 24);
     expect(draws == 1 && draw_slot == 3 && draw_id == 24 && !dbox_updates, "screen: slot 3 with id 24 -> drum_ui_draw(3, 24)");
     ui(0, 23);
     expect(draws == 1 && draw_slot == 0 && draw_id == 23 && !dbox_updates, "screen: id 23 -> drum_ui_draw(0, 23)");
+    ui(6, 25);
+    expect(draws == 1 && draw_slot == 6 && draw_id == 25 && !dbox_updates, "screen: id 25 -> drum_ui_draw(6, 25)");
     ui(7, 9);
     expect(dbox_updates == 1 && !draws, "screen: dbox (9) -> TE's update");
-    ui(1, 25);
-    expect(dbox_updates == 1 && !draws, "screen: id 25 -> TE's update");
+    ui(1, 26);
+    expect(dbox_updates == 1 && !draws, "screen: id 26 -> TE's update");
     expect(dp_type_hits[0] == 0 && dp_type_hits[1] == 0, "dp_type_hits defined by DRUM_HOOKS, zero");
     printf("abi %08x\n", mask);
     return fails || mask;

@@ -143,7 +143,9 @@ def main():
 
     selections = [("all", ["--all"]), ("without amp,crush", ["--without", "amp,crush"]),
                   ("only va,grain,hold", ["--only", "va,grain,hold"]), ("without hold,chord", ["--without", "hold,chord"]),
-                  ("without chord,fmdrum,ensemble", ["--without", "chord,fmdrum,ensemble"]), ("none", ["--only", ""])]
+                  ("without chord,fmdrum,ensemble", ["--without", "chord,fmdrum,ensemble"]),
+                  ("without metal", ["--without", "metal"]), ("only metal,hold", ["--only", "metal,hold"]),
+                  ("none", ["--only", ""])]
     selections = [(n, s) for n, s in selections if all(x in feats for arg in s[1:] for x in arg.split(",") if x)]
     with tempfile.TemporaryDirectory() as tmp:
         results = {}

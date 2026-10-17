@@ -16,7 +16,8 @@
  * harm (ui_harm.h): the 24 drawn harmonic bars and the table it builds; fm4 (ui_fm4.h): operators as a gear train.
  * Both draw from the 8 stored knobs (never the LFO-modulated live ones) and the encoder hook's edit state (knobhook.c).
  * drum_ui_draw: our drum engines on the dbox screen they borrow, by kind: the drum probe (a test drum engine: what TE
- * handed the engine) and fmdrum (ui_fmdrum.h: the selected key's FM drum, its envelopes, the 24 keys).
+ * handed the engine), fmdrum (ui_fmdrum.h: the selected key's FM drum, its envelopes, the 24 keys) and metal
+ * (ui_metal.h: the selected key's struck object, its modes and envelopes, the 24 keys).
  */
 #include <stdint.h>
 #include "font.h"
@@ -98,7 +99,7 @@ extern struct dp_diag drumprobe_diag __attribute__((weak));     /* drumprobe.c, 
 /* Our drum engines (build_slot.py): ids drum_first .. + drum_count, screen kind per id (DRUM_KINDS) */
 extern const int32_t drum_first, drum_count;
 extern const uint8_t drum_kind[];
-enum { DRUM_PROBE = 1, DRUM_FM = 2 };                          /* = DRUM_KINDS in build_slot.py */
+enum { DRUM_PROBE = 1, DRUM_FM = 2, DRUM_METAL = 3 };          /* = DRUM_KINDS in build_slot.py */
 extern uint32_t dp_type_hits[2] __attribute__((weak));           /* drumprobe.c: TE's loader / saver took our type */
 extern struct sp_ram sprobe_ram __attribute__((weak));          /* sprobe engine's RAM (engines.json "ram") */
 extern struct kh_diag knobhook_diag __attribute__((weak));      /* knobhook.c, only in builds with a knob hook */
@@ -2475,6 +2476,7 @@ void fx_ui_draw(int id, int mode, int slot)
 #include "ui_harm.h"
 #include "ui_fm4.h"
 #include "ui_fmdrum.h"
+#include "ui_metal.h"
 
 /* From _drum_ui_update (slot.S) once per frame while the dbox screen shows a drum slot holding one of our drum
  * engines (id). */
@@ -2483,6 +2485,8 @@ void drum_ui_draw(int slot, int id)
     int kind = id >= drum_first && id < drum_first + drum_count ? drum_kind[id - drum_first] : 0;
     if (kind == DRUM_FM)
         draw_fmdrum(slot);
+    else if (kind == DRUM_METAL)
+        draw_metal(slot);
     else if (kind == DRUM_PROBE)
         draw_drumprobe(slot, id);
 }

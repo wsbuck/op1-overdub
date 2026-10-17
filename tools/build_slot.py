@@ -66,7 +66,7 @@ FIRST_ID = 15
 UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6, "amp": 7, "harm": 8,
             "fm4": 9}   # must match enum ui_kind in src/slot/ui.c
 HOOK_KINDS = {"sprobe": 1, "harm": 2, "fm4": 3}   # by source; must match knobhook.c's HOOK_* enum
-DRUM_KINDS = {"drumprobe": 1, "fmdrum": 2}         # by source; must match ui.c's DRUM_* enum
+DRUM_KINDS = {"drumprobe": 1, "fmdrum": 2, "metal": 3}   # by source; must match ui.c's DRUM_* enum
 # patch.cpp:616 `synthSynthes_preset_count <= kMaxSynthSynthes_presets` (0xb0 at 0x01a0582a): fixed array
 # of 0x38-byte entries at 0x01DDDB68. Counted without sampler presets (stock 160 + 11 iter + 4 va = 175
 # booted; 183 asserted).
@@ -107,7 +107,8 @@ TE_JSON_STR, TE_JSON_FREE = 0x019BDC4C, 0x019BDD18      # Value(const char *), V
 KNOB_APPLY_CALL, TE_KNOB_APPLY = 0x01A5063E, 0x01A1DFEC
 MAX_DRUM_PATCHES = 58                      # patch.cpp:656/664: factory drum presets + drum_user rows
 STOCK_DRUM_PRESETS = 24
-MAX_FACTORY_DRUM_PRESETS = 29              # stock 24 + 5 kits: leaves the user room for 29 saved drum sounds (stock 34)
+MAX_FACTORY_DRUM_PRESETS = 32              # stock 24 + 8 kits (fmdrum 5, metal 3): leaves the user room for 26 saved drum
+#                                            sounds (stock 34)
 MAX_FOLDER_LABEL = 13                      # the preset browser prints a column label with snprintf(buf, 14, "%s")
 FEATURE_BITS = {"hold": 1, "chord": 2, "chord2": 4}   # slot.S _feature_mask; must match hold_impl.h / chord2_impl.h FEAT_*
 FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4}   # by source; must match ui.c's FX_* enum

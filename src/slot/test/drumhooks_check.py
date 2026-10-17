@@ -4,7 +4,7 @@ every drum slot).
 
   python3 src/slot/test/drumhooks_check.py
 
-Assembles slot.S with a test slot_gen.inc (drumhooks/: two drum engines, ids 23 and 24, as build_slot.py generates
+Assembles slot.S with a test slot_gen.inc (drumhooks/: three drum engines, ids 23 .. 25, as build_slot.py generates
 them) and drumhooks_abi.S (TE's factory frame and assert continuation), links drumhooks_main.c (stand-ins for TE's dbox
 voice constructor, index setter, name lookup and dbox screen update) and runs it under bfin-elf-run. Checks: the
 factory builds 12 dbox voices on the right engine's vtable after that engine's slot init, and sends every other id to

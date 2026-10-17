@@ -5,7 +5,7 @@
 
 ENGINE >= 100 previews our FX screens: 100 + FX id for the master (stereo) screen, 200 + FX id for synth (mono);
 300 the drum probe's screen (drum_ui_draw, sample values); 301 fmdrum's (FD_PARAMS, FD_KEY, FD_PLAY, FD_LIT: see
-preview_host.c; NAME = the PNG's file name).
+preview_host.c; NAME = the PNG's file name); 302 metal's (MT_PARAMS, MT_KEY, MT_PLAY, MT_LIT, MT_TURN).
 
 Builds ui.c natively with stand-ins for TE (te_line records segments), draws them at the device's scale
 (SVG 320 x 160 -> 376 x 188 panel, ×1.175) on black, with the unseen bottom (y > 142) shaded.
@@ -99,7 +99,7 @@ def main():
                     "-DPROF=((volatile uint32_t *)host_prof)", "-DFX_KNOBS(m,s)=((const int16_t *)host_knobs)", "-DTE_MATRIX=((const int32_t *)host_matrix)",
                     "-include", os.path.join(HERE, "preview_decl.h"),
                     os.path.join(SLOT, "ui.c"), os.path.join(HERE, "preview_host.c"),
-                    os.path.join(SLOT, "crush.c"),
+                    os.path.join(SLOT, "crush.c"), os.path.join(SLOT, "metal.c"),
                     "-DDISTORTION_CURVE_ONLY", os.path.join(SLOT, "distortion.c"), "-o", exe,
                     ] + (["-DCRUSH_TEST_CARD"] if os.environ.get("CRUSH_CARD") else []), check=True)
     ids = os.path.join(tmp, "ids.txt")

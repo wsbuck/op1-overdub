@@ -11,6 +11,7 @@
 #include "drumprobe.h"
 #include "fmdrum.h"
 #include "fmdrum_tables.h"
+#include "metal.h"
 #include "sprobe.h"
 #include "amp.h"
 #include "amp_tune.h"
@@ -50,7 +51,7 @@ volatile int32_t te_alt_in[128];
 /* Drum probe (engine 300 in previews): TE's per-key params, edit key, range row 9 and the engine's record. */
 int16_t te_drum_params[8 * DP_KEYS * 8];
 volatile int32_t te_drum_edit = 5;
-int16_t ranges[20 * 32];
+int16_t ranges[32 * 32];
 struct dp_diag drumprobe_diag = { 37, 35, 90000, 12700, 5, 0x7F00, 3, 0x10000, 1, 1,
                                   { 32767, 0, 0, 20000, 9000, 0, 0, 0, 0, 0, 3000, 0 },
                                   { 0, 16384, 12288, 20000, 8192, 0, 0, 0 } };
@@ -59,8 +60,8 @@ uint32_t dp_type_hits[2] = { 2, 5 };
  * per-key values (comma-separated), FD_KEY = the selected key, FD_PLAY = blocks since the selected key's note-on (a voice
  * playing it), FD_LIT = "key:level,..." other sounding keys (level Q15), FD_TURN = "knob:value" a knob turned on the
  * selected key since the frame before (its readout in the title). */
-const int32_t drum_first = 18, drum_count = 2;
-const uint8_t drum_kind[2] = { 1, 2 };
+const int32_t drum_first = 18, drum_count = 3;
+const uint8_t drum_kind[3] = { 1, 2, 3 };
 struct fd_voice fmdrum_voice[FD_VOICES];
 static void fd_setup(void)
 {
@@ -89,6 +90,48 @@ static void fd_setup(void)
         lit = strchr(lit, ':');
         fmdrum_voice[j].aenv = lit ? atoi(lit + 1) << 15 : 0;
         fmdrum_voice[j].age = 5;
+        lit = lit ? strchr(lit, ',') : 0;
+        lit = lit ? lit + 1 : 0;
+    }
+}
+/* metal (engine 302 in previews, drum id 20): MT_PARAMS = the slot's 24 x 8 per-key values, MT_KEY = the selected key,
+ * MT_PLAY = blocks since the selected key's note-on (metal.c itself renders them, its C loops: the voice the screen
+ * reads is the engine's), MT_LIT = "key:level,..." other sounding keys, MT_TURN = "knob:value" a knob turned on the
+ * selected key since the frame before. */
+volatile int32_t te_drum_key[DP_VOICES];
+volatile int16_t te_drum_vel[DP_VOICES];
+const int32_t metal_id = 20;
+void metal_render(void *o, int16_t *out, const int16_t *p);
+void metal_note_on(void *o, const int16_t *key_params);
+void metal_slot_init(int32_t slot);
+static void mt_setup(void)
+{
+    const char *s = getenv("MT_PARAMS");
+    for (int i = 0; s && i < DP_KEYS * 8; i++) {
+        te_drum_params[i] = (int16_t)atoi(s);
+        s = strchr(s, ',');
+        s = s ? s + 1 : 0;
+    }
+    te_drum_edit = getenv("MT_KEY") ? atoi(getenv("MT_KEY")) : 0;
+    int key = te_drum_edit;
+    int16_t *k = te_drum_params + key * 8;
+    metal_slot_init(0);
+    if (getenv("MT_PLAY")) {
+        static uint32_t obj[18];
+        static int16_t out[128];
+        int n = atoi(getenv("MT_PLAY"));
+        te_drum_key[0] = key;
+        te_drum_vel[0] = 0x7F00;
+        metal_note_on(obj, k);
+        for (int b = 0; b < n; b++)
+            metal_render(obj, out, k);
+    }
+    const char *lit = getenv("MT_LIT");
+    for (int j = 1; lit && j < MT_VOICES; j++) {
+        metal_voice[j].key = atoi(lit);
+        lit = strchr(lit, ':');
+        metal_voice[j].aenv = lit ? atoi(lit + 1) << 15 : 0;
+        metal_voice[j].age = 5;
         lit = lit ? strchr(lit, ',') : 0;
         lit = lit ? lit + 1 : 0;
     }
@@ -431,6 +474,17 @@ int main(int argc, char **argv)
             host_drawing = 1;
         }
         drum_ui_draw(0, 19);
+    }
+    else if (e == 302) {
+        mt_setup();
+        if (getenv("MT_TURN")) {
+            const char *t = getenv("MT_TURN");
+            host_drawing = 0;
+            drum_ui_draw(0, 20);
+            te_drum_params[te_drum_edit * 8 + atoi(t)] = (int16_t)atoi(strchr(t, ':') + 1);
+            host_drawing = 1;
+        }
+        drum_ui_draw(0, 20);
     }
     else if (e % 100 == 11 && getenv("CRUSH_FUZZ")) {
         /* crush screen fuzz (crush_fuzz_check.py): frame 0 with the state as the image loads it (before any DSP

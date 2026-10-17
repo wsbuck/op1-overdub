@@ -24,7 +24,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 ENGINES = os.path.join(ROOT, "src", "slot", "engines.json")
-MAX_DRUM_PATCHES, LABEL = 58, 13
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from build_slot import MAX_DRUM_PATCHES, MAX_FACTORY_DRUM_PRESETS  # noqa: E402
+LABEL = 13
 
 
 def columns(rows):
@@ -80,7 +82,8 @@ def main():
     ours = sorted(e["name"] for e in kitted)
     check(order == ["dbox", "drum", *ours, "user"], f"order dbox, drum, {', '.join(ours)}, user: {order}")
     n = len(rows)
-    check(n < MAX_DRUM_PATCHES, f"{n} factory drum sounds: room for {MAX_DRUM_PATCHES - n} saved")
+    check(n <= MAX_FACTORY_DRUM_PRESETS < MAX_DRUM_PATCHES, f"{n} factory drum sounds (at most "
+          f"{MAX_FACTORY_DRUM_PRESETS}, build_slot.py): room for {MAX_DRUM_PATCHES - n} saved")
 
     if a.stock:
         stock = load(a.stock)
