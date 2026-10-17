@@ -65,7 +65,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRST_ID = 15
 UI_KINDS = {"va": 1, "wavetable": 2, "modal": 3, "grain": 4, "inprobe": 5, "sprobe": 6, "amp": 7, "harm": 8,
             "fm4": 9}   # must match enum ui_kind in src/slot/ui.c
-HOOK_KINDS = {"sprobe": 1, "harm": 2, "fm4": 3}   # by source; must match knobhook.c's HOOK_* enum
+HOOK_KINDS = {"sprobe": 1, "harm": 2, "fm4": 3, "va": 4}   # by source; must match knobhook.c's HOOK_* enum
 DRUM_KINDS = {"drumprobe": 1, "fmdrum": 2, "metal": 3}   # by source; must match ui.c's DRUM_* enum
 # patch.cpp:616 `synthSynthes_preset_count <= kMaxSynthSynthes_presets` (0xb0 at 0x01a0582a): fixed array
 # of 0x38-byte entries at 0x01DDDB68. Counted without sampler presets (stock 160 + 11 iter + 4 va = 175

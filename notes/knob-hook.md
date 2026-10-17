@@ -52,6 +52,11 @@ an encoder hook that writes packed values into the knob array, which TE then sto
 - harm: `harm_edit` on the stored knobs, then TE's function with delta 0 (TE then stores the patch).
 - fm4: `fm4_edit`; plain MAIN-page knobs pass to TE with TE's own delta; page changes and operator-page edits are
   ours (delta 0 to TE).
+- va (2026-10-17, HOOK_KINDS va 4): SHIFT + orange (knob 7) steps the sub's shape (va.h: SQUARE, SINE, TRIANGLE,
+  SAW, PULSE 25, SQUARE -2), one per call, clamped; TE gets delta 0. va keeps TE's plain type-0 rows, so every other
+  turn reaches TE untouched: SHIFT + blue / green / white stay fine adjust, TE's LFO reach is unchanged, and saved va
+  sounds hold 0 in knob 7 (type 0 never writes knobs 4..7) = SQUARE, bit for bit (va_check null test). SHIFT + orange
+  is no longer the sub level's fine adjust. Device check: SHIFT + orange reaches the hook as knob 7.
 - TE's delta per detent is still unknown: `hook_steps.h` makes every call with a nonzero delta at least one step, and
   more (powers of two, capped per control) when |delta| is a multiple of the smallest |delta| seen since boot. The
   harm and fm4 screens show `D<last raw delta> M<smallest>` (grey) once the hook has run, for the user to report.

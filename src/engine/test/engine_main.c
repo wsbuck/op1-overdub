@@ -1,6 +1,6 @@
 /* Simulator driver for any engine: calls _render (trampoline) like TE's voice loop.
  *   engine_main p0 p1 p2 p3 inc calls [inc_end|0] [sampler[:gain knob] | k4:p4,p5,p6,p7 | turn:k,step,every,first |
- *               lfo:k,period]
+ *               lfo:k,period] ...   (k4:, turn: and lfo: may be given together)
  * turn: knob k moves by step (raw, clamped to 0..32767) before call first and every `every` calls after it, as the
  * encoder's detents do (once per block). lfo: knob k follows a triangle 0 -> 32767 -> 0 of `period` calls, set once
  * per call as TE's LFO modulates the voice's knob copy.
@@ -104,13 +104,15 @@ int main(int argc, char **argv)
         if (argv[8][7] == ':')
             te_knobs[1][7] = (int16_t)atoi(argv[8] + 8);
     }
-    if (argc > 8 && !strncmp(argv[8], "k4:", 3))              /* SHIFT knobs 4..7 */
-        sscanf(argv[8] + 3, "%hd,%hd,%hd,%hd", &params[4], &params[5], &params[6], &params[7]);
     int turn_k = -1, turn_step = 0, turn_every = 1, turn_first = 0, lfo_k = -1, lfo_period = 1;
-    if (argc > 8 && !strncmp(argv[8], "turn:", 5))
-        sscanf(argv[8] + 5, "%d,%d,%d,%d", &turn_k, &turn_step, &turn_every, &turn_first);
-    if (argc > 8 && !strncmp(argv[8], "lfo:", 4))
-        sscanf(argv[8] + 4, "%d,%d", &lfo_k, &lfo_period);
+    for (int a = 8; a < argc; a++) {        /* k4: / turn: / lfo: may be combined (va_check: a shape, then a turn) */
+        if (!strncmp(argv[a], "k4:", 3))    /* SHIFT knobs 4..7 */
+            sscanf(argv[a] + 3, "%hd,%hd,%hd,%hd", &params[4], &params[5], &params[6], &params[7]);
+        if (!strncmp(argv[a], "turn:", 5))
+            sscanf(argv[a] + 5, "%d,%d,%d,%d", &turn_k, &turn_step, &turn_every, &turn_first);
+        if (!strncmp(argv[a], "lfo:", 4))
+            sscanf(argv[a] + 4, "%d,%d", &lfo_k, &lfo_period);
+    }
     int calls = atoi(argv[6]);
     uint32_t cmax = 0;
     double csum = 0;

@@ -8,13 +8,14 @@
 #include "sprobe.h"
 #include "harm_edit.h"
 #include "fm4_edit.h"
+#include "va.h"
 
 typedef void (*entry_t)(void);
 int fx_abi_call(entry_t entry, void *self, void *a1, void *a2, void *a3);
 extern void knob_hook(void), drum_type_eq_load(void), drum_type_eq_save(void);
 
-/* build_slot.py's table: ids 20 sprobe, 21 harm, 22 fm4 (HOOK_KINDS), 23 not hooked */
-const uint8_t hook_kind[47] = { [5] = 1, [6] = 2, [7] = 3 };
+/* build_slot.py's table: ids 20 sprobe, 21 harm, 22 fm4, 24 va (HOOK_KINDS), 23 not hooked */
+const uint8_t hook_kind[47] = { [5] = 1, [6] = 2, [7] = 3, [9] = 4 };
 extern struct harm_ui harm_ui;
 extern struct fm4_ui fm4_ui;
 
@@ -30,7 +31,12 @@ void te_knob_apply(int32_t knob, int16_t *delta, int32_t id, int16_t *knobs)    
     last_delta = *delta;
     last_id = id;
     last_knobs = knobs;
-    int32_t v = knobs[knob] + *delta;
+    int32_t dv = *delta;
+    if (id == 24 && knob >= 4 && knob < 8) {     /* va's rows are type 0: knobs 4..7 = fine adjust of 0..3 */
+        knob -= 4;
+        dv >>= 4;
+    }
+    int32_t v = knobs[knob] + dv;
     int32_t lo = id == 21 || (id == 22 && knob >= 4) ? -32768 : 0;      /* harm's and fm4's rows (engines.json) */
     knobs[knob] = (int16_t)(v < lo ? lo : v > 32767 ? 32767 : v);
 }
@@ -174,6 +180,38 @@ int main(void)
     expect(fm4_ui.page == 0, "fm4 back to MAIN");
     turn(1, 300, 22, 5);
     expect(last_delta == 300 && f[1] == 13405 + 300, "fm4 MAIN green passes (TE's own delta)");
+
+    /* va (id 24), slot 1: plain knobs and SHIFT + blue / green / white are TE's (type 0, fine adjust) as before;
+     * SHIFT + orange (knob 7) steps the sub's shape one per call, clamped 0..5, TE gets delta 0 */
+    int16_t *v = te_knobs + 1 * 8;
+    int16_t vk[8] = { 10923, 6000, 0, 12000, 0, 0, 0, 0 };     /* the factory "saw lead" */
+    for (int i = 0; i < 8; i++)
+        v[i] = vk[i];
+    knobhook_diag.dmin = 0;
+    turn(3, 1024, 24, 1);
+    expect(last_knob == 3 && last_delta == 1024 && last_id == 24 && v[3] == 12000 + 1024 && v[7] == 0,
+           "va orange: TE's own call and delta, the shape untouched");
+    turn(4, 1024, 24, 1);
+    expect(last_knob == 4 && last_delta == 1024 && v[0] == 10923 + 64 && v[4] == 0 && v[7] == 0,
+           "va SHIFT + blue: TE's fine adjust of blue, as before");
+    turn(6, -1024, 24, 1);
+    expect(last_knob == 6 && last_delta == -1024 && v[2] == 0 && v[6] == 0, "va SHIFT + white: TE's, clamped by TE");
+    turn(7, 1024, 24, 1);
+    expect(last_knob == 7 && last_delta == 0 && v[7] == SUB_SINE && v[3] == 13024,
+           "va SHIFT + orange: SQUARE -> SINE, TE delta 0, the level untouched");
+    turn(7, 4096, 24, 1);
+    expect(v[7] == SUB_TRI, "va shape: a fast turn moves one shape");
+    for (int i = 0; i < 8; i++)
+        turn(7, 1024, 24, 1);
+    expect(v[7] == VA_SUB_SHAPES - 1, "va shape: clamps at the last (-2 OCT)");
+    for (int i = 0; i < 9; i++)
+        turn(7, -2048, 24, 1);
+    expect(v[7] == SUB_SQUARE && v[3] == 13024 && v[0] == 10923 + 64, "va shape: clamps at SQUARE (0)");
+    v[7] = 32767;                          /* out of range (plays SQUARE): steps from SQUARE */
+    turn(7, 1024, 24, 1);
+    expect(v[7] == SUB_SINE, "va shape: an out-of-range value steps from SQUARE");
+    turn(9, 512, 24, 1);
+    expect(last_knob == 9 && last_delta == 512, "va: an unknown knob index goes to TE untouched");
 
     /* not hooked (id 23) */
     turn(2, 77, 23, 6);

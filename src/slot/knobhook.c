@@ -1,5 +1,6 @@
 /* Encoder hook for synth engines that store their own data in the 8 knob values (notes/knob-hook.md). Users: the
- * knob probe sprobe (a test engine; src/engine/sprobe.c, packing in sprobe.h), harm (harm_edit.h) and fm4 (fm4_edit.h).
+ * knob probe sprobe (a test engine; src/engine/sprobe.c, packing in sprobe.h), harm (harm_edit.h), fm4 (fm4_edit.h)
+ * and va (SHIFT + orange = the sub's shape in knob 7, va.h).
  *
  * TE's synth engine-page encoder handler (mode 0, 0x01A50610) does
  *   CALL FUN_01a1dfec(knob R0, int16 *delta R1, engine id R2, [SP + 12] knobs = 0xFF8013C4 + slot * 16)   0x01A5063E
@@ -12,6 +13,9 @@
  *   harm:   harm_edit() changes the stored knobs; TE gets delta 0 (nothing more to apply), then stores them.
  *   fm4:    fm4_edit(): MAIN-page plain knobs (and v0 SHIFT knobs) pass to TE with TE's delta; page changes and
  *           operator-page edits are ours, TE gets delta 0.
+ *   va:     knob 7 (SHIFT + orange) steps the sub's shape one per call, clamped to 0..VA_SUB_SHAPES-1, then TE gets
+ *           delta 0 (va's rows are type 0: TE's fine-adjust remap to knob 3 with delta 0 changes nothing). Every other
+ *           knob goes to TE untouched: the plain knobs and SHIFT + blue / green / white (TE's fine adjust) as before.
  * In every case TE's FUN_01a00d14 then stores all 8 knobs as it always does.
  * TE's delta per detent is not known yet: hook_steps.h turns it into edit steps (one per call for cursor-like
  * controls), and knobhook_diag records the last raw delta for the screens' corner readout.
@@ -23,10 +27,11 @@
 #include "harm_edit.h"
 #include "fm4_edit.h"
 #include "hook_steps.h"
+#include "va.h"
 
 #define RAM __attribute__((section(".data")))
 
-enum { HOOK_SPROBE = 1, HOOK_HARM = 2, HOOK_FM4 = 3 };    /* = HOOK_KINDS in build_slot.py */
+enum { HOOK_SPROBE = 1, HOOK_HARM = 2, HOOK_FM4 = 3, HOOK_VA = 4 };    /* = HOOK_KINDS in build_slot.py */
 
 extern void te_knob_apply(int32_t knob, int16_t *delta, int32_t id, int16_t *knobs);   /* FUN_01a1dfec */
 extern int16_t te_knobs[];                 /* 0xFF8013C4: synth knobs, int16[8] per slot */
@@ -83,6 +88,11 @@ void knobhook_turn(int32_t knob, int16_t *delta, int32_t id, int16_t *knobs)
         int32_t st = hook_steps(&d->dmin, *delta, cap);
         if (fm4_edit(&fm4_ui, knob, st, knobs) == FM4_DONE)
             *delta = 0;                     /* else TE applies its own delta to a plain knob, as for any engine */
+        te_knob_apply(knob, delta, id, knobs);
+    } else if (kind == HOOK_VA && knob == VA_SUB_KNOB) {
+        int32_t v = va_sub_shape(knobs[VA_SUB_KNOB]) + hook_steps(&d->dmin, *delta, 1);
+        knobs[VA_SUB_KNOB] = (int16_t)(v < 0 ? 0 : v >= VA_SUB_SHAPES ? VA_SUB_SHAPES - 1 : v);
+        *delta = 0;
         te_knob_apply(knob, delta, id, knobs);
     } else if (kind == HOOK_SPROBE) {
         if (*delta)

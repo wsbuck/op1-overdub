@@ -462,6 +462,17 @@ int main(int argc, char **argv)
         if (e == 23 && getenv("PAGE"))
             fm4_ui.page = atoi(getenv("PAGE"));
     }
+    if (e == 15 && getenv("VA_SUB")) {      /* va: the sub's shape (knob 7); VA_TURN=1: a frame before it was turned */
+        host_knobs[7] = (int16_t)atoi(getenv("VA_SUB"));
+        if (getenv("VA_TURN")) {
+            int16_t k7 = host_knobs[7];
+            host_knobs[7] = 0;
+            host_drawing = 0;
+            ui_draw(e, 0);
+            host_knobs[7] = k7;
+            host_drawing = 1;
+        }
+    }
     if (e == 300)
         drum_ui_draw(0, 18);
     else if (e == 301) {

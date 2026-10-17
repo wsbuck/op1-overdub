@@ -23,8 +23,9 @@ def inc(f):
     return round(f / FS * 2**32)
 
 
-def run_cases(source, cases, workdir):
-    gen = os.path.join(ENGINE, f"gen_{source}_data.py")
+def run_cases(source, cases, workdir, engine_dir=ENGINE):
+    """engine_dir: another copy of src/engine to build from (va_check.py's reference build of an older va.c)."""
+    gen = os.path.join(engine_dir, f"gen_{source}_data.py")
     data = ""
     if os.path.exists(gen):
         subprocess.run([sys.executable, gen, os.path.join(workdir, "engine_data.bin")], check=True)
@@ -32,7 +33,7 @@ def run_cases(source, cases, workdir):
             '.section .rodata\n.align 4\n.global _engine_data\n_engine_data:\n.incbin "/w/engine_data.bin"\n')
         data = "bfin-elf-as -o data.o /w/data.S\n"
     asm = ""
-    if os.path.exists(os.path.join(ENGINE, f"{source}_asm.S")):
+    if os.path.exists(os.path.join(engine_dir, f"{source}_asm.S")):
         asm = f"bfin-elf-as -o asm.o /src/{source}_asm.S\n"
     cmds = []
     for name, (k0, k1, k2, k3, f0, calls, f1, *extra) in cases.items():
@@ -47,7 +48,7 @@ def run_cases(source, cases, workdir):
         (" asm.o" if asm else "") + (" data.o" if data else "") + "\n" \
         "xargs -P 8 -I CMD sh -c CMD < /w/cmds\n"
     open(os.path.join(workdir, "run.sh"), "w").write(script)
-    subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", "-v", f"{ENGINE}:/src:ro",
+    subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", "-v", f"{engine_dir}:/src:ro",
                     "-v", f"{workdir}:/w", "op1-bfin", "sh", "/w/run.sh"], check=True)
 
 

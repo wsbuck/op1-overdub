@@ -37,6 +37,7 @@
 #include "inprobe.h"
 #include "drumprobe.h"
 #include "sprobe.h"
+#include "va.h"
 #include "amp.h"
 #include "amp_tune.h"
 
@@ -615,9 +616,72 @@ static void va_shape(void *r, int32_t wave, uint32_t phase, fp32 x0, fp32 w, fp3
     }
 }
 
-static uint32_t va_frame RAM = 0;     /* screen frames, for the noise */
+static uint32_t va_frame RAM = 0;     /* screen frames, for the noise and the shape readout */
 
-static void draw_va(void *r, const int16_t *k)
+/* The sub's shapes (va.h SUB_*, va.c sub_wave), drawn peak-normalised: one period's corners (turn Q16, value Q12),
+ * straight lines between; SINE as 16 chords. PULSE is high a quarter turn from 5/8 (va.c: centred on the square's
+ * fundamental). */
+static const char *const va_sub_name[VA_SUB_SHAPES] = {
+    "SQUARE", "SINE", "TRIANGLE", "SAW", "PULSE 25", "SQUARE -2",
+};
+#define VA_SHOW 45                           /* frames the shape readout stays (~1.5 s, as harm's) */
+static uint32_t va_shown RAM = 0x80000000u;  /* frame of the last shape change, far in the past at boot */
+static int32_t va_last_slot RAM = -1;
+static int16_t va_last_k7 RAM = 0;
+
+static int32_t va_sub_at(int sh, uint32_t t)  /* t: turn Q16 within the period */
+{
+    t &= 0xFFFF;
+    if (sh == SUB_SINE)
+        return sin_t((t << 16) ^ 0x80000000u) >> 3;
+    if (sh == SUB_TRI) {
+        int32_t x = (int32_t)((t << 16) + 0xC0000000u);
+        return ((x ^ (x >> 31)) >> 18) - 4096;
+    }
+    if (sh == SUB_SAW)
+        return (int32_t)(t >> 3) - 4096;
+    if (sh == SUB_PULSE)
+        return t >= 0xA000 && t < 0xE000 ? 4096 : -4096;
+    return t < 0x8000 ? -4096 : 4096;
+}
+
+/* Two periods (SQUARE -2: one) across rx..rx+rw from the note-on phase (-1 octave 1/4 turn, -2 octaves 1/8), amplitude
+ * sa: the start and end values, every corner between (a jump = two corners at one t). */
+static void va_sub_draw(void *r, int sh, fp32 rx, fp32 rw, fp32 cy, fp32 sa)
+{
+    static const uint16_t sq[] = { 0, 0x8000, 0x8000, 0xFFFF }, tri[] = { 0x4000, 0xC000 }, saw[] = { 0, 0xFFFF },
+        pul[] = { 0xA000, 0xA000, 0xE000, 0xE000 };
+    static const int16_t sqv[] = { -4096, -4096, 4096, 4096 }, triv[] = { -4096, 4096 }, sawv[] = { -4096, 4096 },
+        pulv[] = { -4096, 4096, 4096, -4096 };
+    const uint16_t *ct = sq;
+    const int16_t *cv = sqv;
+    int n = 4, oct2 = sh == SUB_OCT2;
+    if (sh == SUB_TRI)
+        ct = tri, cv = triv, n = 2;
+    else if (sh == SUB_SAW)
+        ct = saw, cv = sawv, n = 2;
+    else if (sh == SUB_PULSE)
+        ct = pul, cv = pulv, n = 4;
+    uint32_t t0 = oct2 ? 0x2000 : 0x4000, t1 = t0 + (oct2 ? 0x10000 : 0x20000);
+    int span_sh = oct2 ? 12 : 13;           /* x = rx + (t - t0) * rw / span, span = 2^16 or 2^17 */
+    fp32 px = rx, py = cy - ((sa * va_sub_at(sh, t0)) >> 12);
+    for (uint32_t base = 0; base < t1; base += 0x10000) {
+        int m = sh == SUB_SINE ? 16 : n;
+        for (int i = 0; i < m; i++) {
+            uint32_t t = base + (sh == SUB_SINE ? (uint32_t)i << 12 : ct[i]);
+            int32_t v = sh == SUB_SINE ? va_sub_at(sh, t) : cv[i];
+            if (t <= t0 || t >= t1)
+                continue;
+            fp32 qx = rx + (fp32)(((t - t0) * (uint32_t)(rw >> 4)) >> span_sh), qy = cy - ((sa * v) >> 12);
+            line_fp(r, px, py, qx, qy, FP(2), ORANGE);
+            px = qx;
+            py = qy;
+        }
+    }
+    line_fp(r, px, py, rx + rw, cy - ((sa * va_sub_at(sh, t1)) >> 12), FP(2), ORANGE);
+}
+
+static void draw_va(void *r, const int16_t *k, const int16_t *stored, int slot)
 {
     int32_t wave = k[0] < 0 ? 0 : k[0], det = k[1] < 0 ? 0 : k[1];
     int32_t noise = k[2] < 0 ? 0 : k[2], sub = k[3] < 0 ? 0 : k[3];
@@ -632,19 +696,29 @@ static void draw_va(void *r, const int16_t *k)
         va_shape(r, wave, (uint32_t)(2621 + ((det * 13107) >> 15)) << 17, ox, ow, ocy, oamp, 0, GREEN);
     va_shape(r, wave, 0, ox, ow, ocy, oamp, FP(2), BLUE);
 
-    /* right panel: the sub's square (orange) over four of the oscillator's periods (faint), so it reads as an octave
-     * down; noise below. Height = level (as va.c: sub linear, noise squared). */
+    /* right panel: the sub's shape (orange) over four of the oscillator's periods (faint), so it reads as an octave
+     * (SQUARE -2: two octaves) down, its name under it; noise below. Height = level (as va.c: sub linear, noise
+     * squared). SHIFT + orange (knob 7, stored) picks the shape: its name pops up top left for VA_SHOW frames. */
     const fp32 rx = FP(166), rw = FP(146), scy = FP(70), ncy = FP(112);
     line_fast(r, rx, FP(48), rx, FP(132), DARKBLUE);
     va_shape(r, wave, 0, rx, rw / 2, scy, FP(8), 0, DARKBLUE);
     va_shape(r, wave, 0, rx + rw / 2, rw / 2, scy, FP(8), 0, DARKBLUE);
-    fp32 sa = ((FP(14) >> 5) * sub) >> 10, sy = scy + sa;         /* starts low, as va.c's sub at note-on */
-    for (int i = 1; i <= 4; i++) {
-        fp32 xa = rx + rw * (i - 1) / 4, xb = rx + rw * i / 4, ny = i & 1 ? scy - sa : scy + sa;
-        line_fp(r, xa, sy, xb, sy, FP(2), ORANGE);
-        if (i < 4)
-            line_fp(r, xb, sy, xb, ny, FP(2), ORANGE);
-        sy = ny;
+    int sh = va_sub_shape(stored[VA_SUB_KNOB]);
+    fp32 sa = ((FP(14) >> 5) * sub) >> 10;
+    va_sub_draw(r, sh, rx, rw, scy, sa);
+    text_fast(r, va_sub_name[sh], rx + FP(4), FP(88), FP(1), GREY);
+    if (slot == va_last_slot && stored[VA_SUB_KNOB] != va_last_k7)
+        va_shown = va_frame;                /* turned (or a sound with another shape loaded in this slot) */
+    va_last_slot = slot;
+    va_last_k7 = stored[VA_SUB_KNOB];
+    if (va_frame - va_shown < VA_SHOW) {
+        char buf[16], *p = buf;
+        for (const char *q = "SUB "; *q; )
+            *p++ = *q++;
+        for (const char *q = va_sub_name[sh]; *q; )
+            *p++ = *q++;
+        *p = 0;
+        text(r, buf, FP(8), FP(8), FP(3) >> 1, ORANGE);
     }
 
     va_frame++;
@@ -2518,7 +2592,7 @@ void ui_draw(int engine, int slot)
     else if (kind == KIND_GRAIN)
         draw_grain(r, k);
     else if (kind == KIND_VA)
-        draw_va(r, k);
+        draw_va(r, k, KNOBS(slot), slot);
     else if (kind == KIND_INPROBE)
         draw_inprobe(r, k);
     else if (kind == KIND_SPROBE)
