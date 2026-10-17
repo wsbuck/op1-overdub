@@ -1606,3 +1606,80 @@
     the mode restored after a power cycle (SAVE 30 OK, MK:-1); chip clear of TE's screens; voice budget (a second
     held chord replaces the first, accepted); HOLD with a melody over the pad; no hung notes at the octave extremes.
   - User: "extremely useful and exciting".
+
+## 2026-10-17 — Test image 86: NIGHT3.OP1 (CHORD v2 phase 2 + metal + the va sub shape) + NIGHT3SAFE.OP1
+- What it is (notes/chord2.md §13 "Phase 2 as built"):
+  - **STRUM** (SHIFT+green, 5..300 ms for the whole spread, low>high `{` or high>low `}`), every note of a strumming map
+    sent from TE's sequencer thread through a new hook: the CALL to the sequencer step at `0x01A431AA` (checked
+    against stock at build). The KeyHandler only keeps the wanted state; a fail-safe takes the notes back if the tick
+    stops.
+  - **SMOOTH** (SHIFT+white): voice-leading with a 2-bar reset at TE's tempo, HOLD off, and an anchor (white turned
+    with SMOOTH on pins that TOP, padlock).
+  - **WRITE** on SHIFT+DROP: FACTORY (SHIFT+DROP, DROP = NIGHT2's restore), 7THS / TRIADS in 12 keys x 9 scales, a
+    transposed COPY, EMPTY, OLD MAP n. OVERWRITE? confirm, undo.
+  - **Bipolar VOICING** (orange): drops left keep the top, ups right keep the bass. Learned chords are transformed as
+    played.
+  - **Intervals** (CM10 / C MAJOR 10TH, Cm10, P12, TT) and the WIDE group left of NOTE in the TYPE scan.
+  - **The played-notes view** on the page.
+  - File version 2: NIGHT2's file is migrated on load.
+  - Also: metal (drum engine, LOG of its agent) and the va sub shape (commit 9f05092).
+- `firmware/images/NIGHT3.OP1`:
+  - Command: `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum,metal --db-trim
+    va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1 --db-trim
+    harmonic=6 --db-trim fm4=6 --svg-cost --name NIGHT3`. That is NIGHT2's command plus `metal` (committed in
+    engines.json at HEAD).
+  - Built from commit f4834da in a clean `git archive`. te-boot identical to stock (f6233b974bdb6c92).
+  - sha256 7856859b38042e1d2b32adba1fec0e175ad839c9f27df2325db26906d118f466.
+- `firmware/images/NIGHT3SAFE.OP1`: that build's bundle, `apply.py op1_246.op1 NIGHT3SAFE.OP1 --without chord2` (CHORD1;
+  everything else as NIGHT3), te-boot identical to stock.
+  sha256 3fa0b2da6d436c26453a8ea8ba56b5f3bdc375e8bf55843753ca3fa8b7fe9850.
+- **Before flashing:** keep **26 or fewer saved drum sounds** (32 factory drum presets with metal's kits). The chord
+  file is migrated to version 2 at the first save. After that, NIGHT2 would no longer read it (it shows factory maps);
+  NIGHT3SAFE never reads it.
+- Retest. The riskiest item comes first. With SHIFT held on the page, line 4 is `SEQ TK:<ticks/s> GAP:<ms> LIVE|DEAD
+  OWN:<0|1|2> SENT: FRC: TO: SR:`.
+  1. **Boot, then STRUM on the sequencer thread.**
+     - Boot normally. Open the page on MAP 3 (NEO SOUL) and hold SHIFT. Report line 4: expected `TK:` ~690
+       (or ~345), `GAP:` 1.4 (or 2.9), `LIVE`, `OWN:0`.
+       - `TK:0` / `DEAD`: the hook doesn't run. STRUM then just plays at once (header strum grey, "NO SEQ TICK"). Report
+         and skip to step 3.
+     - SHIFT+green right 6 detents ("STRUM { LOW>HIGH 30 MS"). Play a chord: a quick rising roll. `OWN:1`, `SENT:`
+       counts.
+     - Then go left: it stops at OFF. Rest, then go on to `}200`. Legato changes with a slow roll: the pad should not
+       thin out mid-roll.
+     - Stress for stuck or hung notes, then report any:
+       - fast chords;
+       - HOLD on + a melody on top;
+       - octave keys while strumming;
+       - a sequencer/arp running (the arp's own notes go through the same thread);
+       - switch to drum and back mid-chord.
+     - Turn STRUM OFF: the next notes play at once (`OWN:0`).
+     - If anything hangs, flash NIGHT3SAFE and report line 4.
+  2. **Timing feel.** Is 30 ms tight and even? Do 200-300 ms rolls feel right? Report `GAP:` while the arp plays.
+  3. **File migration.** After boot, line 2 shows `FILE A V1` or `FILE B V1` (NIGHT2's file migrated). Your NIGHT2
+     maps and voicings must sound the same: VOICING drops are now LEFT of CLOSE. After an edit + 3 s, `V2` after a
+     power cycle.
+  4. **WRITE.** On MAP 3: SHIFT+DROP, DROP restores factory (as NIGHT2). On MAP 5:
+     - SHIFT+DROP, blue to 7THS, green to D, white to DORIAN, DROP: "WRITTEN TO MAP 5".
+     - Repeat onto a used map: OVERWRITE? then DROP.
+     - SHIFT+LIFT undoes.
+     - COPY MAP 2 +2 to MAP 6.
+     - FROM OLD MAP n brings back what a WRITE replaced.
+     - Leave WRITE open 10 s: it closes.
+  5. **SMOOTH.** MAP 2: SHIFT+white on (`SM`). G-7 C7 F^7 move little.
+     - Pause 2 bars: `SM` goes grey and it starts over (`SR:` +1).
+     - Turn white on a chord: "ANCHORED", padlock; that TOP stays.
+     - SHIFT+white right again: "SMOOTH STARTS OVER".
+  6. **Learned 10ths and VOICING.** Tap a key, hold SHIFT, play C3 + E4, let go: "C MAJOR 10TH" (C / M10 on the key).
+     - Orange left: E down an octave (CM3). Right: E up an octave (CM17). White moves the whole 10th by octaves.
+     - On a 4-note chord, orange left: DROP 2 / DROP 3 / DROP 2+4 / SPREAD. Right: UP 2 / UP 3 / UP 2+4 / SPREAD UP.
+       The strip shows the position.
+     - Green left of NOTE (two detents past the wall): P8, M10, m10, m7, M7, P12, M9, M13, TT.
+  7. **Played-notes view.** Play chords and notes on the page: the sounding notes are lit (top white, root blue), and
+     the other keys keep their chord labels. ~0.5 s after release the map view returns. Notes beyond the keys get an
+     edge arrow.
+  8. **va sub shape** (9f05092). On a va sound, SHIFT+orange steps the sub through SQUARE / SINE / TRIANGLE / SAW /
+     PULSE 25 / SQUARE -2, with a "SUB ..." readout. SHIFT+blue/green/white still fine-adjust.
+  9. **metal.** The metal agent's own checklist, plus all three kits load.
+  10. Quick repeat of NIGHT2's passing steps: learn, pin, chip, voices, HOLD, octave extremes.
+- Result: _pending user flash_.
