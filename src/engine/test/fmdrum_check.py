@@ -124,9 +124,10 @@ def cases():
     c["retrig"] = (0, 127, 80, P(hz=60, decay=1.0, sweep=12, snap=0.02, fm=1.0, mod=0.03) + ["retrig", 30])
     # a kit loaded while a loud note sounds (the factory's slot init silences the voices), then the key again: the
     # new note starts from silence (its attack), not from the old note's filter and DC-blocker state
-    for z, nz in (("fb", 0), ("metal", G.NZ("METAL", 0.5))):
-        c[f"reinit_{z}"] = (0, 127, 80, P(hz=55, decay=4.0, raw={FM: G.k2_fb(5)}, mod=3.0, noise=nz) + ["reinit", 30])
-        c[f"fresh_{z}"] = (0, 127, 50, P(hz=55, decay=4.0, raw={FM: G.k2_fb(5)}, mod=3.0, noise=nz))
+    for z, nz, hz in (("fb", 0, 55), ("metal", G.NZ("METAL", 0.5), 440)):     # (METAL's squares free-run: their
+        c[f"reinit_{z}"] = (0, 127, 80, P(hz=hz, decay=4.0, raw={FM: G.k2_fb(5)}, mod=3.0, noise=nz)   # phases differ)
+                            + ["reinit", 30])
+        c[f"fresh_{z}"] = (0, 127, 50, P(hz=hz, decay=4.0, raw={FM: G.k2_fb(5)}, mod=3.0, noise=nz))
     c["worst"] = (23, 127, 30, [G.STOCK_HI[0], 32767, 32767, 32767, 31 * 1024, 32767, 32767, G.NZ("HAT", 0.5)])
     for z in ("METAL", "GRIND"):            # the harsh path's heaviest variants: feedback, square, METAL + GRIND mixed
         c[f"worst_{z.lower()}"] = (23, 127, 30, [G.STOCK_HI[0], 32767, 32767, 32767, 31 * 1024, 32767, 32767,

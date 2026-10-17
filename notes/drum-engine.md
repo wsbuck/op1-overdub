@@ -257,7 +257,11 @@ step per 128-sample block; all gains, the index and both increments ramp linearl
 a 32-sample attack to its start values (index and sweep at full); a retriggered or stolen voice keeps its phases and
 ramps from its current gains (no click). Aliasing: carrier held below 0.45 fs, modulator faded out between 0.4375 and
 0.5 fs, index limited so fc + (1.5 I + 4) fm <= 0.77 fs (beyond that the sidebands are below -50 dB; only components
-above 0.77 fs fold back under 20 kHz). DC: 8 Hz one-pole high-pass (a 1:1 ratio puts a sideband at 0 Hz); soft knee.
+above 0.77 fs fold back under 20 kHz). DC: 8 Hz one-pole high-pass (a 1:1 ratio puts a sideband at 0 Hz); soft knee. A note is over at -70 dB of its
+amplitude envelope; the voice then plays out the DC blocker's own decay (rounded toward 0) until under 4 LSB and only
+then ends (since 2026-10-17: ending at once cut that decay, a step of up to ~-30 dBFS after short low notes). Such a
+voice reports itself to TE as the first to steal; a note on it starts from silence (phases and filters cleared, the
+DC blocker's value continues).
 State: `fmdrum_voice[12]` in the slot block, indexed by TE's voice index; note-on (TE's caller thread) only writes key,
 velocity and a trigger count that render picks up.
 
@@ -328,7 +332,7 @@ the old loop bit for bit.
 - Zones on detents (`fd_noise_edge`): OFF 0, AIR 1-4, SNARE 5-9, HAT 10-14, CLAP 15-19, METAL 20-25, GRIND 26-32;
   the path is a 129-point table (`fd_noise`, 256 raw apart, 14 columns) read at K7 + 1023 (`FD_NOISE_SHIFT`).
 - METAL: the 808 recipe. Six squares at the 808's ratios (205.3 .. 800 Hz / 205.3) from PITCH / 2 (with the sweep),
-  within 100 Hz .. 1.6 kHz; crossfaded (equal power) from CLAP's noise over the zone's first half; band-passed
+  within 70 Hz .. 1.6 kHz (100 Hz until 2026-10-17); crossfaded (equal power) from CLAP's noise over the zone's first half; band-passed
   1.2 -> 11 kHz (damping 0.6 -> 0.5); over the top 40 % the squares are first high-passed (one pole, to 3 kHz: an
   808 hat's band-pass then high-pass, without passing the edges); ring-modulated with the FM voice (0.3, x2 scale);
   the FM body comes in to 0.45 by mid-zone and falls to 0 at the top (hats). Level: `fd_metal_gain` [cluster
@@ -354,11 +358,27 @@ the old loop bit for bit.
   other zones (old HAT -> CLAP / METAL, old CLAP -> METAL / GRIND). Reload factory kits or re-tune saves.
 
 ### Cost
-Sim, per render call: clean keys as before (~172 cycles / sample worst, 89 for a sine); harsh keys ~227 (FEEDBACK /
-SQUARE) to 292 (FEEDBACK + SQUARE + METAL + GRIND's square). 12 voices at once, all harsh: worst block 440 k cycles
-(287 per sample per voice); fm industrial's 12 heaviest keys 409 k; the old kits 220 .. 251 k. Budget: 600 per sample per voice (simrun); device total ~0.96 M cycles per
-block for all render calls (LOG 5). Device / sim ratio was 2.3 x for DRUMPROBE (unmeasured for fmdrum): a full kit of
-harsh voices could reach the device's limit; device check in LOG 82.
+The harsh path (run_hv) is Blackfin assembly since 2026-10-17: five passes over each run, each with its state in
+registers (`fmdrum.c`): the FM core (feedback and carrier, two table sines; the clipped carrier into `out[]`), METAL's six
+squares (four phases as two vector pairs of sign bits, two in I/M registers) into `fd_src[]`, the source (LCG noise x wx,
+plus the squares and GRIND's square) into `fd_x[]`, the filter (SVF and blend with exact 32 x 16 dual-MAC products) into
+`fd_src[]`, and the mix (ring mod, the DC blocker's qmul as gcc expands it, the knee off the loop's main path) into
+`out[]`. The sine is one table word per step (`fd_sin2`: sine256[i] and the step to i + 1). The C loops under
+`#ifndef __bfin__` are the reference: fmdrum_check builds fmdrum.c both ways and compares every case bit for bit
+(including 48 random keys with knob turns and retriggers). Against the C engine before (commit 808432e): bit-identical
+except 1-LSB saturation at -32768 instead of -32767 in four clamps (SQUARE's clip, METAL, GRIND, the filter: residual
+<= -84 dB) and the knee and note-end fixes below; FEEDBACK's chaotic loop is exact.
+- Sim, worst render call (a note's first block: two runs and the per-note setup): harsh keys 121 cycles / sample
+  without METAL / GRIND (was 227), 160 with them (was 292); clean keys unchanged (the gcc loop: ~172 worst).
+- 12 voices at once (all starting in the same block, the fresh blocks run two passes each): all harsh worst block
+  **240 k cycles (156 per sample per voice; was 440 k)**; fm industrial's 12 heaviest keys 223 k (was 409 k); the old
+  kits 220 .. 247 k (clean path, unchanged). Overhead outside the loops ~2 k per call.
+- Device: total ~0.96 M cycles per block for all render calls (LOG 5); DRUMPROBE ran 2.3 x the sim on the device. At 2.3 x
+  the worst block is ~0.55 M (58 %). The asm loops avoid what likely made gcc's code slow there: three 32-bit
+  multiplies per sample (3 cycles each; the rest are 16-bit MACs), no stack spills, independent work between each register-to-pointer move and its use as an
+  address (FSIN_A's FILL), parallel loads; their scratch (`fd_x`, `fd_src`) is in the slot block (SDRAM), 4-5 accesses
+  per sample. Unmeasured on the device; next levers if needed: the clean path in the same passes (old kits ~247 -> ~180 k),
+  scratch in L1.
 
 ### Review log
 Round 1 (sound: industrial sound designer / DSP; UX: OP-1 player / TE designer), on the first build:
@@ -400,3 +420,31 @@ Round 2 (fresh reviewers, same roles), on the round-1 fixes:
   was darker than FB7). Rejected: knob colours in the key strip's class marks (pre-existing, TE's palette has too few
   non-knob hues for 11 classes); swapping the clank off key 8 (key 8 is the shared layout's rim); CLAP make-up (as
   above). Device feel (detent size on the drum knobs, harshness on real speakers) is for the LOG 82 checklist.
+Round 3 (2026-10-17, after test image 82; performance, an independent code review, a sound review by an
+industrial / techno producer on renders and spectrograms):
+- Performance: the harsh path in assembly ("Cost"): 12 harsh voices 440 k -> 240 k sim cycles per block, bit for bit
+  the C loops; FEEDBACK's chaotic loop exact against the engine before.
+- Bugs fixed (each with a check in fmdrum_check): dsp.h's soft_knee returned 32768 for |x| 40779 .. 40957 (just
+  below the knee's top), which wrapped a positive sample to -32768 (a full-scale click; all engines; it happened in
+  fmdrum's METAL / GRIND tests); a voice ended by cutting the DC blocker's decay (a click after short, low notes:
+  -41 dBFS on a 15 ms A3 sine, up to ~-30 dBFS lower down); a note from silence kept the DC blocker's and METAL's
+  high-pass state, so after a kit load mid-note (the factory's slot init silences the voices) the next note started
+  with a DC step (~-25 dBFS); drumhooks_check no longer linked (CHORD v2's hooks in slot.S; stubs added).
+- Code review, no change needed: overflow at the zone joins and knob extremes (TE's LFO can push any int16; every
+  index is clamped, every product fits), the table indices, choke (keys and slot row), slot init, stock-range clamps of
+  the kits and the 29-preset cap (drum_browser_check), the screen (no division or libc, every line clipped, buffers
+  fit the longest readouts), fxpub (synth and drum FX share one live object and its mono slot: only one mode runs).
+  Noted, not changed: two hats hit in the same block don't choke each other (the later can't see the pending one);
+  the regular DC blocker's truncating qmul holds a negative value under ~7 LSB (inaudible).
+- Sound review: fm industrial "ships": harsh, near-pink loop spectrum, no clicks, DC, clipping or join glitches;
+  FEEDBACK grit -> chaos -> noise and METAL / GRIND deliver. Done (kit values): open / closed / half-open hats NOISE
+  METAL 0.85 / 0.9 -> 0.95 (the FM body's 900 Hz ding was -11 dB of the open hat for its whole decay; now ~-19 dB,
+  more air above 12 kHz), closed hat decay 0.08 -> 0.10 s (+1 dB); scream FMDEC 0.5 -> 2 s (it screamed ~60 ms, then
+  hummed); snare 4 ratio 1.41 -> pi (its 83 Hz difference tone sat on the kick: < 160 Hz share -5 -> -25 dB); rim
+  decay 0.09 -> 0.12 s; METAL's lowest cluster 100 -> 70 Hz (the review asked 50: at 50 METAL's top on a 110 Hz key
+  drops ~2 dB, outside fmdrum_check's level window), so the low and mid pipe toms no longer share their partials (tom
+  3 METAL 0.45 -> 0.40 for its peak). Only METAL keys under 200 Hz change; the old kits don't use METAL. Not done:
+  anvil 16 / ping 23 / crash 14 levels (+3 .. 5 dB over the kicks: a device call, no level knob), FEEDBACK 2 vs 3 and
+  FEEDBACK 7 vs SQUARE 1 nearly the same (respacing FB_BETA changes saved sounds' meaning; after the device test),
+  SQUARE getting darker rather than brighter (by design, round 2), the square kicks' infrasonic push (judge on a sub),
+  CLAP 9 dB under (rejected before), ratchet 17 without audible ratchet pulses (usable as a blat).

@@ -460,7 +460,7 @@ static const uint16_t fd_fmz[384] __attribute__((unused)) = {
 
 #define FD_FMZ_W 4
 /* METAL's six squares: frequency / the lowest, Q16 (the 808's 205.3 .. 800 Hz); the lowest follows PITCH / 2
- * within 100 .. 1600 Hz (FD_METAL_LOW / TOP, K0 units); GRIND's square from 80 Hz (FD_GRIND_LOW) */
+ * within 70 .. 1600 Hz (FD_METAL_LOW / TOP, K0 units); GRIND's square from 80 Hz (FD_GRIND_LOW) */
 static const uint32_t fd_metal_ratio[6] __attribute__((unused)) = {
     65536, 97170, 117984, 166855, 172379, 255381,
 };
@@ -484,7 +484,7 @@ static const uint16_t fd_metal_gain[200] __attribute__((unused)) = {
 };
 
 #define FD_METAL_TOP 17587
-#define FD_METAL_LOW -6989
+#define FD_METAL_LOW -10150
 #define FD_GRIND_LOW -8967
 /* FEEDBACK levels' beta for the screen, Q8 */
 static const int16_t fd_fb_beta[8] __attribute__((unused)) = {

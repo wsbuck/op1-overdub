@@ -67,7 +67,7 @@ NOISE_ZONES = ["OFF", "AIR", "SNARE", "HAT", "CLAP", "METAL", "GRIND"]
 NOISE_EDGES = [0, 1024, 5120, 10240, 15360, 20480, 26624, 32768]   # K7 zone starts: detents 0, 1, 5, 10, 15, 20, 26
 METAL_RATIOS = [1.0, 1.4827, 1.8003, 2.5460, 2.6303, 3.8968]   # the 808's six squares (205.3 .. 800 Hz) / the lowest
 METAL_TOP = 1600.0                         # Hz: the cluster's lowest square follows PITCH / 2 up to here (top 6.2 kHz)
-METAL_LOW = 100.0                          # .. and down to here (the 808's own: 205.3 .. 800 Hz)
+METAL_LOW = 70.0                          # .. and down to here (the 808's own: 205.3 .. 800 Hz)
 GRIND_LOW = 80.0                           # Hz: GRIND's square starts at max(this, PITCH / 2), rises to PITCH x sqrt 2
 NOISE_RMS = 0.16                           # filtered noise RMS below 20 kHz at full level (Q15 full scale = 1)
 TONE = 0.62                                # tone level at full velocity
@@ -611,23 +611,23 @@ KITS["fm industrial"] = ("lo-fi", [
     key2(50, 1.0, SQ(0.4), 0.5, 30, 0.015, 0, 0.1),              # 0 F   drive kick (SQUARE 2, short FMDEC)
     key2(48, 1.0, SQ(1.0), 0.4, 24, 0.02, 0, 0.09),              # 1 F#  square kick (SQUARE: a clipped carrier)
     key2(45, 1.0, 0.4, 0.9, 20, 0.04, 0, 0.02),                  # 2 G   sub kick, clean (contrast)
-    key2(110, 2.7565, 8.0, 0.6, 4, 0.03, NZ("METAL", 0.45), 0.25),   # 3 G#  pipe tom low
-    key2(200, 1.4142, FB(4), 0.25, 6, 0.02, NZ("SNARE", 0.85), 0.08),  # 4 A   snare (SNARE zone, FEEDBACK 4: cuts)
+    key2(110, 2.7565, 8.0, 0.6, 4, 0.03, NZ("METAL", 0.40), 0.25),   # 3 G#  pipe tom low
+    key2(200, 3.1416, FB(4), 0.25, 6, 0.02, NZ("SNARE", 0.85), 0.08),  # 4 A   snare (SNARE zone, FEEDBACK 4: cuts)
     key2(165, 2.7565, 8.0, 0.5, 4, 0.03, NZ("METAL", 0.45), 0.2),    # 5 A#  pipe tom mid
     key2(220, 1.0, FB(3), 0.22, 8, 0.015, NZ("GRIND", 0.4), 0.06),   # 6 B   grind snare
     key2(245, 2.7565, 8.0, 0.45, 4, 0.03, NZ("METAL", 0.45), 0.18),   # 7 C   pipe tom high
-    key2(900, 5.1926, SQ(0.3), 0.09, 0, 0.01, NZ("GRIND", 0.7), 0.03),  # 8 C#  machine clank (rim)
+    key2(900, 5.1926, SQ(0.3), 0.12, 0, 0.01, NZ("GRIND", 0.7), 0.03),  # 8 C#  machine clank (rim)
     key2(150, 1.0, 0.0, 0.4, 0, 0.02, NZ("CLAP", 1.0), 0.02),        # 9 D   clap (CLAP at full)
-    key2(900, 1.4142, 1.0, 0.08, 0, 0.01, NZ("METAL", 0.9), 0.05),   # 10 D# closed hat (the 808's six squares)
+    key2(900, 1.4142, 1.0, 0.10, 0, 0.01, NZ("METAL", 0.95), 0.05),   # 10 D# closed hat (the 808's six squares)
     key2(1000, 1.4142, 1.0, 0.05, 0, 0.01, NZ("METAL", 0.95), 0.03),   # 11 E  pedal chick
-    key2(900, 1.4142, 1.0, 0.15, 0, 0.01, NZ("METAL", 0.9), 0.12),   # 12 F  half-open hat
-    key2(900, 1.4142, 1.0, 0.7, 0, 0.01, NZ("METAL", 0.85), 0.5),    # 13 F# open hat
+    key2(900, 1.4142, 1.0, 0.15, 0, 0.01, NZ("METAL", 0.95), 0.12),   # 12 F  half-open hat
+    key2(900, 1.4142, 1.0, 0.7, 0, 0.01, NZ("METAL", 0.95), 0.5),    # 13 F# open hat
     key2(350, 2.7565, FB(4), 2.5, 0, 0.01, NZ("METAL", 0.8), 1.5),   # 14 G  sheet-metal crash
     key2(520, 3.1416, FB(6), 2.0, 0, 0.01, NZ("METAL", 0.9), 1.2),   # 15 G# china (trashy crash)
     key2(1100, 3.1416, 4.0, 0.8, 0, 0.01, NZ("METAL", 0.4), 0.8),    # 16 A  anvil
     key2(280, 1.0, FB(2), 0.3, 0, 0.01, NZ("GRIND", 0.6), 0.1),      # 17 A# ratchet (GRIND's square)
     key2(2000, 1.4142, 2.0, 0.4, 0, 0.01, NZ("GRIND", 0.2), 0.1),    # 18 B  steam hiss
-    key2(300, 1.0, FB(7), 0.5, 0, 0.01, 0, 0.5),                    # 19 C  scream (FEEDBACK 7)
+    key2(300, 1.0, FB(7), 0.5, 0, 0.01, 0, 2.0),                    # 19 C  scream (FEEDBACK 7)
     key2(90, 1.0, FB(4), 1.2, 0, 0.01, NZ("GRIND", 0.9), 1.0),       # 20 C# broken motor
     key2(150, 2.7565, 4.0, 0.5, 36, 0.06, NZ("METAL", 0.3), 0.3),    # 21 D  pipe drop
     key2(70, 1.0, SQ(0.6), 0.35, 24, 0.03, NZ("SNARE", 0.3), 0.08),  # 22 D# slam (SQUARE, a snap of noise)
