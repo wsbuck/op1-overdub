@@ -30,10 +30,14 @@ extern struct fd_voice fmdrum_voice[] __attribute__((weak));
 
 #define LIGHTORANGE 19
 #define FD_SHOW 45                              /* frames a turned knob's readout stays in the title (~1.5 s) */
-enum { FC_KICK, FC_TOM, FC_SNARE, FC_CLAP, FC_HAT, FC_METAL, FC_BELL, FC_ZAP, FC_PERC };
-static const char *const fd_class_name[9] = { "KICK", "TOM", "SNARE", "CLAP", "HAT", "METAL", "BELL", "ZAP", "PERC" };
-/* the key strip's marks only: CLAP lavender and ZAP red, so they read apart */
-static const uint8_t fd_class_colour[9] = { BLUE, LIGHTBLUE, WHITE, PURPLEGREY, LIGHTGREEN, GREEN, LIGHTGREEN, RED, GREY };
+#define FD_PINK 0                               /* TE's palette 0 (255, 144, 167) */
+#define FD_PURPLE 7                             /* TE's palette 7 (95, 66, 112) */
+enum { FC_KICK, FC_TOM, FC_SNARE, FC_CLAP, FC_HAT, FC_METAL, FC_BELL, FC_ZAP, FC_PERC, FC_GRIND, FC_CRASH };
+static const char *const fd_class_name[11] = { "KICK", "TOM", "SNARE", "CLAP", "HAT", "METAL", "BELL", "ZAP", "PERC",
+                                               "GRIND", "CRASH" };
+/* the key strip's marks only: CLAP lavender, ZAP red, GRIND pink, so they read apart */
+static const uint8_t fd_class_colour[11] = { BLUE, LIGHTBLUE, WHITE, PURPLEGREY, LIGHTGREEN, GREEN, LIGHTGREEN, RED, GREY,
+                                             FD_PINK, FD_PURPLE };
 static const char *const fd_knob_name[8] = { "PITCH", "SWEEP", "FM", "DECAY", "RATIO", "SWDEC", "FMDEC", "NOISE" };
 static const uint8_t fd_knob_colour[8] = { BLUE, GREEN, WHITE, ORANGE, BLUE, GREEN, WHITE, ORANGE };
 static const uint8_t fd_shift_colour[4] = { LIGHTBLUE, LIGHTGREEN, GREY, LIGHTORANGE };
@@ -50,13 +54,30 @@ static struct fd_view fd_v RAM = { 0, -1, { 0 }, 0, 0 };
 static int fd_class(const int16_t *k)
 {
     int z = fd_noise_zone_of(k[FD_NOISE]);
-    if (z == 4)
+    int32_t dk = fd_pos(k[FD_DECAY]) >> 7;
+    int fz = fd_fm_zone(k[FD_FM]);
+    if (z >= NZ_METAL) {                        /* the body first: a kick, a pipe or snare under ~250 Hz */
+        if (k[FD_PITCH] < -9000)                /* below ~80 Hz */
+            return FC_KICK;
+        if (k[FD_PITCH] < 2300)
+            return dk >= 150 ? FC_TOM : FC_SNARE;
+        if (z == NZ_GRIND)
+            return FC_GRIND;
+        int32_t t = fd_noise_sound(k[FD_NOISE]) - 20480;   /* the 808's squares: in METAL's upper half under ~1 s a hat,
+                                                         * above a crash; lower down metal */
+        if (t >= 3072)
+            return dk >= 192 ? FC_CRASH : FC_HAT;
+        return FC_METAL;
+    }
+    if (z == NZ_CLAP)
         return FC_CLAP;
-    if (z == 3)
+    if (z == NZ_HAT)
         return FC_HAT;
-    if (z == 2)
+    if (z == NZ_SNARE)
         return FC_SNARE;
-    int32_t idx = fd_index_q8(k[FD_FM]), dec = fd_pos(k[FD_DECAY]) >> 7;
+    int32_t idx = fd_index_q8(k[FD_FM]), dec = dk;
+    if (!z && k[FD_PITCH] >= -9000 && (fz == FZ_SQUARE || fd_fm_level(k[FD_FM]) >= 5))
+        return FC_ZAP;                          /* noise off, FEEDBACK 5+ or SQUARE, above a kick: a scream */
     int harm = (FD_RATIO_HARMONIC >> (fd_pos(k[FD_RATIO]) >> 10)) & 1;
     if (fd_sweep_q(k[FD_SWEEP]) >= 30 * 512)
         return FC_ZAP;
@@ -106,7 +127,7 @@ static char *fd_put_time(char *p, uint32_t t10)
         t10 -= 1000;
         d++;
     }
-    return put_str(put_dec(put_str(put_dec(p, s), "."), d), "SEC");
+    return put_str(put_dec(put_str(put_dec(p, s), "."), d), "S");
 }
 
 /* knob i's value as text */
@@ -124,7 +145,12 @@ static char *fd_value(char *p, int i, const int16_t *k, int long_ratio)
     }
     if (i == FD_SWEEP)
         return put_str(put_dec(put_str(p, "+"), ((uint32_t)fd_sweep_q(k[FD_SWEEP]) + 256) >> 9), "ST");
-    if (i == FD_FM) {
+    if (i == FD_FM) {                           /* index; FEEDBACK 0..7 ("FB3"; title "3 FEEDBACK"); SQUARE 1..5 */
+        int z = fd_fm_zone(k[FD_FM]), lv = fd_fm_level(k[FD_FM]);
+        if (z == FZ_FEEDBACK)
+            return put_dec(put_str(p, long_ratio ? "FEEDBACK " : "FB"), (uint32_t)lv);
+        if (z == FZ_SQUARE)
+            return long_ratio ? put_dec(put_str(p, "SQUARE "), (uint32_t)lv) : put_dec(put_str(p, "SQ"), (uint32_t)lv);
         uint32_t q = (uint32_t)fd_index_q8(k[FD_FM]);
         return put_dec(put_str(put_dec(p, q >> 8), "."), ((q & 255) * 10) >> 8);
     }
@@ -315,24 +341,60 @@ static void draw_fmdrum(int slot)
     line_fast(r, cx - rx, hy, cx - rx, by, GREY);                  /* shell, the near half of the bottom rim, lugs */
     line_fast(r, cx + rx, hy, cx + rx, by, GREY);
     fd_ellipse(r, cx, by, rx, ry, 16, 0x08000000u, 0, GREY);
-    for (int i = 1; i < 6; i++) {
+    int32_t ksn = fd_noise_sound(k[FD_NOISE]);
+    const uint16_t *nrow = fd_noise + (ksn >> 8) * FD_NOISE_W;
+    int32_t wm = nrow[9], wsq = nrow[10];
+    for (int i = 1; i < 6; i++) {                                  /* lugs; METAL: hex nuts on the shell (the 808's
+                                                                    * six squares), rattling while it plays */
         uint32_t a = (uint32_t)i * 0x15555555u;                    /* 30 .. 150 degrees: the near side */
         fp32 lx = cx + (((rx >> 5) * cos_t(a)) >> 10), ly = ((ry >> 5) * sin_t(a)) >> 10;
-        line_fast(r, lx, hy + ly + FP(3), lx, by + ly - FP(2), PURPLEGREY);
+        if (wm > 3000) {
+            uint32_t h = fd_hash((uint32_t)i * 0x165667B1u + (live ? vw->frame : 0));
+            fp32 j = live && amp > 2000 ? (fp32)((int32_t)(h & 3) - 1) * FP(1) : 0;
+            fp32 my = hy + ly + ((by - hy) >> 1);
+            fd_ellipse(r, lx + j, my, FP(4), FP(4), 6, 0x2AAAAAABu, 0, live ? WHITE : GREY);    /* hexagon */
+            fd_ellipse(r, lx + j, my, FP(2), FP(2), 6, 0x2AAAAAABu, 0, live ? GREY : PURPLEGREY);
+        } else {
+            line_fast(r, lx, hy + ly + FP(3), lx, by + ly - FP(2), PURPLEGREY);
+        }
     }
     if (live && amp > 200)                                          /* ripples while it sounds */
         for (int j = 0; j < 2; j++) {
             fp32 g = FP((int32_t)((age * 2 + (uint32_t)j * 9) & 15) + 3);
             fd_ellipse(r, cx, hy, rx + g, ry + (g >> 1), 32, 0x08000000u, 0, amp > 5000 ? GREY : DARKBLUE);
         }
-    {                                                               /* head outline (anti-aliased) */
+    /* FM's top zones: FEEDBACK 0..7 tears the head and the rosette (jag) and throws sparks off the rim; SQUARE squares
+     * the petals off (flat tops) at full jag */
+    int fz = fd_fm_zone(k[FD_FM]), flv = fd_fm_level(k[FD_FM]);
+    int32_t jag = fz == FZ_FEEDBACK ? flv : fz == FZ_SQUARE ? 7 - flv : 0;    /* SQUARE calms as the feedback falls */
+    uint32_t jseed = live ? vw->frame * 0x9E3779B9u : 0x1234567u;
+    {                                                               /* head outline (anti-aliased), torn by FEEDBACK */
         fp32 px = cx + rx, py = hy;
         for (int i = 1; i <= 24; i++) {
             uint32_t a = (uint32_t)i * 0x0AAAAAABu;
-            fp32 qx = cx + (((rx >> 5) * cos_t(a)) >> 10), qy = hy + (((ry >> 5) * sin_t(a)) >> 10);
+            int32_t g = 32767;
+            if (jag && i < 24) {                    /* odd points out, even in: up to +-9 % of the radius */
+                int32_t h = (int32_t)(fd_hash((uint32_t)i * 2654435761u + jseed) >> 20);       /* 0 .. 4095 */
+                int32_t d = (jag * (1500 + ((h * 1500) >> 12))) >> 3;
+                g += i & 1 ? d : -d;
+            }
+            fp32 qx = cx + (((((rx >> 5) * g) >> 15) * cos_t(a)) >> 10), qy = hy + (((((ry >> 5) * g) >> 15) * sin_t(a)) >> 10);
             line_fp(r, px, py, qx, qy, FP(3) >> 1, live ? WHITE : GREY);
             px = qx;
             py = qy;
+        }
+    }
+    if (jag) {                                                      /* sparks off the rim: 2 per level */
+        int n = jag * 2;
+        if (live)
+            n = (n * (amp > 16384 ? 32767 : amp << 1)) >> 15;
+        for (int i = 0; i < n; i++) {
+            uint32_t h = fd_hash((uint32_t)i * 0x85EBCA6Bu + jseed);
+            uint32_t a = 0x80000000u + ((h & 0xFFFF) << 15);           /* the far half of the rim: up and out */
+            int32_t c = cos_t(a), sn = sin_t(a), len = 3 + (int32_t)((h >> 16) & 7) + jag;
+            fp32 x0 = cx + (((rx >> 5) * c) >> 10), y0 = hy + (((ry >> 5) * sn) >> 10);
+            fp32 x1 = x0 + (fp32)((c * len) >> 5) * (FP(1) >> 10), y1 = y0 + (fp32)((sn * len) >> 5) * (FP(1) >> 10) - FP(2);
+            line_fast(r, x0, y0, x1, y1, (h >> 13) & 1 ? WHITE : GREY);
         }
     }
     /* the FM rosette: radius (fraction of the head) 0.56 + 0.31 depth cos(petals x angle) */
@@ -349,7 +411,14 @@ static void draw_fmdrum(int slot)
         fp32 px = 0, py = 0;
         for (int i = 0; i <= segs; i++) {
             uint32_t th = 0x04000000u * (uint32_t)i, ps = dps * (uint32_t)i + ph0;
-            int32_t ru = 18350 + ((amp_q15 * cos_t(ps)) >> 15);    /* Q15 */
+            int32_t cp = cos_t(ps);
+            if (fz == FZ_SQUARE) {                                  /* SQUARE 1..5: petals clip flat */
+                cp = cp * (1 + 3 * flv);
+                cp = cp > 32767 ? 32767 : cp < -32767 ? -32767 : cp;
+            }
+            int32_t ru = 18350 + ((amp_q15 * cp) >> 15);           /* Q15 */
+            if (jag)                                                /* FEEDBACK: a ragged edge, +-4 % per level */
+                ru += (int32_t)((fd_hash((uint32_t)i * 0x27D4EB2Fu + jseed) >> 21) - 1024) * jag;
             int32_t c = (ru * cos_t(th)) >> 15, s = (ru * sin_t(th)) >> 15;
             fp32 x = cx + (((rx >> 5) * c) >> 10), y = hy + (((ry >> 5) * s) >> 10);
             if (i)
@@ -388,16 +457,17 @@ static void draw_fmdrum(int slot)
             line_fp(r, dotx, doty - FP(1), dotx, doty + FP(1), FP(4), WHITE);
     }
     /* noise: white/grey speckle above the head, zones apart by height and density; CLAP adds clap marks */
-    int32_t kn = fd_pos(k[FD_NOISE]);
+    int32_t kn = ksn;
     int zone = fd_noise_zone_of(k[FD_NOISE]);
     if (zone) {
-        int32_t nl = fd_noise[(kn >> 9) * FD_NOISE_W + 1];         /* noise level, Q15 */
-        static const uint8_t dens[5] = { 0, 14, 30, 46, 22 }, rise_u[5] = { 0, 5, 12, 22, 14 };
+        int32_t nl = fd_noise[(kn >> 8) * FD_NOISE_W + 1];         /* noise level, Q15 */
+        static const uint8_t dens[7] = { 0, 14, 30, 46, 22, 10, 26 }, rise_u[7] = { 0, 5, 12, 22, 14, 8, 10 };
         int n = (nl * dens[zone]) >> 15;
         if (live)
             n = (n * (amp > 16384 ? 32767 : amp << 1)) >> 15;
         fp32 rise = FP(rise_u[zone]);
-        int c0 = zone == 1 ? DARKBLUE : zone == 3 ? WHITE : GREY, c1 = zone == 1 ? GREY : zone == 2 ? WHITE : GREY;
+        int c0 = zone == NZ_AIR ? DARKBLUE : zone == NZ_HAT ? WHITE : GREY;
+        int c1 = zone == NZ_AIR ? GREY : zone == NZ_SNARE || zone >= NZ_METAL ? WHITE : GREY;
         uint32_t seed = live ? vw->frame : 7;
         fp32 spread = live ? FP(1) + (fp32)(age > 16 ? FP(1) : (fp32)age << 6) : FP(1);
         for (int i = 0; i < n; i++) {
@@ -409,7 +479,23 @@ static void draw_fmdrum(int slot)
                 y = FP(26);
             line_fast(r, x, y, x + FP(1), y, (hsh >> 13) & 1 ? c0 : c1);
         }
-        if (zone == 4) {                                            /* clap: three marks each side */
+        if (zone == NZ_GRIND) {                                     /* GRIND: an angle grinder's spray off the right rim */
+            int32_t tg = kn - 26624;
+            int n = 8 + (tg >> 9) + (wsq >> 12);                     /* 8 .. ~27 streaks */
+            if (live)
+                n = (n * (amp > 16384 ? 32767 : amp << 1)) >> 15;
+            fp32 sx = cx + ((rx * 7) >> 3), sy = hy - (ry >> 2);
+            for (int i = 0; i < n; i++) {
+                uint32_t h = fd_hash((uint32_t)i * 0x9E3779B1u + (live ? vw->frame * 7u : 11u));
+                uint32_t a = 0xF0000000u + ((h & 0xFFFF) << 13);       /* -22 .. +22 degrees, up and out to the right */
+                int32_t len = 6 + (int32_t)((h >> 16) & 15);
+                fp32 x0 = sx + FP((int32_t)((h >> 20) & 3)), y0 = sy;
+                fp32 x1 = x0 + (fp32)((cos_t(a) * len) >> 5) * (FP(1) >> 10);
+                fp32 y1 = y0 - (fp32)((sin_t(a + 0x10000000u) * len) >> 5) * (FP(1) >> 10);
+                line_fast(r, x0, y0, x1, y1, (h >> 28) & 1 ? WHITE : GREY);
+            }
+        }
+        if (zone == NZ_CLAP) {                                      /* clap: three marks each side */
             int col = live ? WHITE : GREY;
             for (int j = 0; j < 3; j++) {
                 fp32 dy = FP(5 * j);
@@ -434,7 +520,7 @@ static void draw_fmdrum(int slot)
         vline_fast(r, FD_GX(fd_log2_q8(age) << 2), FP(FD_GY0), FP(FD_GY1), GREY);
 
     /* ---- values under grey labels: the plain knobs, then SHIFT's (dimmer) ---- */
-    static const uint16_t col_x[4] = { 172, 210, 242, 280 };
+    static const uint16_t col_x[4] = { 172, 207, 243, 281 };
     for (int i = 0; i < 4; i++) {
         text_fast(r, fd_knob_name[i], FP(col_x[i]), FP(73), FP(3) >> 2, GREY);
         fd_value(buf, i, k, 0);

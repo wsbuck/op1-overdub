@@ -11,17 +11,24 @@
  *   pitch    K0 + SWEEP x sweep envelope (exponential, time constant SNAP), in semitones: carrier and modulator move
  *            together, so the ratio holds through the sweep
  *   noise    LCG white noise through a Chamberlin state-variable filter, its lp/bp/hp outputs blended; NOISE picks the
- *            colour, level, tone level and clap bursts along one knob (OFF, AIR, SNARE, HAT, CLAP)
+ *            colour, level, tone level and clap bursts along one knob (OFF, AIR, SNARE, HAT, CLAP), then METAL (the
+ *            808's six squares from PITCH / 2 replace the noise, band-passed and ring-modulated with the voice) and
+ *            GRIND (unfiltered noise, then a jittery square from 30 Hz to PITCH x sqrt 2, ring-modulated)
  *   amp      one exponential decay (DECAY) for tone and noise; velocity (MIDI; the OP-1's keys send 127) scales the
  *            level and the index (0.5 .. 1)
  * Knobs (per key, TE's dbox path, range row 9; fmdrum.h FD_*), read every block, so turning one changes a sounding note
  * smoothly; an amount on each plain knob, its time (or partner) on SHIFT:
  *   [0] blue   PITCH  14 Hz .. 3.6 kHz (512 per semitone, 0 = A3)   [4] SHIFT+blue    RATIO 15 harmonic, 17 inharmonic
  *   [1] green  SWEEP  0 .. +48 semitones                            [5] SHIFT+green   SWDEC sweep time 1 .. 300 ms
- *   [2] white  FM     index 0 .. 16 rad                             [6] SHIFT+white   FMDEC index decay 3 ms .. 3 s
- *   [3] orange DECAY  15 ms .. 4 s (to -60 dB)                      [7] SHIFT+orange  NOISE OFF/AIR/SNARE/HAT/CLAP
- * Hi-hat choke: a note-on on keys 10..13 whose NOISE is in the HAT zone releases the other sounding voices of the group
- * that are in the HAT zone too, in ~5 ms (open hat cut by the closed one).
+ *   [2] white  FM     index 0 .. 16 rad (detents 0..19), FEEDBACK 0..7 (20..27), SQUARE 1..5 (28..32)
+ *                                                                   [6] SHIFT+white   FMDEC index decay 3 ms .. 3 s
+ *   [3] orange DECAY  15 ms .. 4 s (to -60 dB)                      [7] SHIFT+orange  NOISE OFF/AIR/SNARE/HAT/CLAP/
+ *                                                                                     METAL/GRIND
+ * FEEDBACK: the modulator reads its own last two outputs (mean, as the DX7) x beta, following the index's envelope;
+ * SQUARE: the carrier is driven into a clip (1 .. 32 x, level-matched) while the feedback falls back. Both only in the
+ * harsh loop (run_hv), so clean keys cost what they did.
+ * Hi-hat choke: a note-on on keys 10..13 whose NOISE is in the HAT or METAL zone releases the other sounding voices of
+ * the group in those zones, in ~5 ms (open hat cut by the closed one).
  * Per block (128 samples at 88.2 kHz): the three envelopes step once (per-block factors from the tables), and every
  * gain, the index and both phase increments ramp linearly across the block, so knob changes and envelopes never
  * zipper. A note starts with a 32-sample (0.36 ms) attack ramp to its start values (index and sweep at full: the FM
@@ -139,16 +146,21 @@ static int32_t limit_index(int32_t i_q8, int32_t mute, uint32_t fc, uint32_t fm)
 }
 
 struct seg {                                /* what one run of samples ramps */
-    int32_t dgt, dgn, dgm;
+    int32_t dgt, dgn, dgm, dgf, dgc, dgr;
     uint32_t dci, dmi;
 };
 
-struct flt {                                /* the block's noise filter */
+struct flt {                                /* the block's noise path: filter, and (harsh variants) the source weights */
     int32_t f, q, wl, wb, wh;
+    int32_t wx, wm, wsq;                    /* white noise, METAL's squares, GRIND's square, Q15 */
+    int32_t unit;                           /* one METAL square's amplitude (wm x 3861) */
+    int32_t go;                             /* the filtered source's gain, Q8 (METAL's level, fd_metal_gain) */
+    int32_t mh;                             /* the squares' one-pole high-pass coefficient, Q15 */
+    uint32_t mi[6], gi;                     /* METAL's and GRIND's square increments */
 };
 
 /* one run of n samples; NOISE and FM are constants at each call (run() below picks the variant), so a key without
- * noise or without FM skips that part of the loop */
+ * noise or without FM skips that part of the loop. The clean path: no feedback, a sine carrier, white noise only. */
 static inline __attribute__((always_inline)) void run_v(const int NOISE, const int FM, struct fd_voice *v, int16_t *out,
                                                         int n, const struct seg *s, const struct flt *nf)
 {
@@ -192,8 +204,141 @@ static inline __attribute__((always_inline)) void run_v(const int NOISE, const i
     v->dcy = dcy;
 }
 
+static inline int32_t clamp15(int32_t x)
+{
+    return x > 32767 ? 32767 : x < -32767 ? -32767 : x;
+}
+
+/* METAL's six squares and GRIND's square for a run, scaled by their weights, into fd_src[] (Q0, added to the filter's
+ * source): small loops (three phases each in registers), so the main loop below keeps its state in registers.
+ * Each square is +-3861 (six: RMS ~ white noise's); GRIND's is +-9459 (the same RMS). */
+static int16_t fd_src[BLOCK] RAM;           /* render calls come one at a time (TE's audio thread) */
+
+static void squares(struct fd_voice *v, int n, const struct flt *nf)
+{
+    int16_t *d = fd_src;
+    if (nf->wm) {
+        uint32_t a = v->mt[0], b = v->mt[1], c = v->mt[2];
+        const uint32_t ia = nf->mi[0], ib = nf->mi[1], ic = nf->mi[2];
+        for (int i = 0; i < n; i++) {       /* count the negative halves: 0 .. -3 */
+            a += ia;
+            b += ib;
+            c += ic;
+            d[i] = (int16_t)(((int32_t)a >> 31) + ((int32_t)b >> 31) + ((int32_t)c >> 31));
+        }
+        v->mt[0] = a;
+        v->mt[1] = b;
+        v->mt[2] = c;
+        a = v->mt[3];
+        b = v->mt[4];
+        c = v->mt[5];
+        const uint32_t ja = nf->mi[3], jb = nf->mi[4], jc = nf->mi[5];
+        const int32_t u = nf->unit, mh = nf->mh;
+        int32_t lpm = v->mlp;
+        for (int i = 0; i < n; i++) {
+            a += ja;
+            b += jb;
+            c += jc;
+            int32_t neg = d[i] + ((int32_t)a >> 31) + ((int32_t)b >> 31) + ((int32_t)c >> 31);
+            int32_t x = u * (6 + 2 * neg);                        /* +-23166 at most */
+            lpm += ((x - lpm) * mh) >> 15;                         /* high-pass: x minus its low-pass */
+            d[i] = (int16_t)clamp15(x - lpm);
+        }
+        v->mlp = lpm;
+        v->mt[3] = a;
+        v->mt[4] = b;
+        v->mt[5] = c;
+    } else {
+        for (int i = 0; i < n; i++)
+            d[i] = 0;
+    }
+    if (nf->wsq) {
+        uint32_t g = v->gph;
+        const uint32_t gi = nf->gi;
+        const int32_t w = (nf->wsq * 9459) >> 15;                 /* RMS = white noise's */
+        for (int i = 0; i < n; i++) {
+            g += gi;
+            d[i] = (int16_t)clamp15(d[i] + ((int32_t)g < 0 ? -w : w));
+        }
+        v->gph = g;
+    }
+}
+
+/* The harsh path (any of FEEDBACK, SQUARE, METAL, GRIND): the modulator fed back on itself (beta x the mean of its last
+ * two outputs, as the DX7), the carrier driven into a clip (gc), the filter's source white noise plus (SRC) fd_src[],
+ * and the filtered source ring-modulated with the voice (gr). Every term is halved before the sum (three terms: int32
+ * headroom), the filtered source clamped to Q15. */
+static inline __attribute__((always_inline)) void run_hv(const int SRC, struct fd_voice *v, int16_t *out, int n,
+                                                         const struct seg *s, const struct flt *nf)
+{
+    uint32_t cph = v->cph, mph = v->mph, ci = v->cinc, mi = v->minc, seed = v->seed;
+    int32_t gt = v->gt, gn = v->gn, gm = v->gm, gf = v->gf, gc = v->gc, gr = v->gr;
+    int32_t lp = v->lp, bp = v->bp, dcx = v->dcx, dcy = v->dcy, m1 = v->m1, m2 = v->m2;
+    const int32_t f = nf->f, q = nf->q, wl = nf->wl, wb = nf->wb, wh = nf->wh, wx = nf->wx, go = nf->go;
+    const int16_t *sx = fd_src;
+    for (int i = 0; i < n; i++) {
+        int32_t ms = fsin(mph + (uint32_t)(m1 + m2) * (uint32_t)gf);
+        m2 = m1;
+        m1 = ms;
+        int32_t cc = clamp15((fsin(cph + (uint32_t)ms * (uint32_t)gm) * gc) >> 10);
+        int32_t y = (cc * (gt >> 8)) >> 1;
+        seed = seed * 1664525u + 1013904223u;
+        int32_t src = (wx * ((int32_t)seed >> 17)) >> 15;          /* white, +-16384 */
+        if (SRC)
+            src += sx[i];
+        lp += (f * bp) >> 15;
+        int32_t hp = src - lp - ((q * bp) >> 15);
+        bp += (f * hp) >> 15;
+        int32_t nz = clamp15((((wl * lp + wb * bp + wh * hp) >> 12) * go) >> 8);
+        y += (nz * (gn >> 8)) >> 1;
+        y += ((nz * cc) >> 15) * (gr >> 8);                         /* ring-mod, x2 (halved like the rest) */
+        y >>= 6;                                                    /* Q23 */
+        dcy = y - dcx + qmul(DC_R, dcy);
+        dcx = y;
+        out[i] = soft_knee(dcy >> 8);
+        cph += ci;
+        mph += mi;
+        ci += s->dci;
+        mi += s->dmi;
+        gt += s->dgt;
+        gn += s->dgn;
+        gm += s->dgm;
+        gf += s->dgf;
+        gc += s->dgc;
+        gr += s->dgr;
+    }
+    v->cph = cph;
+    v->mph = mph;
+    v->cinc = ci;
+    v->minc = mi;
+    v->seed = seed;
+    v->gt = gt;
+    v->gn = gn;
+    v->gm = gm;
+    v->gf = gf;
+    v->gc = gc;
+    v->gr = gr;
+    v->lp = lp;
+    v->bp = bp;
+    v->dcx = dcx;
+    v->dcy = dcy;
+    v->m1 = m1;
+    v->m2 = m2;
+}
+
 static void run(struct fd_voice *v, int16_t *out, int n, const struct seg *s, const struct flt *nf)
 {
+    int harsh = v->gf || s->dgf || v->gc != 1024 || s->dgc || v->gr || s->dgr || nf->wm || nf->wsq || nf->wx != 32767;
+    if (harsh) {
+        if (nf->wm || nf->wsq) {
+            squares(v, n, nf);
+            run_hv(1, v, out, n, s, nf);
+        } else {
+            run_hv(0, v, out, n, s, nf);
+        }
+        return;
+    }
+    v->m1 = v->m2 = 0;                      /* the clean path has no feedback (gf is 0 here) */
     int noise = v->gn || s->dgn, fm = v->gm || s->dgm;
     if (noise && fm)
         run_v(1, 1, v, out, n, s, nf);
@@ -218,13 +363,18 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
         v->choke = 0;
         if (!v->age) {
             v->cph = v->mph = 0;
-            v->gt = v->gn = v->gm = 0;
+            v->gt = v->gn = v->gm = v->gf = v->gr = 0;
+            v->gc = 1024;
+            v->m1 = v->m2 = 0;
             v->lp = v->bp = 0;
         }
         v->age = 1;
         v->aenv = v->menv = v->senv = ENV1;
-        if (!v->seed)
+        if (!v->seed) {
             v->seed = 0x2545F491u + vi * 0x9E3779B9u;
+            for (int j = 0; j < 6; j++)     /* METAL's squares free-run from spread phases */
+                v->mt[j] = v->seed * (uint32_t)(2 * j + 1);
+        }
     }
     if (!v->age) {
         for (int i = 0; i < BLOCK; i++)
@@ -240,7 +390,8 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     /* pitch: K0 plus the sweep; carrier and modulator increments at the block's end (and start, for a new note) */
     int32_t sw = fd_sweep_q(p[FD_SWEEP]);
     uint32_t r = fd_ratio[fd_pos(p[FD_RATIO]) >> 10];
-    uint32_t ci1 = inc_of(p[FD_PITCH] + ((sw * (s1 >> 15)) >> 15)), mi1 = mul_ratio(ci1, r);
+    int32_t q1 = p[FD_PITCH] + ((sw * (s1 >> 15)) >> 15);
+    uint32_t ci1 = inc_of(q1), mi1 = mul_ratio(ci1, r);
     if (fresh) {
         v->cinc = inc_of(p[FD_PITCH] + sw);
         v->minc = mul_ratio(v->cinc, r);
@@ -249,42 +400,110 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     uint32_t fm = ((fc >> 4) * (r >> 4)) >> 8;
     int32_t mute = fm >= M_MUTE ? 0 : fm <= M_FADE ? 32767 : (int32_t)((M_MUTE - fm) >> 1);
 
-    /* index: FM x velocity (0.5 .. 1) x the modulator envelope, then the limits */
-    int32_t ipk = (fd_index_q8(p[FD_FM]) * (16384 + (v->vel >> 1))) >> 15;
-    int32_t i1 = limit_index((ipk * (m1 >> 15)) >> 15, mute, fc, fm);
-    int32_t gm1 = (i1 * RAD) >> 8;
-    int32_t gm0 = fresh ? (limit_index(ipk, mute, fc, fm) * RAD) >> 8 : 0;
+    /* FEEDBACK and SQUARE (FM's top zones): feedback beta, the carrier's clip gain and its level */
+    int32_t kf = fd_pos(p[FD_FM]), beta = 0, gc1 = 1024, comp = 32767, isc = 4096;
+    if (kf >= FD_FB0) {
+        const uint16_t *z = fd_fmz + ((kf - FD_FB0) >> 7) * FD_FMZ_W;
+        beta = z[0];
+        gc1 = z[1];
+        comp = z[2];
+        isc = z[3];
+    }
+    /* the limiter counts the fed-back modulator's harmonics: fm x (1 + beta / 4), beta up to 3 rad */
+    uint32_t fml = fm + (((fm >> 4) * (uint32_t)(beta > 768 ? 768 : beta)) >> 6);
 
-    /* noise: NOISE's 65 points, interpolated */
-    int32_t kn = fd_pos(p[FD_NOISE]), nf9 = kn & 511;
-    const int32_t *n0 = fd_noise + (kn >> 9) * FD_NOISE_W, *n1 = n0 + FD_NOISE_W;
-#define LERP(j) (n0[j] + (((n1[j] - n0[j]) * nf9) >> 9))
-    int32_t tone = LERP(0), nlev = LERP(1), clap = LERP(7);
-    struct flt nf = { LERP(2), LERP(3), LERP(4), LERP(5), LERP(6) };
+    /* index: FM x velocity (0.5 .. 1) x the modulator envelope, then the limits */
+    int32_t ipk = (((fd_index_q8(p[FD_FM]) * isc) >> 12) * (16384 + (v->vel >> 1))) >> 15;
+    int32_t i1 = limit_index((ipk * (m1 >> 15)) >> 15, mute, fc, fml);
+    int32_t gm1 = (i1 * RAD) >> 8;
+    int32_t gm0 = fresh ? (limit_index(ipk, mute, fc, fml) * RAD) >> 8 : 0;
+    /* feedback depth (phase units per Q15 of m1 + m2: beta / 2 x RAD), following the index's envelope's square root
+     * (so a short FMDEC still leaves the grit audible) */
+    int32_t gf1 = beta ? (((beta * (int32_t)isqrt32((uint32_t)m1)) >> 15) * RAD) >> 9 : 0, gf0 = (beta * RAD) >> 9;
+
+    /* noise: NOISE's 129 points, interpolated, one detent ahead (a zone's first detent is already in it) */
+    int32_t kn = fd_noise_sound(p[FD_NOISE]);
+    int32_t nf8 = kn & 255;
+    const uint16_t *n0 = fd_noise + (kn >> 8) * FD_NOISE_W, *n1 = n0 + FD_NOISE_W;
+#define LERP(j) ((int32_t)n0[j] + ((((int32_t)n1[j] - (int32_t)n0[j]) * nf8) >> 8))
+    int32_t tone = LERP(0), nlev = LERP(1), clap = LERP(7), ring = LERP(11), gu = LERP(12);
+    struct flt nf;                          /* (field by field: an initialiser would call memset) */
+    nf.f = LERP(2);
+    nf.q = LERP(3);
+    nf.wl = LERP(4);
+    nf.wb = LERP(5);
+    nf.wh = LERP(6);
+    nf.wx = LERP(8);
+    nf.wm = LERP(9);
+    nf.wsq = LERP(10);
+    nf.gi = 0;
+    nf.go = 256;
+    nf.mh = LERP(13);
 #undef LERP
+    if (nf.wm) {                            /* METAL: the 808's ratios from PITCH / 2 (with the sweep), within
+                                             * FD_METAL_LOW .. TOP: the band sits on the squares' harmonics */
+        int32_t qm = q1 - 6144;
+        qm = qm < FD_METAL_LOW ? FD_METAL_LOW : qm < FD_METAL_TOP ? qm : FD_METAL_TOP;
+        uint32_t base = inc_of(qm);
+        for (int j = 0; j < 6; j++)
+            nf.mi[j] = mul_ratio(base, fd_metal_ratio[j]);
+        /* level: fd_metal_gain by the cluster's octave and NOISE's position from METAL's start (512 apart) */
+        int32_t oq = ((qm < FD_METAL_OCT0 ? 0 : qm - FD_METAL_OCT0) * 43691) >> 20;     /* octaves Q8 (/ 6144) */
+        int32_t tq = (kn - 20480) >> 1;                                                  /* points Q8 */
+        oq = oq > FD_METAL_OCTS << 8 ? FD_METAL_OCTS << 8 : oq;
+        tq = tq < 0 ? 0 : tq > (FD_METAL_TN - 1) << 8 ? (FD_METAL_TN - 1) << 8 : tq;
+        int32_t oi = oq >> 8, ti = tq >> 8, of = oq & 255, tf = tq & 255;
+        int32_t oj = oi < FD_METAL_OCTS ? oi + 1 : oi, tj = ti < FD_METAL_TN - 1 ? ti + 1 : ti;
+        const uint16_t *g0 = fd_metal_gain + oi * FD_METAL_TN, *g1 = fd_metal_gain + oj * FD_METAL_TN;
+        int32_t ga = g0[ti] + (((g0[tj] - g0[ti]) * tf) >> 8), gb = g1[ti] + (((g1[tj] - g1[ti]) * tf) >> 8);
+        int32_t gq = ga + (((gb - ga) * of) >> 8);                                       /* Q12 */
+        nf.unit = (nf.wm * 3861) >> 15;
+        int32_t w2 = (nf.wm * nf.wm) >> 15;                     /* the squares' share of the source's power, */
+        w2 = (w2 * w2) >> 15;                                   /* squared: the boost follows the crossfades late */
+        nf.go = (4096 + (((gq - 4096) * w2) >> 15)) >> 4;
+    }
+    if (nf.wsq) {                           /* GRIND: max(80 Hz, PITCH / 2) .. PITCH x sqrt 2, unsteady: +-10 %,
+                                             * a new value every 8 blocks (12 ms), glided */
+        int32_t g0 = q1 - 6144 > FD_GRIND_LOW ? q1 - 6144 : FD_GRIND_LOW;
+        uint32_t gi = inc_of(g0 + (((q1 + 3072 - g0) * gu) >> 15));
+        uint32_t s8 = (v->age >> 3) + vi * 977u;
+        int32_t ja = (int32_t)((s8 * 2654435761u) >> 26) - 32, jb = (int32_t)(((s8 + 1) * 2654435761u) >> 26) - 32;
+        int32_t jit = ja + (((jb - ja) * (int32_t)(v->age & 7)) >> 3);
+        nf.gi = gi + (uint32_t)((((int32_t)(gi >> 8)) * jit * 13) >> 4);
+    }
     uint32_t b = v->age - 1;
     int32_t cm = b < FD_CLAP_N ? fd_clap[b] : 32767;
     int32_t cmul = 32767 - clap + ((clap * cm) >> 15);
 
     /* gains at the end of the block */
     int32_t amp = ((a1 >> 15) * v->vel) >> 15;
-    int32_t gt1 = ((((amp * tone) >> 15) * FD_TONE) >> 15) << 8;   /* Q23: ramps of small gains stay exact */
+    int32_t tlev = comp >= 32767 ? FD_TONE : (FD_TONE * comp) >> 15;
+    int32_t gt1 = ((((amp * tone) >> 15) * tlev) >> 15) << 8;     /* Q23: ramps of small gains stay exact */
     int32_t gn1 = ((((amp * nlev) >> 15) * cmul) >> 15) << 8;
+    int32_t gr1 = ((amp * ring) >> 15) << 8;
 
     struct seg s;
     if (fresh) {                            /* attack: to the start values over ATTACK samples, then the block */
         int32_t a0 = ((ENV1 >> 15) * v->vel) >> 15;
-        int32_t gt0 = ((((a0 * tone) >> 15) * FD_TONE) >> 15) << 8;
+        int32_t gt0 = ((((a0 * tone) >> 15) * tlev) >> 15) << 8;
         int32_t gn0 = ((((a0 * nlev) >> 15) * (32767 - clap + ((clap * 32767) >> 15))) >> 15) << 8;
+        int32_t gr0 = ((a0 * ring) >> 15) << 8;
         s.dgt = (gt0 - v->gt) >> 5;
         s.dgn = (gn0 - v->gn) >> 5;
         s.dgm = (gm0 - v->gm) >> 5;
+        s.dgf = (gf0 - v->gf) >> 5;
+        s.dgc = (gc1 - v->gc) >> 5;
+        s.dgr = (gr0 - v->gr) >> 5;
         s.dci = s.dmi = 0;
         run(v, out, ATTACK, &s, &nf);
+        v->gc = gc1;
         /* the remaining 96 samples: x 683 / 65536 = 1 / 96 */
         s.dgt = ((gt1 - v->gt) >> 8) * 683 >> 8;
         s.dgn = ((gn1 - v->gn) >> 8) * 683 >> 8;
         s.dgm = ((gm1 - v->gm) >> 8) * 683 >> 8;
+        s.dgf = ((gf1 - v->gf) >> 8) * 683 >> 8;
+        s.dgc = 0;
+        s.dgr = ((gr1 - v->gr) >> 8) * 683 >> 8;
         s.dci = (uint32_t)((((int32_t)(ci1 - v->cinc)) >> 10) * 683 >> 6);
         s.dmi = (uint32_t)((((int32_t)(mi1 - v->minc)) >> 10) * 683 >> 6);
         run(v, out + ATTACK, BLOCK - ATTACK, &s, &nf);
@@ -292,6 +511,9 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
         s.dgt = (gt1 - v->gt) >> 7;
         s.dgn = (gn1 - v->gn) >> 7;
         s.dgm = (gm1 - v->gm) >> 7;
+        s.dgf = (gf1 - v->gf) >> 7;
+        s.dgc = (gc1 - v->gc) >> 7;
+        s.dgr = (gr1 - v->gr) >> 7;
         s.dci = (uint32_t)((int32_t)(ci1 - v->cinc) >> 7);
         s.dmi = (uint32_t)((int32_t)(mi1 - v->minc) >> 7);
         run(v, out, BLOCK, &s, &nf);
@@ -300,6 +522,9 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     v->gt = gt1;
     v->gn = gn1;
     v->gm = gm1;
+    v->gf = gf1;
+    v->gc = gc1;
+    v->gr = gr1;
     v->cinc = ci1;
     v->minc = mi1;
     v->aenv = a1;
@@ -314,7 +539,8 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
 
 static int choke_member(const int16_t *key_params, int32_t key)
 {
-    return key >= FD_CHOKE_LO && key <= FD_CHOKE_HI && fd_noise_zone_of(key_params[FD_NOISE]) == 3;
+    int z = fd_noise_zone_of(key_params[FD_NOISE]);
+    return key >= FD_CHOKE_LO && key <= FD_CHOKE_HI && (z == NZ_HAT || z == NZ_METAL);
 }
 
 /* key_params = &params[slot][key][0] (TE's per-key array, 24 x 8 per slot); the key comes from TE's voice array */

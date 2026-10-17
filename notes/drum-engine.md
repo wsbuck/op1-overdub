@@ -202,7 +202,7 @@ How the drum sound browser (the preset list a drum slot loads from) builds its c
   only once it has a `synth_presets` folder).
 - **fmdrum's column (DRUMFM3):** build_slot.py inserts a drum engine's kits with folder = the engine name, so the
   browser shows `dbox`, `drum`, `fmdrum`, `user`. dprobe keeps replacing `whathump` in dbox (a test probe; moving
-  it would only need the same folder change). Limits unchanged: the 58 count is over all folders (factory 28,
+  it would only need the same folder change). Limits unchanged: the 58 count is over all folders (factory 28, 29 from test image 82;
   user 30); no per-folder limit was found. Edge case (Hypothesis): a sampler kit imported over USB into a disk folder
   named `fmdrum` would share our column (the browser only groups by name).
 - Rejected: a `drum_types` row (feeds the type browser, not this one, and makes new sounds from `knobs`, not
@@ -244,7 +244,8 @@ A real drum engine on the DRUMPROBE/SAVEPROBE route: `src/slot/fmdrum.c` (+ `fmd
 - DB: `"kits"` adds one preset per kit in the engine's own folder (`fmdrum` since DRUMFM3, `dbox` before; "Browser
   columns"), patch fields from a stock dbox template, type fmdrum; every
   per-key value is checked against the stock dbox presets' column range; factory drum presets are capped at
-  MAX_FACTORY_DRUM_PRESETS = 28 (stock 24 + 4 kits), so users keep room for 30 saved drum sounds (was 34).
+  MAX_FACTORY_DRUM_PRESETS = 28 (stock 24 + 4 kits), so users keep room for 30 saved drum sounds (was 34); 29 with
+  the fifth kit (test image 82): room for 29.
 - Sim: `src/slot/test/drumhooks_check.py` (factory per id with TE's frame and assert path, validator, screen dispatch,
   register preservation); knobhook_check covers two type names; drumprobe_check unchanged.
 
@@ -265,18 +266,18 @@ velocity and a trigger count that render picks up.
 |---|---|---|
 | K0 blue | PITCH | 512 per semitone (dbox's own convention), 0 = A3 220 Hz: 14 Hz .. 3.6 kHz |
 | K1 green | SWEEP | pitch starts 0 .. +48 semitones above, quadratic (half = +12) |
-| K2 white | FM | peak index 0 .. 16 rad, quadratic (half knob = 4 rad); velocity scales it 0.5 .. 1 |
+| K2 white | FM | peak index 0 .. 16 rad over detents 0..20, quadratic (detent 10 = 4 rad); velocity scales it 0.5 .. 1; then FEEDBACK 1..7 (detents 21..27) and SQUARE 1..5 (28..32): "Harsh zones" below |
 | K3 orange | DECAY | amplitude (tone and noise) T60 15 ms .. 4 s, exponential |
 | K4 SHIFT+blue | RATIO | modulator : carrier, 32 steps (1024 each): the 15 harmonic ratios (n/2: 0.5 .. 15.5, TONE) rising, then the 17 inharmonic ones (0.71 .. 9.42: sqrt 2, 2.76, pi, 5.19, ...; METAL) rising |
 | K5 SHIFT+green | SWDEC | sweep time constant 1 .. 300 ms, exponential |
 | K6 SHIFT+white | FMDEC | the FM index's own decay, T60 3 ms .. 3 s, exponential |
-| K7 SHIFT+orange | NOISE | 0..1023 OFF; AIR to 8191 (dark lp->bp 300 Hz..1.5 kHz, level to 0.55, under the tone); SNARE to 16383 (band 1.5..5 kHz, level to 1, tone kept); HAT to 24575 (bright bp->hp 5..9 kHz, the tone fades out); CLAP above (noise only, the band falls back to 1.2 kHz and narrows, three bursts 8.7 ms apart fade in). Stock dbox values stop at 32255: still CLAP |
+| K7 SHIFT+orange | NOISE | by detent: OFF 0; AIR 1-4 (dark lp->bp 300 Hz..1.5 kHz, level to 0.55, under the tone); SNARE 5-9 (band 1.5..5 kHz, level to 1, tone kept); HAT 10-14 (bright bp->hp 5..9 kHz, the tone fades out); CLAP 15-19 (noise only, the band falls back to 1.2 kHz and narrows, three bursts 8.7 ms apart fade in); METAL 20-25; GRIND 26-32 ("Harsh zones"). The sound runs one detent ahead of the knob (each zone's first detent is already in it, its last is the zone at full). Stock dbox values stop at 32255: GRIND. Until FX4 the zones were OFF < 1024, then 8192 each from 1024 |
 TE's LFO reaches K0-K3 only (knob-hook.md): PITCH, SWEEP, FM, DECAY. Noise shares DECAY (one amplitude envelope):
 snares may sound flat where a real snare's rattle outlasts its body (device question in LOG 65).
 
 ### Hi-hat choke
-Keys 10..13 are a choke group: a note-on there on a key whose NOISE is in the HAT zone sets `choke` on every other
-sounding voice of the group in the HAT zone (the same key too: one hi-hat); render then decays it with a 5 ms T60
+Keys 10..13 are a choke group: a note-on there on a key whose NOISE is in the HAT or METAL zone sets `choke` on every
+other sounding voice of the group in the HAT or METAL zone (the same key too: one hi-hat); render then decays it with a 5 ms T60
 (ramped per block, no click). Keys outside 10..13 and group keys without HAT noise are never choked. note-on reads the
 other keys' values through its `key_params` pointer (TE's [slot][key][8] row, so the same slot).
 
@@ -307,3 +308,95 @@ decay T60s; noise zones; clap bursts; velocity; no clicks on knob changes or ret
 one sample >= 32000 in 6.1 M; the hi-hat choke (6 ms after the closing hit; not across key 14, a SNARE-zone hit or a
 group key without HAT noise); RATIO's order; NOISE's stock maximum still CLAP; no libgcc calls; worst render 21,000
 cycles per call (164 per sample; tone-only keys ~85); ABI.
+
+## fmdrum harsh zones (2026-10-16/17, test image 82)
+Goal: much further into harsh, industrial metal, with the same 8 knobs and meanings. Design approved by the user;
+details below are as built after two sound and two UX review rounds.
+
+### FM (K2, white): musical, then FEEDBACK, then SQUARE
+| detents | zone | readout (title / value row) | sound |
+|---|---|---|---|
+| 0..20 | musical | `FM 4.0` / `4.0` | index 16 rad x (k / 20480)^2 (detent 10 = 4 rad, 20 = 16 rad): the old range, squeezed into 20 detents |
+| 21..27 | FEEDBACK 1..7 | `FM FEEDBACK 3` / `FB3` | the modulator reads the mean of its last two outputs x beta (DX7): beta 1.0, 1.9, 2.7, 3.3, 3.9, 4.6, 6.0 (chaos from ~4.3: grit, saw, then noise); the index x (1 + beta / 4); the feedback follows the square root of the FM envelope (FMDEC) |
+| 28..32 | SQUARE 1..5 | `FM SQUARE 2` / `SQ2` | the carrier clipped (gain 1 .. 32 x, level-matched to the sine), beta falls 6 -> 4.3, FEEDBACK 7's index |
+A value between detents shows the next level. Sound is continuous in k (tables `fd_fmz`, 128 raw apart; feedback,
+clip gain, index ramp per sample), so TE's LFO sweeps it smoothly. The index limiter counts the fed-back modulator's
+harmonics (fm x (1 + beta / 4), beta <= 3). Only the harsh loop (`run_hv`) has feedback and the clip: clean keys run
+the old loop bit for bit.
+
+### NOISE (K7): METAL and GRIND after CLAP
+- Zones on detents (`fd_noise_edge`): OFF 0, AIR 1-4, SNARE 5-9, HAT 10-14, CLAP 15-19, METAL 20-25, GRIND 26-32;
+  the path is a 129-point table (`fd_noise`, 256 raw apart, 14 columns) read at K7 + 1023 (`FD_NOISE_SHIFT`).
+- METAL: the 808 recipe. Six squares at the 808's ratios (205.3 .. 800 Hz / 205.3) from PITCH / 2 (with the sweep),
+  within 100 Hz .. 1.6 kHz; crossfaded (equal power) from CLAP's noise over the zone's first half; band-passed
+  1.2 -> 11 kHz (damping 0.6 -> 0.5); over the top 40 % the squares are first high-passed (one pole, to 3 kHz: an
+  808 hat's band-pass then high-pass, without passing the edges); ring-modulated with the FM voice (0.3, x2 scale);
+  the FM body comes in to 0.45 by mid-zone and falls to 0 at the top (hats). Level: `fd_metal_gain` [cluster
+  octave][position] makes the band-passed squares 1.15 x as loud as white noise in the same band (they thin out
+  above their fundamentals: up to ~20 dB quieter), applied after the filter in proportion to the squares' share.
+- GRIND: back to white noise; the band falls to a 150 Hz high-pass (no sub); then a square comes in (RMS = white
+  noise's) whose pitch rises from max(80 Hz, PITCH / 2) to PITCH x sqrt 2, unsteady (+-10 %, a new value every 8
+  blocks, glided); everything ring-modulated with the voice (0.3; body tone 0.35). The noise is lifted mid-zone so GRIND's level is
+  flat.
+- Choke: METAL keys on 10..13 choke like HAT keys (and each other). GRIND keys never choke.
+- Screen: FEEDBACK tears the head and the FM rosette and throws sparks off the rim (2 per level); SQUARE flattens
+  the petals and calms the tear as the feedback falls; METAL turns the shell's lugs into six hex nuts (rattling while
+  it plays); GRIND sprays angle-grinder sparks off the right rim (8 .. ~27 streaks). Classes: GRIND, CRASH (METAL with
+  a long decay); METAL reads CLAP while the bursts last, TOM / SNARE under ~250 Hz, HAT when short and bright; noise
+  off with FEEDBACK 5+ or SQUARE above a kick reads ZAP.
+
+### Old kits and saved sounds
+- The four old kits are written in the old scales in gen_fmdrum.py (`key()`) and remapped: FM to the K2 with the same
+  Q8 index (exact), NOISE zone by zone (minus the one-detent shift). Against renders of FX4's engine (commit
+  a9935e4): residual <= -51 dB, third-octave spectra within 0.08 dB (fmdrum_check `--ref`).
+- **User-saved fmdrum sounds are not remapped** (nothing marks the old scale): an old FM value now gives more index
+  (old half knob 4 rad -> 16 rad; old FM above ~6.25 rad lands in FEEDBACK / SQUARE), and old NOISE values land in
+  other zones (old HAT -> CLAP / METAL, old CLAP -> METAL / GRIND). Reload factory kits or re-tune saves.
+
+### Cost
+Sim, per render call: clean keys as before (~172 cycles / sample worst, 89 for a sine); harsh keys ~227 (FEEDBACK /
+SQUARE) to 292 (FEEDBACK + SQUARE + METAL + GRIND's square). 12 voices at once, all harsh: worst block 440 k cycles
+(287 per sample per voice); fm industrial's 12 heaviest keys 409 k; the old kits 220 .. 251 k. Budget: 600 per sample per voice (simrun); device total ~0.96 M cycles per
+block for all render calls (LOG 5). Device / sim ratio was 2.3 x for DRUMPROBE (unmeasured for fmdrum): a full kit of
+harsh voices could reach the device's limit; device check in LOG 82.
+
+### Review log
+Round 1 (sound: industrial sound designer / DSP; UX: OP-1 player / TE designer), on the first build:
+- Sound, done: kit balance (snares/hats/toms 6-9 dB under the kicks): METAL level 1.0 and its gain x1.25 (not the
+  asked +6 dB: the hats' attacks then clip; measured); METAL body tone (0.45, was 0.15) tapering at the top; METAL
+  top high-passed (as a pre-filter high-pass, not the SVF's high-pass output, which passed the squares' edges and
+  clipped); the gain moved after the filter (the pre-filter clamp made difference tones); the 205 Hz cluster floor
+  lowered to 100 Hz; FEEDBACK betas respaced (chaos from ~4.3: FB7 = 6, was 10, which also removes the crackle near
+  FM 27.4), the index x (1 + beta / 8), SQUARE from beta 6; feedback follows the envelope's square root (short FMDEC
+  keeps the grit); GRIND's square from max(80 Hz, PITCH / 2), jitter +-10 % per 8 blocks glided, a 150 Hz high-pass;
+  METAL reaches its level by mid-zone (the NOISE 18-21 valley); kit keys as suggested (kick 0 FEEDBACK 5, rim decay,
+  hats FM 1 and longer decays, ping quieter, sub kick shorter). Rejected: capping SQUARE's index at 8 rad (tried: it
+  made SQUARE tamer, the opposite of the other complaint that SQUARE drops back); velocity to METAL's band (the
+  OP-1's keys send 127; MIDI only, later). Test fixed: the sweeps decayed before reaching the knob's top (now
+  retriggered every second).
+- UX, done: each NOISE zone's first detent sounded like the zone below (AIR 1 silent, CLAP 15 without bursts, METAL 20
+  a clap): the sound now runs one detent ahead; FM detent 20 shows 16.0, FEEDBACK 1-7 / SQUARE 1-5 (DX7: 0 = none);
+  title "FM FEEDBACK 3" like "FM SQUARE 2"; SQUARE drawn calmer than FB7; the hex nuts (read as bubbles, collided
+  with the sweep arrow) moved onto the shell as lugs; grinder spray from 8 streaks; CRASH its own colour (purple);
+  value-row collisions (times "1.5S", columns moved); classes (CLAP / TOM / SNARE / ZAP rules); kit: tom ladder
+  110/165/245 Hz (key 7 was a second anvil), snare 4 in SNARE, true clap, pedal chick on 11, a "slam" instead of a
+  second sub on 22, fewer METAL keys. Rejected: GRIND pink vs ZAP red (no other distinct non-knob hue in TE's
+  palette); "KEY n" numbering (unchanged, 1-based as before).
+Round 2 (fresh reviewers, same roles), on the round-1 fixes:
+- Sound, done: an engine bug at METAL -> GRIND (GRIND's first table point was a high-pass at 8.5 kHz with METAL's
+  gain: detent 25 glitched to 0 dBFS): GRIND now starts at METAL's top values (band-pass, the squares' high-pass) and
+  fades its own in (`fmdrum_check` now checks every zone join in the path's parameters); hats: METAL's top band 8.5 ->
+  11 kHz, METAL's body tone 0 at the top, kit hats at PITCH 900 (the 441 Hz tink); GRIND's body tone 0.2 -> 0.35;
+  FEEDBACK 1-3 lost bite on bright voices: the index x (1 + beta / 4) and the limiter counts beta / 4; FB1 beta 1.0;
+  kit: kick 0 SQUARE 2 (FEEDBACK 5 was barely audible above 4 kHz), slam in SNARE with SWEEP 24, ping / anvil / scream
+  shorter. Partly: METAL level - the hats came out 1-2 dB under fm 909's (K-weighted); raising them clips the crashes'
+  attacks (METAL gain x1.15, level 1.0 as a compromise; no sample of the kit >= 32000). Rejected: CLAP make-up gain
+  (the old kits' claps would change; a user decision: CLAP is ~9 dB under the snare in every kit); scaling SQUARE's
+  clip down above 1 kHz (the aliasing is the deliberate part of SQUARE).
+- UX, done: the top NOISE detent was dead (the one-detent shift saturated): the shift is taken back across GRIND
+  (detent 31 and 32 now differ); class titles: GRIND, METAL keys go through the pitch / decay rules first (KICK under
+  80 Hz, TOM / SNARE under 250 Hz), HAT up to ~1 s in METAL's upper half, CRASH only there, no CLAP carry-over at
+  detent 20; sparks from FEEDBACK 1 (FB1 had no cue); SQUARE's end now brighter (beta 6 -> 4.3, was -> 3: the top
+  was darker than FB7). Rejected: knob colours in the key strip's class marks (pre-existing, TE's palette has too few
+  non-knob hues for 11 classes); swapping the clank off key 8 (key 8 is the shared layout's rim); CLAP make-up (as
+  above). Device feel (detent size on the drum knobs, harshness on real speakers) is for the LOG 82 checklist.

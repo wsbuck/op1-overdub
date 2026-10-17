@@ -1,8 +1,12 @@
 /* Simulator driver for fmdrum_check.py: plays the fmdrum engine (src/slot/fmdrum.c) like TE's drum voice loop
  * (notes/drum-engine.md), every call through its firmware entry wrapper with fx_abi.S's register sentinels.
- *   fmdrum_main KEY VEL BLOCKS P0 .. P7 [chg BLOCK KNOB VALUE] ... [retrig BLOCK] ...
+ *   fmdrum_main KEY VEL BLOCKS P0 .. P7 [chg BLOCK KNOB VALUE] ... [retrig BLOCK] ... [ramp B0 B1 KNOB V0 V1] ...
  *       one note on voice 3: slot init, note-on, BLOCKS x (render, active); "chg" sets a knob of the key before that
- *       block's render (TE copies the key's params every block), "retrig" sends another note-on before that block
+ *       block's render (TE copies the key's params every block), "retrig" sends another note-on before that block,
+ *       "ramp" moves a knob linearly from V0 at block B0 to V1 at B1 (a slow turn, or TE's LFO)
+ *   fmdrum_main poly BLOCKS N P0..P7 x N
+ *       N voices (0..N-1, keys 0..N-1) start together and all render every block: stdout their mix (sum / 4, clamped),
+ *       stderr "block <worst sum of the N render calls' cycles in one block> call <worst single call>"
  *   fmdrum_main init                              slot init cases (loaded values kept, range row copy)
  *   fmdrum_main choke K1 K2 BLOCK BLOCKS P0..P7 Q0..Q7
  *       voice 3 plays key K1 (values P), voice 4 key K2 (values Q) from BLOCK (hi-hat choke); both render every block;
@@ -83,6 +87,45 @@ static void note_on(int v, int key, int vel, int16_t *kp)
     call(fd_note_on_entry, voices[v], kp, 0);
 }
 
+static int poly_case(int argc, char **argv)
+{
+    static int16_t out[128], params[8], mix[128];
+    int blocks = atoi(argv[2]), n = atoi(argv[3]);
+    if (n < 1 || n > DP_VOICES || argc != 4 + 8 * n)
+        return 2;
+    for (int v = 0; v < n; v++)
+        for (int i = 0; i < 8; i++)
+            te_drum_params[v * 8 + i] = (int16_t)atoi(argv[4 + v * 8 + i]);
+    call(fd_slot_init_entry, (void *)0, 0, 0);
+    for (int v = 0; v < n; v++)
+        note_on(v, v, 127, te_drum_params + v * 8);
+    uint32_t bmax = 0, cmax = 0;
+    for (int b = 0; b < blocks; b++) {
+        int32_t acc[128];
+        uint32_t sum = 0;
+        for (int i = 0; i < 128; i++)
+            acc[i] = 0;
+        for (int v = 0; v < n; v++) {
+            memcpy(params, te_drum_params + v * 8, sizeof params);
+            uint32_t t0 = cycles();
+            call(fd_render_entry, voices[v], out, params);
+            uint32_t dt = cycles() - t0;
+            sum += dt;
+            cmax = dt > cmax ? dt : cmax;
+            for (int i = 0; i < 128; i++)
+                acc[i] += out[i];
+        }
+        bmax = sum > bmax ? sum : bmax;
+        for (int i = 0; i < 128; i++) {
+            int32_t m = acc[i] >> 2;
+            mix[i] = (int16_t)(m > 32767 ? 32767 : m < -32767 ? -32767 : m);
+        }
+        fwrite(mix, 2, 128, stdout);
+    }
+    fprintf(stderr, "block %lu call %lu\n", (unsigned long)bmax, (unsigned long)cmax);
+    return mask ? 1 : 0;
+}
+
 static int choke_case(char **argv)
 {
     static int16_t out[128], params[8];
@@ -127,10 +170,13 @@ int main(int argc, char **argv)
         return init_cases();
     if (argc == 22 && !strcmp(argv[1], "choke"))
         return choke_case(argv);
+    if (argc >= 4 && !strcmp(argv[1], "poly"))
+        return poly_case(argc, argv);
     if (argc < 12)
         return 2;
     int key = atoi(argv[1]), vel = atoi(argv[2]), blocks = atoi(argv[3]), v = 3;
     int chg_b[16], chg_k[16], chg_v[16], nchg = 0, rt_b[8], nrt = 0;
+    int rp_b0[4], rp_b1[4], rp_k[4], rp_v0[4], rp_v1[4], nrp = 0;
     for (int i = 12; i < argc; i++) {
         if (!strcmp(argv[i], "chg") && i + 3 < argc && nchg < 16) {
             chg_b[nchg] = atoi(argv[i + 1]);
@@ -139,6 +185,13 @@ int main(int argc, char **argv)
             i += 3;
         } else if (!strcmp(argv[i], "retrig") && i + 1 < argc && nrt < 8) {
             rt_b[nrt++] = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "ramp") && i + 5 < argc && nrp < 4) {
+            rp_b0[nrp] = atoi(argv[i + 1]);
+            rp_b1[nrp] = atoi(argv[i + 2]);
+            rp_k[nrp] = atoi(argv[i + 3]);
+            rp_v0[nrp] = atoi(argv[i + 4]);
+            rp_v1[nrp++] = atoi(argv[i + 5]);
+            i += 5;
         }
     }
     call(fd_slot_init_entry, (void *)0, 0, 0);
@@ -154,6 +207,10 @@ int main(int argc, char **argv)
         for (int j = 0; j < nchg; j++)
             if (chg_b[j] == b)
                 kp[chg_k[j]] = (int16_t)chg_v[j];
+        for (int j = 0; j < nrp; j++)
+            if (b >= rp_b0[j] && b <= rp_b1[j])
+                kp[rp_k[j]] = (int16_t)(rp_v0[j] + (int)((long long)(rp_v1[j] - rp_v0[j]) * (b - rp_b0[j])
+                                                          / (rp_b1[j] > rp_b0[j] ? rp_b1[j] - rp_b0[j] : 1)));
         for (int j = 0; j < nrt; j++)
             if (rt_b[j] == b)
                 note_on(v, key, vel, kp);
