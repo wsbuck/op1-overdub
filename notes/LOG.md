@@ -1458,3 +1458,61 @@
   7. Edit a key, save a snapshot, reload, power-cycle: edits back.
 - **Cleanup before an image without fmdrum**: as DRUMFM1 (fmdrum and dprobe sounds in slots and saves).
 - Result: _pending user flash_.
+
+## 2026-10-17 — Test image 83: CHORD2.OP1 (CHORD v2 MVP: chord maps, the CHORD page) + CHORD2SAFE.OP1
+- What it is (notes/chord2.md §12 "MVP as built"):
+  - per synth slot OFF / SHAPE / MAP 1..8;
+  - the CHORD page on SHIFT+SPLIT: ROOT, TYPE (a Cycles-style scan), TOP, VOICING; SHIFT+blue MODE, SHIFT+orange BASS;
+  - learn (tap a key, hold SHIFT, play, let go), SPLIT+key clear, SPLIT tap pin, LIFT/DROP copy/paste, SHIFT+LIFT undo;
+  - our voice budget (whole chords only), HOLD latching chords, the A/B file `/yaffs2/user/overdub/chorda.bin|chordb.bin`;
+  - the badge on our engines, the chip on TE's screens, the diagnostic lines (page, SHIFT held).
+  - Six new hooks, all checked against stock at build: the synth controller's press / release / encoder slots
+    (`0x019119A8` / `B8` / `C0`) and the GUI loop's render CALL `0x019AB8B2`. Static analysis, simulator tests and
+    fail-safes per hook in §12 "Hooks". CHORDPROBE was not run: this image is the probe (the diagnostics).
+- `firmware/images/CHORD2.OP1`:
+  - Command: `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum --db-trim va=1
+    --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1 --db-trim
+    harmonic=6 --db-trim fm4=6 --svg-cost --name CHORD2`, all FX.
+  - Built from commit 67dd92b in a clean `git archive` (it includes fmdrum up to d75a20a; 29 factory drum presets, so
+    keep 29 or fewer saved drum sounds, as for DRUMFM4). te-boot is identical to stock.
+  - sha256 5c4e87b20680e3289ff8f6110fd37d3ccce586712d9b4ffe16529b84e221068a.
+- `firmware/images/CHORD2SAFE.OP1`: the same build's bundle, `apply.py --without chord2` (feature mask 3: CHORD works
+  as CHORD1, the new hooks call TE's functions unchanged). te-boot identical to stock.
+  sha256 ce90a5261f0424000ec131f9d8f54d341c75d143958130854d9750f1607d40e0.
+- **Morning test** (riskiest first; report what each step shows). The diagnostics are on the CHORD page while SHIFT
+  is held (two grey lines): line 1 `HOOK F: K: D: SP: LI: DR: UP: DN: CT`, line 2 `FILE <A|B|NONE|BAD|-> L: <seq>
+  SAVE <n> <OK|OPEN|WRITE|CLOSE|TORN|-> MK: VOX H: SHED PG: [FB]`.
+  1. **Boot.** Flash CHORD2, power on. It must boot to the normal screens; nothing of ours shows for the first ~4 s,
+     and all slots start OFF (first boot). If it stops at boot or asserts: flash CHORD2SAFE (or LFOFX1) and report the
+     screen.
+  2. **Frame hook.** On the synth screen with a TE engine (e.g. dr wave), press SHIFT+SPLIT: the CHORD page should
+     cover the screen ("OFF", "SHIFT+BLUE: MODE", a keyboard). Hold SHIFT: report line 1's `F:` (it must count up
+     while you watch) and `CT` / `CT0`.
+     - If nothing shows: switch the slot to one of our engines (va), press SHIFT+SPLIT there. If the page shows now
+       with `FB` at the end of line 2, the frame hook doesn't run: report that, and skip the chip checks.
+  3. **Knobs swallowed.** On the page: SHIFT + blue one detent right = SHAPE, three more = MAP 3. Note the sound's
+     engine knob values first (close the page, T1), reopen, turn all four knobs a lot, close: TE's knobs must be
+     unchanged. Report `K:` (counts turns) and `D:` (the raw delta of a detent, e.g. 1024 or 2048) and whether one
+     detent moves the TYPE scan one step or two.
+  4. **Keys.** On the page tap SPLIT, LIFT, DROP once each and release SHIFT once: `SP:`, `LI:`, `DR:`, `UP:` and `DN:`
+     should each go up. Off the page LIFT / DROP must still be TE's sound copy / paste.
+  5. **File.** After step 3 wait 3 s, hold SHIFT: `SAVE 1 OK`, `MK:0` (directory made). Power-cycle: after ~5 s the
+     chip top right shows "MAP 3" (dim), the page's line 2 shows `FILE A` and its seq, and the slot is back in MAP 3.
+     Make an edit, wait 3 s (`SAVE` +1), power-cycle again: `FILE B` (alternates) with the edit kept. Report any
+     `OPEN` / `WRITE` / `BAD` / `NONE` and the `L:` count.
+  6. **Chip on TE's screens.** With slot in MAP 3, look at the synth, tape, mixer and FX screens: a small dim "MAP 3"
+     top right; playing a chord shows its name there (framed blue; red while HOLD is on). Does it cover anything of
+     TE's? On the drum screen (drum play mode) nothing shows. Photo if it collides.
+  7. **Voices and HOLD.** MAP 3 (NEO SOUL): play F, then Ab, then Bb in turn and hold two at once: no half chords; the
+     page's `VOX` stays <= 6 and `SHED` counts what was let go. HOLD on (SHIFT+T2), tap F (latched), play a melody in
+     the upper octave: the pad keeps sounding whole. Use a long-release sound and change chords: listen for a pad note
+     dropping out (TE stealing a kept note in its release tails).
+  8. **Octave edge.** Hold a chord, press octave up / down to the extremes and release: no hung note.
+  9. **Usage** (as the reviews' scenarios):
+     - MAP 2 II-V-I: F G A = G-7 C7 F^7 voice-led;
+     - on the page hold C4 and turn green: chords change as you turn (MAJ, MIN, MAJ7, 7, ...);
+     - tap a key, hold SHIFT, play a chord, let go: "LEARNED";
+     - SPLIT + a key clears it; SHIFT+LIFT undoes, again redoes;
+     - SPLIT tapped alone pins the edited key (blue padlock).
+  10. **SAFE twin.** If anything above misbehaves, CHORD2SAFE gives CHORD1 exactly (SHIFT + notes learn a shape).
+- Result: _pending user flash_.
