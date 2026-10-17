@@ -411,8 +411,8 @@ static void t_model(void)
     ok = 1;
     for (int q = Q_FIRST_WIDE; q < Q_COUNT; q++)
         ok &= c2_scan_pos(q) < 0 && c2_scan_q(c2_scan_pos(q)) == q;
-    CHECK(ok && c2_scan_q(-1) == Q_P8 && c2_scan_q(-2) == Q_M10 && c2_scan_q(-3) == Q_MIN10 && c2_scan_q(-7) == Q_TT &&
-          C2_SCAN_MIN == -7, "TYPE scan: the WIDE group left of NOTE: P8, M10, -10, P12, M9, M13, TT");
+    CHECK(ok && c2_scan_q(-1) == Q_P8 && c2_scan_q(-2) == Q_M10 && c2_scan_q(-3) == Q_MIN10 && c2_scan_q(-4) == Q_MIN7D &&
+          c2_scan_q(-9) == Q_TT && C2_SCAN_MIN == -9, "TYPE scan: the WIDE group left of NOTE: P8, M10, m10, m7, M7, P12, M9, M13, TT");
     int share = 0;
     for (int q = Q_MAJ; q < Q_FIRST_WIDE - 1; q++)
         share += c2_popcount12(c2_mask(c2_q[q].iv, c2_q[q].n, 0) & c2_mask(c2_q[q + 1].iv, c2_q[q + 1].n, 0)) >= 2;
@@ -434,12 +434,12 @@ static void t_intervals(void)
 {
     char b[32], l[32];
     static const struct { int d; const char *tag, *lng; } tab[] = {
-        { 1, "-2", "MINOR 2ND" }, { 2, "M2", "MAJOR 2ND" }, { 3, "-3", "MINOR 3RD" }, { 4, "M3", "MAJOR 3RD" },
-        { 5, "P4", "PERFECT 4TH" }, { 6, "TT", "TRITONE" }, { 7, "5", "PERFECT 5TH" }, { 8, "-6", "MINOR 6TH" },
-        { 9, "M6", "MAJOR 6TH" }, { 10, "-7", "MINOR 7TH" }, { 11, "M7", "MAJOR 7TH" }, { 12, "P8", "OCTAVE" },
-        { 13, "-9", "MINOR 9TH" }, { 14, "M9", "MAJOR 9TH" }, { 15, "-10", "MINOR 10TH" }, { 16, "M10", "MAJOR 10TH" },
+        { 1, "~2", "MINOR 2ND" }, { 2, "M2", "MAJOR 2ND" }, { 3, "~3", "MINOR 3RD" }, { 4, "M3", "MAJOR 3RD" },
+        { 5, "P4", "PERFECT 4TH" }, { 6, "TT", "TRITONE" }, { 7, "5", "PERFECT 5TH" }, { 8, "~6", "MINOR 6TH" },
+        { 9, "M6", "MAJOR 6TH" }, { 10, "~7", "MINOR 7TH" }, { 11, "M7", "MAJOR 7TH" }, { 12, "P8", "OCTAVE" },
+        { 13, "~9", "MINOR 9TH" }, { 14, "M9", "MAJOR 9TH" }, { 15, "~10", "MINOR 10TH" }, { 16, "M10", "MAJOR 10TH" },
         { 17, "P11", "PERFECT 11TH" }, { 18, "A11", "AUG 11TH" }, { 19, "P12", "PERFECT 12TH" },
-        { 20, "-13", "MINOR 13TH" }, { 21, "M13", "MAJOR 13TH" }, { 22, "-14", "MINOR 14TH" },
+        { 20, "~13", "MINOR 13TH" }, { 21, "M13", "MAJOR 13TH" }, { 22, "~14", "MINOR 14TH" },
         { 23, "M14", "MAJOR 14TH" }, { 24, "P15", "2 OCTAVES" }, { 28, "M17", "MAJOR 17TH" },
         { 31, "P19", "PERFECT 19TH" }, { 33, "M20", "MAJOR 20TH" }, { 35, "M21", "MAJOR 21ST" },
     };
@@ -453,7 +453,7 @@ static void t_intervals(void)
         }
         ok &= strlen(b) <= 3;
     }
-    CHECK(ok, "interval names 1..35 semitones: tags <= 3 glyphs (M10, -10, P12, TT, 5) and spelled-out titles");
+    CHECK(ok, "interval names 1..35 semitones: tags <= 3 glyphs (M10, m10, P12, TT, 5) and spelled-out titles");
     int8_t ce[2] = { -12, 4 };           /* on the C4 key: C3 + E4 */
     struct c2_chord w = learned(ce, 2);
     c2_name(b, &w, 7, 0, 0);
@@ -469,6 +469,16 @@ static void t_intervals(void)
     struct c2_chord wo = learned(oct, 3);
     c2_name(b, &wo, 7, 0, 0);
     CHECK(!strcmp(b, "CP15"), "C in three octaves: P15 (%s)", b);
+    struct c2_chord wt = learned(ce, 2);
+    wt.top = 1;
+    int8_t tv[C2_NOTES];
+    notes_of(&wt, tv);
+    c2_name(b, &wt, 7, 0, 0);
+    CHECK(tv[0] == 0 && tv[1] == 16 && !strcmp(b, "CM10"), "a learned 10th's TOP moves it whole by an octave: still CM10 (%s)", b);
+    struct c2_chord wct = learned(ceg, 3);
+    wct.top = -1;
+    notes_of(&wct, tv);
+    CHECK(tv[0] == -24 && tv[2] == -5, "a learned voicing wider than an octave: TOP moves it whole too");
     int8_t one[1] = { 4 };
     struct c2_chord w1 = learned(one, 1);
     c2_name(b, &w1, 7, 0, 2);
@@ -1188,6 +1198,14 @@ static void t_factory_restore(void)
     shift_key(KEY_DROP);
     shift_key(KEY_DROP);
     CHECK(!c2.wr_open, "SHIFT+DROP again closes WRITE");
+    /* a DROP long after SHIFT+DROP is no longer the plain restore: a used map asks first; ~10 s idle closes WRITE */
+    shift_key(KEY_DROP);
+    frames(C2_ARM + 2);
+    c2_press(0, KEY_DROP);
+    CHECK(c2.wr_open && c2.msg == MSG_OVERWRITE && !map_is(2, c2_factory_maps[2]),
+          "SHIFT+DROP, then DROP after ~2.4 s: OVERWRITE? first (no silent restore)");
+    frames(C2_WR_IDLE + 2);
+    CHECK(!c2.wr_open, "WRITE left alone ~10 s closes");
     /* SHIFT+DROP, then DROP: restored, map settings too, sounding chords revoiced */
     struct c2_chord edited[24];
     memcpy(edited, c2.d.maps[2], sizeof edited);
@@ -1774,8 +1792,10 @@ static void strum_setup(int strum)
 }
 static void t_strum(void)
 {
-    /* up 30 ms: C E G B, each 10 ms apart, from the sequencer thread only */
-    strum_setup(3);
+    /* up 30 ms (detent 6): C E G B, each 10 ms apart, from the sequencer thread only */
+    CHECK(c2_strum_spread(6) == 30 && c2_strum_spread(-15) == 120 && c2_strum_spread(19) == 300 && c2_strum_spread(40) == 300,
+          "STRUM detents: 5 ms steps to 40, 10 to 100, then 120 150 200 250 300");
+    strum_setup(6);
     key_dn(7);
     CHECK(c2.owner == 1 && count_sounding() == 0 && log_n == 0, "STRUM on: the key-down sends nothing itself");
     uint32_t t0 = host_time;
@@ -1810,7 +1830,7 @@ static void t_strum(void)
     seq_run(5);
     CHECK(count_sounding() == 0 && bad_off == 0, "release: everything off at the next tick");
     /* down 120 ms, released half way: the notes not reached never sound */
-    strum_setup(-12);
+    strum_setup(-15);
     key_dn(7);
     seq_run(50);
     key_up(7);
@@ -1928,13 +1948,13 @@ static void t_strum(void)
     strum_setup(3);
     key_dn(7);
     uint32_t frozen = host_time;
-    for (int i = 0; i < 200; i++) {
+    for (int i = 0; i < 300; i++) {
         host_time = frozen;
         in_seq = 1;
         c2_seq_tick();
         in_seq = 0;
     }
-    CHECK(count_sounding() == 4 && c2.dg.strum_forced >= 3, "a clock that does not move: every note sent within 128 ticks");
+    CHECK(count_sounding() == 4 && c2.dg.strum_forced >= 3, "a clock that does not move: every note sent within 250 ticks");
     key_up(7);
     seq_run(5);
     /* VoiceCtl locked (preset load): the tick waits, then catches up */
@@ -1979,8 +1999,13 @@ static void t_strum(void)
     shift(1);
     knob(5, 3);
     knob(5, -5);
+    CHECK(c2.d.set[0].strum == 0, "SHIFT+green: a spin from up to down stops at OFF (a wall)");
+    knob(5, -1);
+    CHECK(c2.d.set[0].strum == 0, "... a fast detent stays");
+    frames(12);
+    knob(5, -2);
     shift(0);
-    CHECK(c2.d.set[0].strum == -2 && c2.msg == MSG_STRUM, "SHIFT+green: STRUM -2 = down 20 ms");
+    CHECK(c2.d.set[0].strum == -2 && (c2.msg == MSG_STRUM || c2.msg == MSG_NO_TICK), "after a rest: STRUM -2 = down 10 ms");
     all_up();
     seq_run(5);
 }

@@ -308,6 +308,7 @@ static void c2_wr_open_page(void)
     c2.wr_shift = 0;
     c2.wr_touched = 0;
     c2.wr_arm = 0;
+    c2.wr_open_frame = c2.wr_frame = c2_now() + 1;
     c2.msg = MSG_NONE;
     c2_wr_build();
 }
@@ -332,15 +333,18 @@ static void c2_wr_knob(int knob, int steps)
         c2.wr_to = c2_clampi(c2.wr_to + steps, 0, C2_MAPS - 1);
     c2.wr_touched = 1;
     c2.wr_arm = 0;
+    c2.wr_frame = c2_now();
     c2_wr_build();
 }
 
 /* DROP on the WRITE page. */
 static void c2_wr_drop(void)
 {
-    int to = c2.wr_to, plain = !c2.wr_touched;   /* SHIFT+DROP, DROP: the plain restore, already asked */
+    /* SHIFT+DROP, DROP: the plain restore, already asked; later, or after a knob, a used map asks again */
+    int to = c2.wr_to, plain = !c2.wr_touched && c2_now() + 1 - c2.wr_open_frame <= C2_ARM;
     if (c2.loading)
         return;
+    c2.wr_frame = c2_now();
     if (!plain && !c2_map_empty(to) && !c2_wr_armed()) {
         c2.wr_arm = c2_now() + 1;
         c2_flash(MSG_OVERWRITE, to);
@@ -390,7 +394,7 @@ static void c2_combo(int key)
  * frames in a row; if it then stops for 3 frames, the KeyHandler takes the notes back at its next event and sends the
  * difference itself (dg.takeovers). */
 #define C2_TU_MS 781                   /* c2_time units per ms (512 cycles at 400 MHz) */
-#define C2_STALE_TICKS 128             /* a wanted note waits at most this many ticks (~190 ms), whatever the clock says */
+#define C2_STALE_TICKS 250             /* a wanted note waits at most this many ticks (~360 ms), whatever the clock says */
 #define C2_LIVE 4                      /* GUI frames in a row the tick must have run before strums go through it */
 #define C2_IDLE 3                      /* GUI frames without a tick before the KeyHandler takes over */
 
@@ -496,7 +500,7 @@ static void c2_seq_service(void)
         if (!c2.rel_ref[r] || c2.on[r])
             continue;
         int32_t until = (int32_t)(c2.due[r] - now);
-        int stale = until > 200 * C2_TU_MS || c2.wait[r] >= C2_STALE_TICKS;
+        int stale = until > 400 * C2_TU_MS || c2.wait[r] >= C2_STALE_TICKS;
         if (until > 0 && !stale) {
             c2.wait[r]++;
             pending = 1;
@@ -613,6 +617,7 @@ static uint32_t c2_two_bars(void)
 
 static int8_t c2_kn_upper[C2_MAX] RAM; /* c2_key_notes: the upper notes it chose (key-relative), for SMOOTH */
 static int c2_kn_un RAM;
+static int c2_kn_top RAM;              /* ... and the TOP */
 
 /* The relative notes key `key` plays now (key + interval + REL_OFS, deduplicated, ascending, inside the note range);
  * *chord = 1 for a chord, 0 for its plain note; *bass = index of the BASS note or -1. smooth: a new chord (SMOOTH may
@@ -634,6 +639,7 @@ static int c2_key_notes(int key, uint8_t *rel, int *chord, int *bass, int smooth
         int top = c->top;
         if (sm && c2.smooth_n > 0 && c2.smooth_map == m)
             top = c2_smooth(c, key, c2.smooth_prev, c2.smooth_n);
+        c2_kn_top = top;
         n = c2_notes_t(c, bassf, top, iv, &b);
         int8_t u[C2_MAX];
         int nu = c2_upper(c, top, u);
@@ -784,17 +790,22 @@ static void c2_play(int key, const uint8_t *rel, int n, int chord, int bass)
     c2_track(key, rel, n, chord, bass);
     c2.key_age[key] = ++c2.age;
     c2_let_go(victims);
-    /* STRUM: the whole spread is |strum| x 10 ms; note i of n (from the bottom up, or the top down) starts at
-     * spread x i / (n - 1) (Q8 reciprocals: no division); common tones keep sounding */
+    /* STRUM: the whole spread is c2_strum_ms[|strum|]; note i of n (from the bottom up, or the top down) starts at
+     * spread x i / (n - 1) (Q8 reciprocals: no division); a BASS note always starts at once (with a down strum's
+     * top note, as a left hand would); common tones keep sounding */
     static const uint16_t recip8[C2_NOTES] = { 0, 256, 128, 85, 64 };
     int st = chord && c2.owner ? c2_strum_map() : 0;
     uint32_t step = 0;
     if (st && n > 1) {
-        uint32_t spread = (uint32_t)(st < 0 ? -st : st) * 10u * C2_TU_MS;
+        uint32_t spread = (uint32_t)c2_strum_spread(st) * C2_TU_MS;
         step = (spread * recip8[n - 1]) >> 8;
     }
-    for (int i = 0; i < nn; i++)
-        c2_out(need[i], 1, step * (uint32_t)(st < 0 ? n - 1 - pos[i] : pos[i]));
+    for (int i = 0; i < nn; i++) {
+        int at = st < 0 ? n - 1 - pos[i] : pos[i];
+        if (bass >= 0 && pos[i] == bass)
+            at = 0;
+        c2_out(need[i], 1, step * (uint32_t)at);
+    }
     c2.dg.voices = c2_voice_count();
     c2_view_update();
 }
@@ -1039,6 +1050,8 @@ static void c2_keydown(int32_t *note)
         c2.smooth_map = m;
     }
     n = c2_key_notes(key, rel, &chord, &bass, 1);
+    if (c2.wr_open)
+        c2.wr_frame = c2_now();        /* auditioning keeps WRITE open */
     if (c2.page && !c2.wr_open) {      /* the edited key = the last key pressed, unless pinned */
         c2.last_tap = key;
         if (!c2.pinned)
@@ -1054,6 +1067,8 @@ static void c2_keydown(int32_t *note)
             for (int i = 0; i < c2_kn_un; i++)
                 c2.smooth_prev[i] = c2_kn_upper[i];
             c2.smooth_n = c2_kn_un;
+            c2.smooth_key = key;
+            c2.smooth_top = c2_kn_top;
         }
     }
 }
@@ -1118,6 +1133,8 @@ static int c2_shiftkey(int key)
         c2.split_down = 0;
         c2.turned = -1;
         c2.msg = MSG_NONE;
+        if (c2.page && c2_strum_map() && c2.seq_live < C2_LIVE)
+            c2_flash(MSG_NO_TICK, 1);  /* a strumming map with no sequencer tick: it plays at once */
         return 1;
     }
     if (!c2.page)
@@ -1301,6 +1318,10 @@ static int c2_edit_chord(struct c2_chord *c, int knob, int steps, int bass)
         c->top = (int8_t)c2_clampi(c->top + steps, -lim, lim);
     } else {                           /* VOICING: bipolar; positions that don't exist (or don't fit) are skipped */
         int dir = steps > 0 ? 1 : -1, v = c->voi;
+        if (dir > 0 && !v && !c2.voi_hint) {
+            c2.voi_hint = 1;           /* NIGHT2 had the drops on the right: say it once */
+            c2_flash(MSG_VOI_HINT, 0);
+        }
         for (int s = steps; s != 0; s -= dir) {
             int cand = v + dir;
             for (; cand >= C2_VOI_MIN && cand <= C2_VOI_MAX; cand += dir) {
@@ -1357,14 +1378,22 @@ static void c2_knob_turn(int knob, int steps)
             c2_flash(MSG_MODE, md);
         } else if (m < 0) {
             c2_flash(MSG_TURN_GREEN, 0);
-        } else if (knob == 5) {        /* STRUM: down 120 ms .. off .. up 120 ms, 10 ms a detent */
-            int v = c2_clampi(c2.d.set[m].strum + steps, -12, 12);
+        } else if (knob == 5) {        /* STRUM: down 300 ms .. OFF .. up 300 ms (c2_strum_ms); a wall at OFF */
+            int was = c2.d.set[m].strum, v = c2_clampi(was + steps, -C2_STRUM_MAX, C2_STRUM_MAX);
+            if (was && (was > 0 ? v <= 0 : v >= 0)) {
+                v = 0;                 /* a spin from up to down stops at OFF ... */
+                c2.strum_wall = c2_now() + 1;
+            } else if (!was && v && c2.strum_wall && c2_now() + 1 - c2.strum_wall < 10)
+                v = 0;                 /* ... and rests there ~0.3 s before it goes on */
             if (v != c2.d.set[m].strum) {
                 c2_snapshot(knob + 1);
                 c2.d.set[m].strum = (int8_t)v;
                 c2_touch();
             }
             c2_flash(v && c2.seq_live < C2_LIVE ? MSG_NO_TICK : MSG_STRUM, v);
+            c2.knob_frame = c2_now();
+            c2.turned = knob;
+            return;
         } else if (knob == 6) {        /* SMOOTH on (right) / off (left) */
             if ((steps > 0) != (c2.d.set[m].smooth != 0)) {
                 c2_snapshot(knob + 1);
@@ -1493,7 +1522,7 @@ static void c2_sanitize(struct c2_data *d)
         s->bass = s->bass != 0;
         s->smooth = s->smooth != 0;
         s->flats = s->flats != 0;
-        s->strum = (int8_t)c2_clampi(s->strum, -12, 12);
+        s->strum = (int8_t)c2_clampi(s->strum, -C2_STRUM_MAX, C2_STRUM_MAX);
         int end = 0;
         for (int i = 0; i < 12; i++) {
             char ch = s->name[i];
@@ -1712,6 +1741,8 @@ void c2_gui_tick(void)
         return;
     c2_seq_watch();
     uint32_t now = c2_now();
+    if (c2.wr_open && now + 1 - c2.wr_frame > C2_WR_IDLE)
+        c2_wr_close();                 /* WRITE left alone ~10 s: closed, so a later DROP pastes as usual */
     if (!c2.loaded) {
         if (now >= C2_LOAD_FRAME + 256 * c2.load_tries)
             c2_load();

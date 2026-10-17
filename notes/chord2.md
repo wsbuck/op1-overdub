@@ -1,7 +1,8 @@
 # CHORD v2 and the key-chord map (firmware 246): scope
 
-Status: **MVP on the device (NIGHT1, LOG.md test 84): works except learn (fixed for NIGHT2, test 85)**: §12 "MVP as
-built". Phases 2-4 below are still design only.
+Status: **MVP on the device (NIGHT2, LOG.md test 85: every step passes)**: §12 "MVP as built". **Phase 2 and 3 built
+(NIGHT3, test 86)**: §13 "Phase 2 as built" (SMOOTH, STRUM, WRITE, bipolar VOICING, intervals, the played-notes view).
+Phase 4 is still design only.
 Mockups: `design/chord2/`:
 - `chord2_ui.h`: the draw code;
 - `chord2_model.h`: qualities, voicings, names, recognition, SMOOTH, fill;
@@ -607,3 +608,193 @@ three knobs stay for precision.
 - `src/slot/test/hold_check.py`: CHORD1 unchanged with chord2 off.
 - `src/slot/test/chord2_screens.py OUTDIR`: the gallery from the device draw code; nothing outside the safe area,
   <= 120 AA segments per scene (max 65), the frame hook's page rules, the notes view's timing and colours.
+
+## 13. Phase 2 as built (2026-10-17)
+Code: as §12, plus `c2_seq_tick` (hold_impl.h) and `_c2_seq_hook` (entry.inc C2_HOOKS). One new hook, checked against
+stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below). File version 2 (below).
+
+### Controls (changes from §12)
+| where | control | does |
+|---|---|---|
+| page | SHIFT + green | STRUM: down 120 ms .. OFF .. up 120 ms, 10 ms a detent (the whole spread). Header: green `{30` (up) / `}30` (down); grey while no sequencer tick has been seen (then it plays at once) |
+| page | SHIFT + white | SMOOTH on (right) / off (left). Header: white `SM` |
+| page | orange | VOICING, bipolar (below). A 9-tick strip under its name: the centre tall white, the positions this chord has grey, the current one orange |
+| page | green | TYPE: the MVP list right of NOTE as before (MAJ one detent right), the WIDE group LEFT of NOTE (below); a wall on each side of NOTE |
+| page | SHIFT + DROP | **WRITE** (below). SHIFT+DROP, DROP is still NIGHT2's factory restore (maps 5..8: clear) |
+| page | playing | the played-notes view (below) |
+
+### SMOOTH (per map)
+- Each new chord's TOP is chosen to move least from the last chord's upper notes, in the chord's own VOICING
+  (`c2_smooth`, chord2.h). Cost: 4 x the movement (voice by voice when both have as many notes, else nearest note
+  both ways) + the drift of the note sum from the chord's own TOP + the TOP distance. Candidates: own TOP +- n steps (an
+  octave), never more than an octave of mean drift from its own register, all notes inside +-35. Deterministic.
+- BASS and a rootless chord's added root are not voice-led (they stay under the chord).
+- Starts over (the chord's own TOP plays): after 2 bars of silence (no chord sounding) at TE's tempo
+  (`0x01AADAD8`, samples per beat Q14, pingpong's valid range, else 120 BPM: 8 beats x spb x 17.7 c2_time units per
+  sample), when HOLD is turned off, on another map, after a WRITE, and when SMOOTH is turned on.
+- A knob edit auditions the chord's own TOP (the next chord played is smoothed again).
+- Check: ii-V-I in F (G-7 C7 F^7 in close root position) moves <= 4 semitones in total per change (3 and 3); an
+  8-chord ii-V-I-vi chain moves a third of root position or less; fuzz: never more than the own TOP's movement.
+- Time: `c2_time()` = CYCLES2:CYCLES >> 9 (1.28 us at 400 MHz, Hypothesis on the clock; wraps every ~1.5 h).
+
+### STRUM (per map) on the sequencer thread
+- **The thread:** `FUN_01a4318c` loops: pend on the semaphore at `[0x01DF50B8]` (R1 = 0: wait), then CALL
+  `FUN_01a0d2c0` (the sequencer step: arp / pattern ticks, the internal clock) at `0x01A431AA`, then jump back to the
+  pend (`0x01A431AE` JUMP.S `0x01A43198`, which reloads R0 / R1). **Verified** in the disassembly. `FUN_01a0d2c0`
+  reads no argument register (its first instruction after the prologue is a CALL; Verified). Our `_c2_seq_hook`
+  replaces that CALL: TE's step first with R0-R2 untouched, then `c2_seq_tick` through a C entry (all registers TE
+  relies on preserved: chord2_main.c's ABI harness). Mask without chord2: TE's step only. How often it wakes is a
+  **Hypothesis** (once per audio block, ~1.45 ms); the diagnostics show the measured rate and the longest gap.
+- **Thread rule:** TE's voice control (`FUN_01a85750` / `FUN_01a85840`) has no lock and the KeyHandler (priority 26)
+  pre-empts the sequencer thread (27). So while the slot's map strums, **no note of ours is sent from the KeyHandler**:
+  - The KeyHandler only keeps the wanted state: `rel_ref` (as before), plus per note a due time and an onset count
+    (`c2_out`, bumped on every new onset, so a re-press retriggers).
+  - The tick sends the difference: offs first (a wanted note that stopped, or one whose onset count moved), then the
+    untracked key-ups the KeyHandler left it (`raw_off`), then the ons that are due.
+  - Nothing is queued, so nothing can arrive out of order. A note released before its strum turn never sounds. Every
+    tick converges on `rel_ref`. A tick pre-empted half way finishes on its next run (at worst a ~1.5 ms blip).
+  - The KeyHandler always sees and leaves whole key events, since it pre-empts the tick and runs to completion.
+- **Ownership** (`c2.owner`): 0 = the KeyHandler sends (the MVP path, every map without STRUM); 1 = the tick sends;
+  2 = the tick sends until nothing is pending, then sets 0 itself.
+  - Handover (0 -> 1, KeyHandler, at a key event or knob turn) only once the GUI has seen the tick run for 4 frames in
+    a row. It copies what sounds into the tick's `on[]` first.
+  - **Fail-safe:** if the tick then stops for 3 GUI frames, the next KeyHandler event takes the notes back (owner 0)
+    and sends the difference itself (`TO:` on the diagnostic line).
+  - No tick ever seen (hook not running): STRUM is ignored and the notes play at once (header strum grey, "STRUM: NO
+    SEQ TICK, PLAYS AT ONCE").
+  - A clock that does not move: a wanted note is sent after 128 ticks whatever its due time (`FRC:`); a due time more
+    than 200 ms ahead is sent at once.
+  - VoiceCtl locked (preset load): the tick sends nothing and catches up after.
+  - A play-mode switch: the tick forgets what it sent (TE dropped the voices) instead of sending offs.
+- **Static check** (chord2_check.py): in chord2_impl.h only `c2_out` (sends only with owner 0), `c2_take_back` (only
+  from the owner update, right after owner = 0), `c2_seq_service` (the tick), and `c2_keydown` / `c2_keyup` call TE's
+  voice control. The last two do so only for a key that is not a synth keyboard note (TE's own path, as stock), or
+  for an untracked key-up with owner 0. Each guard is matched in the source.
+  **Dynamic check** (chord2_test.c `t_strum`): every voice call is tagged with its thread. A 6,000-event fuzz (keys,
+  HOLD, STRUM and map changes, ticks between) has no KeyHandler call while owned, TE never above 6 notes, and nothing
+  left at the end.
+- **Timing:** the whole spread is |STRUM| x 10 ms. Note i of n (from the bottom up, or the top down) starts at
+  spread x i / (n - 1) (Q8 reciprocals). Common tones of a legato change are not re-struck. Releases are immediate.
+  Granularity = one tick (~1.45 ms). Checked: up 30 ms, the first note within a tick of the key, then 10 ms (+- a
+  tick) apart, lowest first.
+- What still runs on the KeyHandler when strumming: TE's own paths that never were ours (drum mode, a key while
+  play mode is not synth), as stock.
+
+### VOICING, bipolar (user request, NIGHT2 follow-up)
+- The centre detent is the chord's base voicing: close for a scanned chord, **exactly as played** for a learned one.
+- Left (drops) moves notes below the top **down** an octave and **never changes the top note**: DROP 2, DROP 3,
+  DROP 2+4, SPREAD (DROP 2+4, then the lowest down again).
+- Right (ups) is the mirror and **never changes the bass**: UP 2 (the 2nd note from the bottom up an octave), UP 3,
+  UP 2+4, SPREAD UP. The top can change here, by design: "left keeps the melody, right keeps the bass" is one rule to
+  learn, and keeping the top on the right too would make UP the same as a TOP change.
+- A triad has no 2+4: the knob skips it (the strip shows the gap). Its SPREAD is DROP 2+3 and its SPREAD UP is UP 2+3.
+- A two-note chord keeps its bass and moves its upper note: -2..+2 octaves ("-1 OCT", "+1 OCT"). The upper note never
+  goes below the bass (skipped). The user's C3 + E4: left = C3 E3 (a 3rd), right = C3 E5 (a 17th).
+- Learned chords take TOP and VOICING as transforms of the notes as played. TOP is a ladder on them (each step the
+  lowest note up an octave, or the top note down), and 0 / 0 is exactly as played. The MVP's TOP on a learned chord
+  rewrote its notes; v1 files have TOP 0 there, so nothing changes. VOICING no longer turns a learned chord into a
+  scanned one ("TURN GREEN FIRST" is gone).
+- A position that does not fit (+-35 from the key) is skipped too. At the end: "WIDEST UP" / "WIDEST DOWN".
+- The MIDI 12..115 clamp stays (c2_key_notes).
+- **File version 2** stores the position (-4..4) in the byte where v1 had the family (0..3). Version 1 is migrated so
+  each chord plays what it played:
+  - 4+ notes: CLOSE 0, DROP 2 -1, DROP 3 -2, SPREAD (= DROP 2+4) -3;
+  - triads: 0, -1, **-1** (v1's triad DROP 3 played DROP 2), **-4** (v1's triad SPREAD was DROP 2+3);
+  - a power chord: any v1 drop (the lower note down an octave) = +1 OCT (the same interval, an octave higher);
+  - learned chords: 0.
+  Checked chord by chord against the MVP's notes. Saves write version 2. NIGHT2 reads only version 1: going back to
+  NIGHT2 after NIGHT3 saved means factory maps there (NIGHT3SAFE is CHORD1 and never reads the file).
+
+### Intervals and wide chords (user feedback 1)
+- **Every chord of two pitch classes or fewer is named as an interval by its real distance** (`c2_dyad`): the lowest
+  note is the root, the distance runs to the lowest note of the other pitch class. Learned C3 + E4 = "CM10" on the key
+  (C over M10), "C MAJOR 10TH" in the title.
+- Notation: P perfect, M major, - minor (the same minus as the minor chords), A augmented, TT the tritone, 5 the power
+  fifth (kept: "C5" is what players say), P8 the octave. Key tags are <= 3 glyphs: -2 M2 -3 M3 P4 TT 5 -6 M6 -7 M7 P8
+  -9 M9 -10 M10 P11 A11 P12 -13 M13 -14 M14 P15 ... M21. Titles: "MINOR 2ND" ... "OCTAVE", "MAJOR 10TH", "PERFECT
+  12TH", "2 OCTAVES", "MAJOR 21ST". "M" never appears in a chord symbol here (major 7 is the triangle), so "CM10" can't
+  be read as a chord. A single learned note: a dot under its name, "E NOTE".
+- **Wide learned chords of 3+ pitch classes keep their quality name** ("C" for C3 G3 E4). The VOICING centre then
+  says "PLAYED 2 OCT" (span 13..24) or "PLAYED 3 OCT" instead of "AS PLAYED".
+- **The WIDE group** (TYPE scan): P8, M10, -10, P12, M9, M13, TT, **left of NOTE**: NOTE, then 1 detent left = the
+  octave, 2 = the major 10th. Why there:
+  - Every MVP position stays where players learned it (MAJ 1 detent right of NOTE, AUG 28).
+  - The everyday 10ths are 2-3 detents from NOTE, not 29 (after AUG).
+  - "Right = chords, left = intervals" reads as one idea, and NOTE (one note) sits between.
+  - A wall each side of NOTE: a spin either way stops before it.
+- Their TOP moves the whole interval by octaves (so it stays the interval it names). Their VOICING moves the upper note
+  (and the name follows: M10 at -1 OCT is "CM3"). Appended to the quality enum (codes 29..35), so the file's codes stay.
+- Not added: a root-5th-10th shell (it is a major triad in an open voicing: learn it, or MAJ + VOICING).
+
+### The played-notes view (user feedback 2)
+- While the page is open, all notes that sound (chords, plain notes, a HOLD pad, the BASS) are lit on the 24 keys and
+  named: the top note white, a sounding chord's root blue, the rest light blue; notes off the keyboard as the edge arrows
+  with a count. It shows while keys are held and ~0.5 s after the last key-up (the last notes that sounded), then the
+  map view comes back. A HOLD pad sounds on: its keys stay dark blue in the map view.
+- Priority: a learn (red) > a chord knob turned (~1 s, the edited chord) > the played view > SHAPE's shape > the map.
+  It works in every mode (OFF too) and while WRITE auditions.
+- The chip on TE's screens: not changed. Listing 4-5 note names there would make it 3x wider than the chord name, over
+  the top-right area that was verified clear only at its current size; the chord name already says what sounds.
+
+### WRITE (SHIFT+DROP)
+- Gesture: SHIFT+DROP opens WRITE on "FACTORY -> this map" (maps 5..8: "EMPTY -> this map"), so SHIFT+DROP, DROP is
+  exactly NIGHT2's factory restore (no second confirm: SHIFT+DROP was the question). Why not another gesture: every
+  free key combination on the page is either TE's (SHIFT+T1/T3/T4, the octave keys), already ours (SPLIT, LIFT, DROP,
+  SHIFT+SPLIT/LIFT), or unproven (encoder pushes); a write menu that opens on the restore keeps the one map-level
+  gesture players learned and extends it.
+- Knobs: blue FROM (FACTORY, 7THS, TRIADS, COPY, EMPTY); green WHICH factory map / KEY (the tonic, wraps) / TRANSPOSE
+  (-11..+11); white SCALE (MAJOR, MINOR, DORIAN, PHRYGIAN, LYDIAN, MIXOLYDIAN, LOCRIAN, HARM MINOR, MEL MINOR) / OF
+  MAP n (the copy's source); orange TO (the target map; "USED" when it is not empty).
+- DROP writes. After a knob turn, a target that is not empty needs DROP twice ("OVERWRITE MAP n? ] AGAIN", red, ~2.4 s;
+  any knob or key in between drops the question). SPLIT or SHIFT+DROP again cancels. T1..T4 / SHIFT+SPLIT close the
+  page. One undo gesture (SHIFT+LIFT). The slot switches to the map written. Keys audition the preview (no learn).
+- 7THS / TRIADS: every in-scale key gets the chord stacked in thirds from it (14 keys), the rest play their note; a
+  chord outside the list (harmonic minor's C+^7) is kept as notes and named "?". TOPs keep each octave's top notes in
+  one register (near A4 on the lower keys, F#5 on the upper, as DIATONIC C). Flats when the scale's parent major has
+  flats. The target's BASS / SMOOTH / STRUM stay. Name: "D DORIAN 7", "E& MINOR 3".
+- COPY: the same keys, every chord transposed (root + t, kept inside +-35 by octaves; learned chords' notes too), the
+  source's settings, the name "II-V-I +2". Capo-style on purpose: a progression laid out on the keys (II-V-I) stays
+  where the hands know it.
+- FACTORY: any of the 4 into any map (settings and name too). EMPTY: every key plain, settings cleared.
+- Map naming: WRITE names what it writes; no free-text naming (12 characters by knob is slow for little gain).
+- Checks: every scale x tonic x triads / 7ths gives the scale's chords on exactly the 14 in-scale keys, in register;
+  D dorian = D-7 E-7 F^7 G7 A-7 B$7 C^7; harmonic / melodic minor; flats; overwrite confirm; undo; audition; COPY of
+  every factory map at every transposition stays playable.
+
+### Diagnostics, line 4
+`SEQ TK:<ticks in the last ~1 s> GAP:<longest gap, ms> LIVE|DEAD OWN:<0|1|2> SENT:<notes the tick sent> FRC:<sent by
+the stale guard> TO:<takeovers> SR:<SMOOTH resets>`. Line 2's FILE shows the loaded version (`FILE A V1` = migrated).
+
+### Review log (phase 2)
+- **UI review** (fresh subagent, TE-style designer, on the C-path renders). Adopted:
+  - "USED" on WRITE in grey: a warning is never coral, which reads like red;
+  - a wider gap between HOLD and the knob-colour group (`{30 SM B`);
+  - interval tags at one size (step 1), and a tighter width on the outlined key so "M10" clears the outline;
+  - one-glyph tags ("-", dim) a size up, so they don't read as stray marks;
+  - the VOICING strip: the centre tick always drawn above and below the bar, positions this chord has 3 units,
+    the ones it doesn't a 1-unit stub (the 9-slot rhythm stays);
+  - WRITE: the target digit at the name's size on its baseline, the extra "TO" gone;
+  - smaller diagnostic lines (they touched);
+  - "{30 MS" with a space;
+  - an edge arrow on a lit key moves up beside the black keys;
+  - note names on black keys narrower.
+  Not adopted: the 2-px outline's narrow neck on G / A (the MVP's shape, unchanged).
+- **UX round 1** (fresh subagent, keys player: jazz / neo-soul / house, knows the Cycles). No blockers. Adopted:
+  - **WRITE timing:** the untouched SHIFT+DROP, DROP restore only within ~2.4 s of opening (as NIGHT2); later, a used
+    map asks OVERWRITE? first; WRITE closes after ~10 s idle (a stray DROP later pastes as usual);
+  - **SMOOTH readout:** when SMOOTH played another TOP on the edited key, "SM E4" shows in grey before "TOP Bb4";
+    `SM` in the header is grey while the chain starts over, white while it leads on;
+  - **a learned 10th's TOP moves it whole by octaves** (as the WIDE quality); a learned voicing wider than an
+    octave too ("PLAYED 2 OCT" survives TOP);
+  - **minor intervals are a lower-case m** (`~` in the chord font: "Cm10"), so "-10" can't be read as a minor chord;
+  - **the played view keeps the map**: unlit keys keep their chord labels (grey), so the next chord stays findable;
+  - **STRUM detents** 5 ms steps to 40, 10 to 100, then 120 150 200 250 300 (rolls); a wall at OFF (a spin from up to
+    down stops there, ~0.3 s rest to cross); "LOW>HIGH" / "HIGH>LOW" in its message; a BASS note always first;
+    "NO SEQ TICK" also when the page opens on a strumming map;
+  - VOICING's first right turn after boot says "UP KEEPS THE BASS, DROPS ARE LEFT" (NIGHT2 had drops on the right);
+  - the NOTE screen says "GREEN > CHORDS / < INTERVALS"; the WIDE group gains the root + 7th shells (m7, M7) next to
+    the 10ths: P8 M10 m10 m7 M7 P12 M9 M13 TT;
+  - WRITE outlines the scale's tonic key in the preview.
+  Not adopted: delaying a legato change's offs to the new chord's onsets (a hole under long strums; one more state per
+  note in the tick: later, if the device shows it); TO in white when empty (orange is the 4th knob; USED is grey).
+

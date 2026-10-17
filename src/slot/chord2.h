@@ -27,7 +27,7 @@ enum { Q_NONE, Q_MAJ, Q_MIN, Q_MAJ7, Q_7, Q_MIN7, Q_HDIM, Q_DIM, Q_DIM7, Q_6, Q_
        Q_7SUS4, Q_9SUS4, Q_ADD9, Q_69, Q_MAJ9, Q_9, Q_MIN9, Q_MIN11, Q_13, Q_7S11, Q_7B9, Q_7S9, Q_7B13, Q_AUG,
        /* the WIDE group (phase 2): two-note intervals, named by their real distance (c2_dyad_name); appended so the
         * file's quality codes stay; the TYPE scan reaches them LEFT of NOTE (c2_scan_q) */
-       Q_P8, Q_M10, Q_MIN10, Q_P12, Q_M9D, Q_M13D, Q_TT,
+       Q_P8, Q_M10, Q_MIN10, Q_MIN7D, Q_MAJ7D, Q_P12, Q_M9D, Q_M13D, Q_TT,
        Q_COUNT, Q_DYAD = 0x7D, Q_CUSTOM = 0x7E };
 #define Q_FIRST_WIDE Q_P8
 
@@ -70,10 +70,13 @@ static const struct c2_quality c2_q[Q_COUNT] = {
     { { 0, 4, 10, 15 }, 4, 0, "7#9", "7#9", "7#9" },
     { { 4, 10, 14, 20 }, 4, 1, "7&13", "&13", "7&13" },
     { { 0, 4, 8 }, 3, 0, "+", "+", "AUG" },
-    /* WIDE: P perfect, M major, - minor (as the minor chords), TT tritone; the title spells them out */
+    /* WIDE: P perfect, M major, m minor ('~' draws a lower-case m: never in a chord symbol), TT tritone; the
+     * title spells them out. Root + 7th: the left-hand shells. */
     { { 0, 12 }, 2, 0, "P8", "P8", "OCTAVE" },
     { { 0, 16 }, 2, 0, "M10", "M10", "MAJOR 10TH" },
-    { { 0, 15 }, 2, 0, "-10", "-10", "MINOR 10TH" },
+    { { 0, 15 }, 2, 0, "~10", "~10", "MINOR 10TH" },
+    { { 0, 10 }, 2, 0, "~7", "~7", "MINOR 7TH" },
+    { { 0, 11 }, 2, 0, "M7", "M7", "MAJOR 7TH" },
     { { 0, 19 }, 2, 0, "P12", "P12", "PERFECT 12TH" },
     { { 0, 14 }, 2, 0, "M9", "M9", "MAJOR 9TH" },
     { { 0, 21 }, 2, 0, "M13", "M13", "MAJOR 13TH" },
@@ -83,10 +86,10 @@ static const struct c2_quality c2_q[Q_COUNT] = {
 C2_FN int c2_is_wide(int q) { return q >= Q_FIRST_WIDE && q < Q_COUNT; }
 
 /* The TYPE scan (Model:Cycles style): position 0 = NOTE (the key plays its note), 1..28 = the chord list in enum
- * order (unchanged since the MVP, so learned detent counts still hold), -1..-7 = the WIDE group, LEFT of NOTE:
- * octave, the 10ths, the 12th, then the compound 9th, 13th and the tritone. NOTE sits between with a wall on each
+ * order (unchanged since the MVP, so learned detent counts still hold), -1..-9 = the WIDE group, LEFT of NOTE:
+ * octave, the 10ths, the 7th shells, the 12th, then the compound 9th, 13th and the tritone. NOTE sits between with a wall on each
  * side, so a spin either way stops before it. */
-#define C2_SCAN_MIN (Q_FIRST_WIDE - Q_COUNT)     /* -7 */
+#define C2_SCAN_MIN (Q_FIRST_WIDE - Q_COUNT)     /* -9 */
 #define C2_SCAN_MAX (Q_FIRST_WIDE - 1)           /* 28 = AUG */
 C2_FN int c2_scan_pos(int q)
 {
@@ -149,7 +152,7 @@ struct c2_chord {
     uint8_t pad;
 };
 
-/* Per map settings: strum = signed steps of 10 ms for the whole spread (+ up: low to high, - down), 0 off. */
+/* Per map settings: strum = a signed index into c2_strum_ms (the whole spread; + up: low to high, - down), 0 off. */
 struct c2_set {
     uint8_t bass, smooth, flats;
     int8_t strum;
@@ -210,7 +213,13 @@ enum { C2_SAVE_NONE, C2_SAVE_OK, C2_SAVE_OPEN, C2_SAVE_WRITE, C2_SAVE_CLOSE, C2_
 enum { MSG_NONE, MSG_CLEARED, MSG_COPIED, MSG_PASTED, MSG_UNDONE, MSG_LEARNED, MSG_MAX4, MSG_EMPTY_CLIP, MSG_LATER,
        MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_REDONE, MSG_PINNED, MSG_UNPINNED, MSG_WALL, MSG_LEARN_CANCEL, MSG_GREEN_FIRST,
        MSG_FACTORY_ASK, MSG_FACTORY_DONE, MSG_FACTORY_NOMAP, MSG_STRUM, MSG_SMOOTH, MSG_NO_TICK, MSG_WRITTEN,
-       MSG_OVERWRITE, MSG_WRITE_CANCEL, MSG_VOI_END, MSG_COUNT };
+       MSG_OVERWRITE, MSG_WRITE_CANCEL, MSG_VOI_END, MSG_VOI_HINT, MSG_STRUM_WALL, MSG_COUNT };
+
+/* STRUM's whole spread by detent: fine steps where a strum is a flam, coarse where it is a roll. */
+#define C2_STRUM_MAX 19
+static const uint16_t c2_strum_ms[C2_STRUM_MAX + 1] = { 0, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120,
+                                                        150, 200, 250, 300 };
+C2_FN int c2_strum_spread(int st) { st = st < 0 ? -st : st; return c2_strum_ms[st > C2_STRUM_MAX ? C2_STRUM_MAX : st]; }
 
 /* WRITE (SHIFT+DROP): what to write into a map. */
 enum { W_FACTORY, W_SEVENTHS, W_TRIADS, W_COPY, W_EMPTY, W_COUNT };
@@ -222,6 +231,7 @@ enum { W_FACTORY, W_SEVENTHS, W_TRIADS, W_COPY, W_EMPTY, W_COUNT };
 #define C2_FLASH 72                 /* frames a message shows */
 #define C2_TAP 15                   /* frames (~0.5 s): a SPLIT held longer does not pin */
 #define C2_ARM 72                   /* frames (~2.4 s) OVERWRITE? waits for DROP */
+#define C2_WR_IDLE 320              /* frames (~10 s) without a WRITE knob or key: WRITE closes */
 #define C2_PLAYED_SHOW 15           /* frames (~0.5 s) the played-notes view stays after the last key-up */
 
 /* The whole state. Writers: the KeyHandler thread (keys, knobs: every edit) and the GUI thread (the file load,
@@ -314,6 +324,11 @@ struct c2_state {
     uint32_t wr_open;
     int32_t wr_from, wr_key, wr_scale, wr_src, wr_shift, wr_fac, wr_to;   /* knobs: FROM, KEY / TRANSPOSE / WHICH, SCALE / MAP, TO */
     uint32_t wr_touched;            /* a knob turned since SHIFT+DROP (the plain factory restore needs no 2nd DROP) */
+    uint32_t wr_open_frame;         /* clock when WRITE opened (the plain restore: within C2_ARM of it) */
+    uint32_t wr_frame;              /* clock of the last WRITE knob / key (idle ~10 s: WRITE closes) */
+    int32_t smooth_key, smooth_top; /* the key SMOOTH last voiced and the TOP it played (the TOP readout) */
+    uint32_t voi_hint;              /* the first VOICING turn right since boot said where the drops went */
+    uint32_t strum_wall;            /* clock when a STRUM turn stopped at OFF (a rest, then it crosses) */
     uint32_t wr_arm;                /* OVERWRITE? armed at this clock + 1 (0 = not) */
     struct c2_chord wr_map[C2_KEYS];   /* the preview (keys audition it) */
     struct c2_set wr_set;
@@ -344,6 +359,22 @@ C2_FN void c2_sort(int8_t *v, int n)
             v[j] = v[j - 1];
             v[j - 1] = t;
         }
+}
+
+C2_FN int c2_mask(const int8_t *iv, int n, int base)
+{
+    int m = 0;
+    for (int i = 0; i < n; i++)
+        m |= 1 << c2_mod12(iv[i] + base);
+    return m;
+}
+
+C2_FN int c2_popcount12(int m)
+{
+    int c = 0;
+    for (int i = 0; i < 12; i++)
+        c += (m >> i) & 1;
+    return c;
 }
 
 /* TOP: each step puts the next chord tone on top (the lowest note up an octave until a new note is on top; negative
@@ -449,7 +480,10 @@ C2_FN int c2_upper_v(const struct c2_chord *c, int top, int voi, int8_t *out)
         for (int i = 0; i < n; i++)
             out[i] = c->iv[i];
         c2_sort(out, n);
-        c2_ladder(out, n, top, 0);
+        /* a learned interval (two pitch classes or fewer) or a voicing wider than an octave moves whole by octaves:
+         * TOP keeps what was played (the same as a WIDE quality) */
+        int wide = c2_popcount12(c2_mask(out, n, 0)) <= 2 || out[n - 1] - out[0] > 12;
+        c2_ladder(out, n, top, wide);
         c2_voicing(out, n, voi);
         return n;
     }
@@ -520,22 +554,6 @@ C2_FN int c2_notes_t(const struct c2_chord *c, int bass, int top, int8_t *out, i
 C2_FN int c2_notes(const struct c2_chord *c, int bass, int8_t *out, int *bass_at)
 {
     return c2_notes_t(c, bass, c->top, out, bass_at);
-}
-
-C2_FN int c2_mask(const int8_t *iv, int n, int base)
-{
-    int m = 0;
-    for (int i = 0; i < n; i++)
-        m |= 1 << c2_mod12(iv[i] + base);
-    return m;
-}
-
-C2_FN int c2_popcount12(int m)
-{
-    int c = 0;
-    for (int i = 0; i < 12; i++)
-        c += (m >> i) & 1;
-    return c;
 }
 
 /* Name a set of played notes (intervals from the key): the best (root, quality). Compares pitch-class sets, so
@@ -620,10 +638,10 @@ C2_FN char *c2_put2(char *p, int v)          /* 0..99, no division */
     return p;
 }
 
-/* Interval names by distance (semitones): P perfect, M major, - minor (as the minor chords), A augmented, TT the
+/* Interval names by distance (semitones): P perfect, M major, m minor ('~', a lower-case m), A augmented, TT the
  * tritone, 5 the power fifth; P8 the octave. Key tag "M10", title "MAJOR 10TH". */
 static const uint8_t c2_iv_num[12] = { 1, 2, 2, 3, 3, 4, 4, 5, 6, 6, 7, 7 };
-static const char c2_iv_qual[12] = { 'P', '-', 'M', '-', 'M', 'P', 'A', 'P', '-', 'M', '-', 'M' };
+static const char c2_iv_qual[12] = { 'P', '~', 'M', '~', 'M', 'P', 'A', 'P', '~', 'M', '~', 'M' };
 C2_FN int c2_iv_split(int d, int *num)
 {
     int s = d < 0 ? 0 : d, o = 0;
@@ -658,7 +676,7 @@ C2_FN char *c2_dyad_long(char *p, int d)
     if (d == 6)
         return c2_puts(p, "TRITONE");
     char qc = c2_iv_qual[s];
-    p = c2_puts(p, qc == 'P' ? "PERFECT " : qc == 'M' ? "MAJOR " : qc == '-' ? "MINOR " : "AUG ");
+    p = c2_puts(p, qc == 'P' ? "PERFECT " : qc == 'M' ? "MAJOR " : qc == '~' ? "MINOR " : "AUG ");
     p = c2_put2(p, num);
     int u = num, teen = num >= 11 && num <= 13;
     while (u >= 10)

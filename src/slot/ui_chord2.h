@@ -174,13 +174,18 @@ static void label2(void *r, const struct c2_chord *c, int key, int flats, fp32 c
         c2_dyad_tag(dt, dist);
     const char *tag = q == Q_DYAD ? dt : q == Q_CUSTOM ? "?" : c2_q[q].tag;
     const char *root = (flats ? c2_pc_flat : c2_pc_sharp)[c2_key_pc(key + rt)];
-    fp32 ts = step, rs = step + (step >> 2);   /* long labels (7S4, Ab on a black key) get smaller, never wider */
+    fp32 ts = q == Q_DYAD ? FP(1) : step, rs = step + (step >> 2);   /* intervals one size; long labels shrink */
+    fp32 ty = y + 9 * step;
+    if (q != Q_DYAD && tag[0] && !tag[1]) {
+        ts = FP(3) >> 1;               /* one glyph ("-", dim): bigger, so it doesn't read as a stray mark */
+        ty += FP(1);
+    }
     while (ctext_w(tag, ts) > maxw && ts > (FP(3) >> 2))
         ts -= FP(1) >> 3;
     while (ctext_w(root, rs) > maxw && rs > step)
         rs -= FP(1) >> 3;
     ctext_c(r, root, cx, y, rs, colour, 1);
-    ctext_c(r, tag, cx, y + 9 * step, ts, colour, 1);
+    ctext_c(r, tag, cx, ty, ts, colour, 1);
 }
 
 /* keys: the chords to label (0 = none); sel: outlined key (selcol); lit: dark-blue keys (sounding); notecol: the
@@ -218,18 +223,20 @@ static void keyboard(void *r, const struct c2_chord *keys, int flats, int sel, u
                 int black = kb_is_black(k);
                 const char *nm = (flats ? c2_pc_flat : c2_pc_sharp)[c2_key_pc(k)];
                 fp32 st = FP(1) + (FP(1) >> 2);
-                while (ctext_w(nm, st) > FP(KB_BK - 5) && st > FP(1))
+                while (ctext_w(nm, st) > FP(KB_BK - 7) && st > FP(1))
                     st -= FP(1) >> 3;
                 ctext_c(r, nm, kb_x(k) + FP(black ? KB_BK >> 1 : KB_WK >> 1), black ? FP(KB_Y0 + 24) : FP(KB_YB + 18),
                         st, 1 /* black */, 1);
             }
-    if (keys && !notecol)
+    if (keys)                       /* with the notes lit, the other keys keep their chords, dim */
         for (int k = 0; k < C2_KEYS; k++) {
+            if (notecol && notecol[k])
+                continue;
             int black = kb_is_black(k);
-            int col = k == sel || (lit >> k & 1) ? WHITE : GREY;
+            int col = notecol ? GREY : k == sel || (lit >> k & 1) ? WHITE : GREY;
             fp32 cx = kb_x(k) + FP(black ? KB_BK >> 1 : KB_WK >> 1);
             label2(r, &keys[k], k, flats, cx, black ? FP(KB_Y0 + 4) : FP(KB_YB + 5), col, FP(1) + (FP(1) >> 2),
-                   black ? FP(KB_BK - 5) : FP(KB_WK - 5));
+                   k == sel ? (black ? FP(KB_BK - 8) : FP(KB_WK - 8)) : black ? FP(KB_BK - 6) : FP(KB_WK - 6));
         }
     if (sel >= 0 && sel < C2_KEYS) {   /* the edited key: its visible outline, 2 px, white (blue: pinned) */
         for (int d = 0; d < 2; d++) {
@@ -281,7 +288,7 @@ static void c2u_offkb(void *r, int dir, int count, int colour)
 {
     if (!count)
         return;
-    fp32 y = FP(KB_YB + 6), x = dir < 0 ? FP(KB_X0 + 3) : FP(KB_X0 + KB_WK * 14 - 3), d = dir < 0 ? FP(4) : -FP(4);
+    fp32 y = colour == 1 ? FP(KB_YB - 8) : FP(KB_YB + 6),   /* black = on a lit key: up beside the black keys */ x = dir < 0 ? FP(KB_X0 + 3) : FP(KB_X0 + KB_WK * 14 - 3), d = dir < 0 ? FP(4) : -FP(4);
     line_fast(r, x, y, x + d, y - FP(3), colour);
     line_fast(r, x, y, x + d, y + FP(3), colour);
     line_fast(r, x, y, x + 2 * d, y, colour);
@@ -393,7 +400,7 @@ static void c2u_header(void *r, const struct c2_state *s, const struct c2_view *
         xr -= w + FP(6);
         frame_aa(r, xr, FP(4), xr + w + FP(5), FP(16), FP(1), RED);
         ctext(r, "HOLD", xr + FP(3), FP(6) + (FP(1) >> 1), FP(1) + (FP(1) >> 2), RED, 1);
-        xr -= FP(12);
+        xr -= FP(16);
     }
     fp32 hs = FP(1) + (FP(1) >> 2);
     if (m >= 0 && s->d.set[m].bass && !wr) {        /* the map's settings that are on: B (orange), SM (white), strum */
@@ -402,15 +409,15 @@ static void c2u_header(void *r, const struct c2_state *s, const struct c2_view *
         xr -= FP(6);
     }
     if (m >= 0 && s->d.set[m].smooth && !wr) {
-        xr -= ctext_w("SM", hs);
-        ctext(r, "SM", xr, FP(6), hs, WHITE, 1);
+        xr -= ctext_w("SM", hs);         /* white while it leads on from the last chord, grey when it starts over */
+        ctext(r, "SM", xr, FP(6), hs, s->smooth_n > 0 && s->smooth_map == m ? WHITE : GREY, 1);
         xr -= FP(6);
     }
     if (m >= 0 && s->d.set[m].strum && !wr) {
         char b2[8], *p = b2;
         int st = s->d.set[m].strum;
         *p++ = st > 0 ? '{' : '}';
-        c2u_i(p, (st > 0 ? st : -st) * 10);
+        c2u_i(p, c2_strum_spread(st));
         xr -= ctext_w(b2, hs);
         ctext(r, b2, xr, FP(6), hs, s->seq_live >= 4 ? GREEN : GREY, 1);   /* grey: no tick seen (plays at once) */
         xr -= FP(6);
@@ -447,10 +454,11 @@ static const char *c2u_msg(const struct c2_state *s, int mode, char *b)
     case MSG_STRUM:
         if (!s->msg_arg)
             return "STRUM OFF";
-        c2u_s(c2u_i(c2u_s(b, s->msg_arg > 0 ? "STRUM { UP " : "STRUM } DOWN "), (s->msg_arg > 0 ? s->msg_arg : -s->msg_arg) * 10),
+        c2u_s(c2u_i(c2u_s(b, s->msg_arg > 0 ? "STRUM { LOW>HIGH " : "STRUM } HIGH>LOW "), c2_strum_spread(s->msg_arg)),
               " MS");
         return b;
     case MSG_NO_TICK: return "STRUM: NO SEQ TICK, PLAYS AT ONCE";
+    case MSG_VOI_HINT: return "UP KEEPS THE BASS, DROPS ARE LEFT";
     case MSG_SMOOTH: return s->msg_arg ? "SMOOTH ON: VOICE-LEADS" : "SMOOTH OFF";
     case MSG_WRITTEN: c2u_s(c2u_i(c2u_s(b, "WRITTEN: MAP "), s->msg_arg + 1), "  SHIFT+[ UNDOES"); return b;
     case MSG_OVERWRITE: c2u_s(c2u_i(c2u_s(b, "OVERWRITE MAP "), s->msg_arg + 1), "? ] AGAIN"); return b;
@@ -467,7 +475,7 @@ static const char *c2u_msg(const struct c2_state *s, int mode, char *b)
 /* SHIFT layer: the map's settings in knob colours, and the diagnostics (the device test reads them). */
 static void c2u_diag_line(void *r, const char *b, fp32 y)
 {
-    fp32 st = (FP(1) * 7) >> 3;
+    fp32 st = FP(3) >> 2;
     while (ctext_w(b, st) > FP(306) && st > (FP(1) >> 1))
         st -= FP(1) >> 3;
     ctext(r, b, FP(8), y, st, GREY, 1);
@@ -484,7 +492,7 @@ static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_v
     int st = m < 0 ? 0 : s->d.set[m].strum;
     if (st) {
         *q++ = st > 0 ? '{' : '}';
-        c2u_s(c2u_i(q, (st > 0 ? st : -st) * 10), "MS");
+        c2u_s(c2u_i(q, c2_strum_spread(st)), " MS");
     } else
         c2u_s(sb, m < 0 ? "-" : "OFF");
     const char *val[4] = { c2u_mode_name(mode, b), sb, m < 0 ? "-" : s->d.set[m].smooth ? "ON" : "OFF",
@@ -584,11 +592,12 @@ static void c2u_voi_strip(void *r, const struct c2_chord *c, fp32 xr, fp32 y)
         fp32 x = xr - (C2_VOI_MAX - v) * FP(4);
         if (v == c->voi)
             line_fp(r, x, y - FP(1), x, y + FP(3), FP(2), ORANGE);
-        else if (!v)
-            vline_fast(r, x, y - FP(1), y + FP(3), WHITE);
-        else if (c2_voi_applies(c, v))
-            vline_fast(r, x, y + FP(1), y + FP(3), GREY);
+        else if (v && c2_voi_applies(c, v))
+            vline_fast(r, x, y, y + FP(3), GREY);
+        else if (v)
+            vline_fast(r, x, y + FP(2), y + FP(3), PURPLEGREY);   /* not for this chord: a stub keeps the rhythm */
     }
+    vline_fast(r, xr - C2_VOI_MAX * FP(4), y - FP(3), y + FP(5), WHITE);   /* the centre, above and below the bar */
 }
 
 /* The chord the page shows for the edited key: during a learn on the page, the notes played so far (in t). */
@@ -689,7 +698,19 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
         fp32 wt = ctext_w(b, ts), wf = ctext_w(fam, vs), wl = ctext_w("TOP", FP(1));
         fp32 w = wt + wl + FP(4) > wf ? wt + wl + FP(4) : wf;
         w = w > FP(32) ? w : FP(32);   /* the strip's width */
-        ctext(r, "TOP", xr - wt - wl - FP(4), FP(22) + 6 * ts - FP(6), FP(1), GREY, 1);
+        fp32 xt = xr - wt - wl - FP(4);
+        ctext(r, "TOP", xt, FP(22) + 6 * ts - FP(6), FP(1), GREY, 1);
+        int mm = c2_mode_map(mode);
+        if (mm >= 0 && s->d.set[mm].smooth && s->smooth_n > 0 && s->smooth_map == mm && s->smooth_key == key &&
+            s->smooth_top != c->top) {  /* SMOOTH played another TOP: it shows, grey, before the stored one */
+            int8_t sv[C2_NOTES];
+            int sb, sn = c2_notes_t(c, s->d.set[mm].bass, s->smooth_top, sv, &sb);
+            char sm[12];
+            c2u_note(c2u_s(sm, "SM "), v->octave, flats, key + sv[sn > 0 ? sn - 1 : 0]);
+            fp32 ws = ctext_w(sm, FP(1));
+            ctext(r, sm, xt - ws - FP(6), FP(22) + 6 * ts - FP(6), FP(1), GREY, 1);
+            w += ws + FP(6);
+        }
         ctext(r, b, xr - wt, FP(22), ts, WHITE, s->turned != 2);
         ctext(r, fam, xr - wf, FP(34), vs, c->voi ? ORANGE : GREY, s->turned != 3);
         c2u_voi_strip(r, c, xr, FP(50));
@@ -706,9 +727,10 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
             ctext(r, "SHIFT+NOTES: LEARN A SHAPE", FP(8), FP(36), FP(1), GREY, 1);
             ctext(r, "SHIFT+SPLIT: CLOSE", FP(8), FP(44), FP(1), GREY, 1);
         } else {
-            fp32 x = ctext(r, "NOTE", FP(8), y0, FP(3), GREY, 0);
-            x = ctext(r, "TURN ", x + FP(8), FP(30), FP(1) + (FP(1) >> 2), GREY, 1);
-            ctext(r, "GREEN", x, FP(30), FP(1) + (FP(1) >> 2), GREEN, 1);
+            fp32 x = ctext(r, "NOTE", FP(8), y0, FP(3), GREY, 0) + FP(8);
+            fp32 x1 = ctext(r, "GREEN", x, FP(26), FP(1) + (FP(1) >> 2), GREEN, 1);
+            ctext(r, " > CHORDS", x1, FP(26), FP(1) + (FP(1) >> 2), GREY, 1);
+            ctext(r, " < INTERVALS", x1, FP(36), FP(1) + (FP(1) >> 2), GREY, 1);
         }
     } else {
         c2_name(name, c, key, flats, 2);                 /* spelled out where it fits left of the readouts */
@@ -811,12 +833,11 @@ static void c2_draw_write(void *r, const struct c2_state *s, const struct c2_vie
     fp32 st = FP(3);
     char to[4];
     c2u_i(to, s->wr_to + 1);
-    fp32 wto = ctext_w(to, FP(4)), wmax = FP(304) - wto - FP(30);
+    fp32 wmax = FP(304) - ctext_w(to, st) - FP(16);
     while (ctext_w(big, st) > wmax && st > FP(3) >> 1)
         st -= FP(1) >> 2;
     ctext(r, big, FP(8), FP(23), st, WHITE, 0);
-    ctext(r, "TO", FP(312) - wto - FP(4) - ctext_w("TO", FP(1)), FP(37), FP(1), GREY, 1);
-    ctext(r, to, FP(312) - wto, FP(21), FP(4), ORANGE, 0);
+    ctext(r, to, FP(312) - ctext_w(to, st), FP(23), st, ORANGE, 0);   /* the target, on the name's baseline */
     /* the four knobs */
     c2u_s(b[0], c2u_from_name[from]);
     const char *lab[4] = { "FROM", "", "", "TO" };
@@ -841,26 +862,30 @@ static void c2_draw_write(void *r, const struct c2_state *s, const struct c2_vie
         lab[2] = "SCALE";
         c2u_s(b[2], c2_scale_short[s->wr_scale >= 0 && s->wr_scale < S_COUNT ? s->wr_scale : 0]);
     }
-    p = c2u_i(c2u_s(b[3], "MAP "), s->wr_to + 1);
+    c2u_i(c2u_s(b[3], "MAP "), s->wr_to + 1);
     int used = 0;
     for (int k = 0; k < C2_KEYS && s->wr_to >= 0 && s->wr_to < C2_MAPS; k++)
         used |= s->d.maps[s->wr_to][k].q != Q_NONE;
-    if (used)
-        c2u_s(p, " USED");
     for (int i = 0; i < 4; i++) {
         fp32 x = FP(8 + 78 * i);
         ctext(r, lab[i], x, FP(47), FP(1), GREY, 1);
-        ctext(r, b[i], x, FP(55), FP(1) + (FP(1) >> 2), c2u_knob_col[i], 1);
+        x = ctext(r, b[i], x, FP(55), FP(1) + (FP(1) >> 2), c2u_knob_col[i], 1);
+        if (i == 3 && used)            /* a warning is never coral: grey, the red question comes on DROP */
+            ctext(r, "USED", x + FP(4), FP(55), FP(1) + (FP(1) >> 2), GREY, 1);
     }
+    int tk = -1;                       /* a scale fill: its tonic outlined (D dorian looks like C major otherwise) */
+    for (int k = 0; k < C2_KEYS && (from == W_SEVENTHS || from == W_TRIADS); k++)
+        if (tk < 0 && c2_key_pc(k) == c2_mod12(s->wr_key))
+            tk = k;
     if (c2u_played_view(s, v)) {
         uint8_t col[C2_KEYS];
         int below, above;
         c2u_played_cols(s, col, &below, &above);
-        keyboard(r, 0, fl, -1, 0, WHITE, col);
+        keyboard(r, s->wr_map, fl, tk, 0, WHITE, col);
         c2u_offkb(r, -1, below, col[0] ? 1 : WHITE);
         c2u_offkb(r, 1, above, col[C2_KEYS - 1] ? 1 : WHITE);
     } else
-        keyboard(r, s->wr_map, fl, -1, s->sounding, WHITE, 0);
+        keyboard(r, s->wr_map, fl, tk, s->sounding, WHITE, 0);
 }
 
 /* The CHORD page, over whatever TE drew: an opaque black backing first. */
@@ -884,9 +909,9 @@ static void c2_draw_page(void *r, const struct c2_state *s, const struct c2_view
     int m = c2_mode_map(mode), selcol = s->pinned ? BLUE : WHITE;
     uint8_t col[C2_KEYS];
     int below, above;
-    if (!c2u_notes_view(s, v) && c2u_played_view(s, v)) {   /* what sounds, lit (any mode) */
+    if (!c2u_notes_view(s, v) && c2u_played_view(s, v)) {   /* what sounds, lit (any mode), the map dim */
         c2u_played_cols(s, col, &below, &above);
-        keyboard(r, 0, flats, mode ? key : -1, 0, selcol, col);
+        keyboard(r, m >= 0 ? s->d.maps[m] : 0, flats, mode ? key : -1, 0, selcol, col);
         c2u_offkb(r, -1, below, col[0] ? 1 /* black on a lit key */ : WHITE);
         c2u_offkb(r, 1, above, col[C2_KEYS - 1] ? 1 : WHITE);
         return;
