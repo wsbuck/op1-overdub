@@ -1370,3 +1370,41 @@
   3. SVG9's list (distortion/pedals, choir, fm4, crush match their previews), and the --svg-cost readings for each
      screen at rest and at its busiest.
 - Result: _pending user flash_.
+
+## 2026-10-16 — Test image 81: LFOFX1.OP1 (FX screens follow TE's LFO; distortion's LFO on the right knob)
+- What changed since FX4 (notes/fx-slot.md "LFO on our FX" has the addresses):
+  - Cause: TE's LFO modulates only the per-block params copy `0xFF801724` that a synth / drum FX's process gets.
+    Our screens drew the stored knobs, which never move. The LFO did reach the audio of ensemble, pingpong and
+    crush. Distortion's LFO moved the wrong knob: TE's per-FX LFO flag table overran at FX id 10. The master FX
+    cannot be an LFO target at all.
+  - Fix: each FX publishes the knobs it used each block, and the screens draw those while the FX runs. The crush
+    value pop-up still opens only on real knob turns. The five LFO flag tables are grown with 0 for our FX ids.
+- `firmware/images/LFOFX1.OP1`:
+  - Command: `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum
+    --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+    --db-trim harmonic=6 --db-trim fm4=6 --svg-cost --name LFOFX1`, all FX.
+  - Built from commit 11545ea in a clean `git archive`. te-boot is identical to stock.
+  - sha256 aa00f4e8989a33a59a8f33621bdd46d3748cfee05e8875e9c2a3bb1e095998aa.
+- Drum sounds: 28 factory drum presets (MAX_FACTORY_DRUM_PRESETS 28 at this commit; the new fmdrum kit is not in
+  it). Keep 30 or fewer saved drum sounds, as for FX4.
+- Checklist. For each FX, put it on a synth sound's FX (T3) and set up an LFO (T4, element):
+  - target FX, one knob at a time (knobs 1–4);
+  - medium rate, full amount;
+  - hold a note and watch the FX screen.
+  1. ensemble: on blue the choir sways faster and slower; green changes the sweep; white brings the backing
+     singers in and out; orange moves the mix bar. The chorus sound moves with each.
+  2. pingpong: on blue the time readout and the ball's timing move, and the echo time is heard; green changes the
+     feedback; white the tone pips; orange the mix bar.
+  3. distortion (was broken):
+     - each knob now changes the sound it is labelled for: blue drive, green voice, white character, orange mix;
+     - the pedal knobs, the curve and the mode name move with it;
+     - white sweeping through TUBE..CRUSH changes the mode colours.
+  4. crush:
+     - the pyramid follows: RATE voxels, BITS posterising, SQUASH sun, GRIT;
+     - the value pop-up must not appear from the LFO alone;
+     - turning a knob by hand still shows it for ~1.5 s.
+  5. The same on a drum sound's FX for one FX: the screen follows.
+  6. Master FX (T3 on the mixer): no LFO can target it. Its screen follows the knobs as before.
+  7. With the LFO's FX target on and the FX switched off, the screen shows the stored knobs and stays still.
+  8. The `--svg-cost` numbers on each screen while modulated are no higher than FX4's.
+- Result: _pending user flash_.
