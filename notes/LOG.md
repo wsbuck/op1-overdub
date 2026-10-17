@@ -1516,3 +1516,27 @@
      - SPLIT tapped alone pins the edited key (blue padlock).
   10. **SAFE twin.** If anything above misbehaves, CHORD2SAFE gives CHORD1 exactly (SHIFT + notes learn a shape).
 - Result: _pending user flash_.
+
+## 2026-10-17 — Test image 84: NIGHT1.OP1 (CHORD v2 MVP + fmdrum harsh, combined) + NIGHT1SAFE.OP1
+- Supersedes CHORD2 (83) and DRUMFM4 (82). From commit d983566: CHORD v2 MVP (test 83) and fmdrum after its CPU and
+  code review (harsh path in assembly, 12 harsh voices 440k -> 240k sim cycles per block, about 58 % of the device
+  limit at DRUMPROBE's 2.3x; soft_knee wrap fix in dsp.h for all engines; note-end click and DC-step fixes; fm
+  industrial after sound review round 3; notes/drum-engine.md).
+- `firmware/images/NIGHT1.OP1` = `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum
+  --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+  --db-trim harmonic=6 --db-trim fm4=6 --svg-cost --name NIGHT1` in a clean `git archive`: 29 factory drum presets,
+  te-boot identical to stock. sha256 bb97c290f511f6713c361a9950703deb5c48689978c580e797032b8cefb1ed9c.
+- `firmware/images/NIGHT1SAFE.OP1`: that build's bundle, `apply.py op1_246.op1 NIGHT1SAFE.OP1 --without chord2` (CHORD
+  works as CHORD1; everything else as NIGHT1). sha256 dc3e26f473dca060bc12f940c0b53345d0bd83f5c379228c6e7e6b0a83cd0893.
+- **Before flashing:** 29 or fewer saved drum sounds. User-saved fmdrum sounds change (new FM/NOISE scales); the factory
+  kits are unchanged.
+- Morning test:
+  1. CHORD v2: test 83's script, steps 1–10 (boot, frame hook, knobs, keys, file, chip, voices and HOLD, octave edge,
+     usage, SAFE twin) on NIGHT1 instead of CHORD2.
+  2. fmdrum: test 82's checklist:
+     - fm industrial on all keys;
+     - FM through FEEDBACK and SQUARE;
+     - NOISE through METAL and GRIND;
+     - all 12 voices on harsh keys at once: listen for crackle;
+     - how it feels.
+- Result: _pending user flash_.
