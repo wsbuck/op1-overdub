@@ -25,8 +25,30 @@ PALETTE = {0: (255, 144, 167), 1: (1, 0, 0), 2: (255, 58, 93), 3: (78, 40, 50), 
            11: (29, 32, 64), 12: (124, 121, 144), 13: (255, 66, 63), 14: (255, 255, 255), 15: (105, 142, 255),
            16: (0, 237, 149), 17: (230, 231, 255), 18: (128, 255, 175), 19: (255, 179, 179)}   # = preview.py
 CAPTIONS = {
-    "map_play": ("MAP: playing", "DIATONIC C, G4 held: the name spelled out (blue underline = ROOT knob, green = TYPE), "
-                 "its notes on the ruler (root blue, top white), TOP and VOICING under it; the key lit and outlined."),
+    "map_play": ("Playing: the played-notes view", "DIATONIC C, G4 held: what sounds is lit on the keys (top white, "
+                 "the chord's root blue, the rest light blue), the other keys keep their chords in grey."),
+    "write_factory": ("WRITE (SHIFT+DROP)", "NEO SOUL: WRITE opens on FACTORY -> MAP 3, so SHIFT+DROP, DROP is NIGHT2's "
+                      "factory restore; the knobs pick something else."),
+    "write_dorian": ("WRITE: D dorian 7ths", "FROM 7THS, KEY D, SCALE DORIAN, TO MAP 5: the preview on the keys (they "
+                     "audition it), the tonic outlined."),
+    "write_copy": ("WRITE: transposed copy", "COPY, TRANSPOSE +2, OF MAP 2, TO MAP 6: the same keys a tone up."),
+    "write_overwrite": ("WRITE: overwrite", "A used map: DROP asks OVERWRITE MAP 1? (red); DROP again writes."),
+    "played": ("Played view", "C^7 pad and A-7: the budget let the C^7 go; the notes above the keys as an arrow."),
+    "played_hold": ("Played view with HOLD", "NEO SOUL latched with its BASS (the arrow at the left) and a melody note."),
+    "map_after": ("Map view again", "~0.5 s after the last key-up the map's chords come back."),
+    "voicing_up": ("VOICING right: UP 2", "Bipolar VOICING: right raises notes from the bottom (the bass kept); the strip "
+                   "shows the 9 positions, the centre tall."),
+    "voicing_spread": ("VOICING left: SPREAD", "All the way left: DROP 2+4 and the lowest down again, the top kept."),
+    "learned_10th": ("Learned C3 + E4", "Named as an interval: C MAJOR 10TH (CM10 on the key); VOICING moves the E."),
+    "learned_wide": ("Learned wide C3 G3 E4", "The quality name (C), PLAYED 2 OCT as the VOICING centre."),
+    "type_wide": ("TYPE: the WIDE group", "Left of NOTE: P8, M10, m10, m7, M7, P12, M9, M13, TT."),
+    "map_wide": ("A map of intervals", "The interval tags on the keys."),
+    "strum_shift": ("SHIFT layer: STRUM, SMOOTH", "STRUM up 30 ms, SMOOTH on; the SEQ diagnostic line (tick rate, gap, "
+                    "who sends the notes, sent, forced, takeovers, SMOOTH resets)."),
+    "strum_header": ("Header", "Strum down, SM, B, HOLD."),
+    "smooth_anchor": ("SMOOTH anchor", "White turned with SMOOTH on: from the TOP that sounded, the chord anchored "
+                      "(padlock): SMOOTH plays this TOP exactly and leads on from it."),
+    "smooth_top": ("SMOOTH's TOP", "SMOOTH played another TOP on C7 than the stored one: SM E4 in grey before TOP Bb4."),
     "map_type_scan": ("TYPE scan", "C4 held, green turned two detents left: C^7 -> C6 -> C, heard as it turns (only the "
                       "changed notes retrigger). The strip shows where the scan is in the list; the keyboard shows the "
                       "chord's notes while a chord knob turns and ~1 s after (root blue, top white)."),
@@ -113,7 +135,7 @@ h1 {{ font-size:18px; margin:0 0 4px; }} p.sub {{ color:var(--mute); margin:0 0 
 main {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,560px),1fr)); gap:20px; }}
 figure {{ margin:0; }} img {{ width:100%; height:auto; image-rendering:pixelated; border:1px solid #333; }}
 figcaption {{ margin-top:6px; }} .cost {{ color:var(--mute); font-size:12px; }}
-</style></head><body><h1>CHORD v2 (MVP): the device's screens</h1>
+</style></head><body><h1>CHORD v2 (phase 2): the device's screens</h1>
 <p class="sub">Rendered through src/slot/ui_chord2.h (the code ui.c runs) at the device scale, each scene set up by
 the real engine through its hooks; shaded strip = rows the panel does not show.</p><main>{''.join(cards)}</main></body></html>"""
     with open(os.path.join(out, "index.html"), "w") as fh:

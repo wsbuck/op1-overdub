@@ -387,6 +387,17 @@ static void s_smooth_top(void)            /* SMOOTH on, G-7 then C7 played: the 
     dn(7);
     up(7);
     tick(C2_PLAYED_SHOW + 1);
+}
+static void s_smooth_top_page(void)
+{
+    s_smooth_top();
+    page();
+}
+static void s_smooth_anchor(void)         /* ... then white turned: the TOP anchored (padlock), SMOOTH keeps it */
+{
+    s_smooth_top();
+    knob(2, 1);
+    tick(C2_NOTES_SHOW + 1);
     page();
 }
 static void s_strum_shift(void)           /* SHIFT layer with STRUM (up 30 ms), SMOOTH on; the SEQ diagnostic line */
@@ -499,7 +510,7 @@ static const struct scene scenes[] = {
     { "played_hold", s_played_hold }, { "map_after", s_map_after }, { "voicing_up", s_voicing_up },
     { "voicing_spread", s_voicing_spread }, { "learned_10th", s_learned_10th }, { "learned_wide", s_learned_wide },
     { "type_wide", s_type_wide }, { "map_wide", s_map_wide }, { "strum_shift", s_strum_shift },
-    { "strum_header", s_strum_header }, { "smooth_top", s_smooth_top },
+    { "strum_header", s_strum_header }, { "smooth_top", s_smooth_top_page }, { "smooth_anchor", s_smooth_anchor },
     { "notes_offkb", s_notes_offkb }, { "learn", s_learn },
     { "learned", s_learned }, { "learned_slash", s_learned_slash }, { "map_shift", s_map_shift },
     { "cleared", s_cleared }, { "map_251", s_map_251 }, { "map_neo", s_map_neo }, { "map_pop", s_map_pop },

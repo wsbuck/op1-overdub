@@ -616,8 +616,8 @@ stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below)
 ### Controls (changes from §12)
 | where | control | does |
 |---|---|---|
-| page | SHIFT + green | STRUM: down 120 ms .. OFF .. up 120 ms, 10 ms a detent (the whole spread). Header: green `{30` (up) / `}30` (down); grey while no sequencer tick has been seen (then it plays at once) |
-| page | SHIFT + white | SMOOTH on (right) / off (left). Header: white `SM` |
+| page | SHIFT + green | STRUM, the whole spread: down 300 ms .. OFF .. up 300 ms (detents 5 10 15 20 25 30 35 40 50 60 70 80 90 100 120 150 200 250 300 ms; a wall at OFF). Header: green `{30` (low to high) / `}30` (high to low); grey while no sequencer tick has been seen (then it plays at once) |
+| page | SHIFT + white | SMOOTH on (right) / off (left). Header: `SM`, white while leading on, grey while it starts over |
 | page | orange | VOICING, bipolar (below). A 9-tick strip under its name: the centre tall white, the positions this chord has grey, the current one orange |
 | page | green | TYPE: the MVP list right of NOTE as before (MAJ one detent right), the WIDE group LEFT of NOTE (below); a wall on each side of NOTE |
 | page | SHIFT + DROP | **WRITE** (below). SHIFT+DROP, DROP is still NIGHT2's factory restore (maps 5..8: clear) |
@@ -632,7 +632,12 @@ stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below)
 - Starts over (the chord's own TOP plays): after 2 bars of silence (no chord sounding) at TE's tempo
   (`0x01AADAD8`, samples per beat Q14, pingpong's valid range, else 120 BPM: 8 beats x spb x 17.7 c2_time units per
   sample), when HOLD is turned off, on another map, after a WRITE, and when SMOOTH is turned on.
-- A knob edit auditions the chord's own TOP (the next chord played is smoothed again).
+- **Anchor** (UX round 2): white turned while SMOOTH is on starts from the TOP SMOOTH just played on that key and
+  anchors the chord (a white padlock by TOP; the chord byte that was padding, `flags`). SMOOTH then plays an anchored
+  chord's own TOP exactly and leads on from it: the way to pin one melody note in a voice-led line. A TOP turned
+  with SMOOTH off clears the anchor. Until anchored, "SM E4" in grey before TOP shows the TOP SMOOTH played.
+- A knob edit auditions on the held key, and SMOOTH leads on from what was auditioned.
+- SHIFT+white right while SMOOTH is on starts the chain over ("SMOOTH STARTS OVER"); no undo step.
 - Check: ii-V-I in F (G-7 C7 F^7 in close root position) moves <= 4 semitones in total per change (3 and 3); an
   8-chord ii-V-I-vi chain moves a third of root position or less; fuzz: never more than the own TOP's movement.
 - Time: `c2_time()` = CYCLES2:CYCLES >> 9 (1.28 us at 400 MHz, Hypothesis on the clock; wraps every ~1.5 h).
@@ -662,8 +667,8 @@ stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below)
     and sends the difference itself (`TO:` on the diagnostic line).
   - No tick ever seen (hook not running): STRUM is ignored and the notes play at once (header strum grey, "STRUM: NO
     SEQ TICK, PLAYS AT ONCE").
-  - A clock that does not move: a wanted note is sent after 128 ticks whatever its due time (`FRC:`); a due time more
-    than 200 ms ahead is sent at once.
+  - A clock that does not move: a wanted note is sent after 250 ticks whatever its due time (`FRC:`); a due time more
+    than 400 ms ahead is sent at once.
   - VoiceCtl locked (preset load): the tick sends nothing and catches up after.
   - A play-mode switch: the tick forgets what it sent (TE dropped the voices) instead of sending offs.
 - **Static check** (chord2_check.py): in chord2_impl.h only `c2_out` (sends only with owner 0), `c2_take_back` (only
@@ -673,7 +678,11 @@ stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below)
   **Dynamic check** (chord2_test.c `t_strum`): every voice call is tagged with its thread. A 6,000-event fuzz (keys,
   HOLD, STRUM and map changes, ticks between) has no KeyHandler call while owned, TE never above 6 notes, and nothing
   left at the end.
-- **Timing:** the whole spread is |STRUM| x 10 ms. Note i of n (from the bottom up, or the top down) starts at
+- **Timing:** the whole spread is the detent's time (`c2_strum_ms`); a BASS note always starts first.
+- **Legato hand-over** (UX round 2): under STRUM, each note a chord change lets go keeps sounding until the next new
+  note of the strum starts, one for one in the strum's direction (`off_due`), so a slow roll never thins the pad. The
+  tick also caps our sounding notes at 6 before each onset (a voice still handing over goes first), and a new key
+  event cuts any hand-over still running. Checked: NEO SOUL with BASS, down 200 ms, legato: never under 4 voices. Note i of n (from the bottom up, or the top down) starts at
   spread x i / (n - 1) (Q8 reciprocals). Common tones of a legato change are not re-struck. Releases are immediate.
   Granularity = one tick (~1.45 ms). Checked: up 30 ms, the first note within a tick of the key, then 10 ms (+- a
   tick) apart, lowest first.
@@ -691,7 +700,7 @@ stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below)
 - A two-note chord keeps its bass and moves its upper note: -2..+2 octaves ("-1 OCT", "+1 OCT"). The upper note never
   goes below the bass (skipped). The user's C3 + E4: left = C3 E3 (a 3rd), right = C3 E5 (a 17th).
 - Learned chords take TOP and VOICING as transforms of the notes as played. TOP is a ladder on them (each step the
-  lowest note up an octave, or the top note down), and 0 / 0 is exactly as played. The MVP's TOP on a learned chord
+  lowest note up an octave, or the top note down; an interval or a voicing wider than an octave moves whole by octaves), and 0 / 0 is exactly as played. The MVP's TOP on a learned chord
   rewrote its notes; v1 files have TOP 0 there, so nothing changes. VOICING no longer turns a learned chord into a
   scanned one ("TURN GREEN FIRST" is gone).
 - A position that does not fit (+-35 from the key) is skipped too. At the end: "WIDEST UP" / "WIDEST DOWN".
@@ -709,31 +718,31 @@ stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below)
 - **Every chord of two pitch classes or fewer is named as an interval by its real distance** (`c2_dyad`): the lowest
   note is the root, the distance runs to the lowest note of the other pitch class. Learned C3 + E4 = "CM10" on the key
   (C over M10), "C MAJOR 10TH" in the title.
-- Notation: P perfect, M major, - minor (the same minus as the minor chords), A augmented, TT the tritone, 5 the power
-  fifth (kept: "C5" is what players say), P8 the octave. Key tags are <= 3 glyphs: -2 M2 -3 M3 P4 TT 5 -6 M6 -7 M7 P8
-  -9 M9 -10 M10 P11 A11 P12 -13 M13 -14 M14 P15 ... M21. Titles: "MINOR 2ND" ... "OCTAVE", "MAJOR 10TH", "PERFECT
+- Notation: P perfect, M major, m minor (a lower-case m, UX round 1: "-10" read as a minor chord), A augmented, TT the tritone, 5 the power
+  fifth (kept: "C5" is what players say), P8 the octave. Key tags are <= 3 glyphs: m2 M2 m3 M3 P4 TT 5 m6 M6 m7 M7 P8
+  m9 M9 m10 M10 P11 A11 P12 m13 M13 m14 M14 P15 ... M21. Titles: "MINOR 2ND" ... "OCTAVE", "MAJOR 10TH", "PERFECT
   12TH", "2 OCTAVES", "MAJOR 21ST". "M" never appears in a chord symbol here (major 7 is the triangle), so "CM10" can't
   be read as a chord. A single learned note: a dot under its name, "E NOTE".
 - **Wide learned chords of 3+ pitch classes keep their quality name** ("C" for C3 G3 E4). The VOICING centre then
   says "PLAYED 2 OCT" (span 13..24) or "PLAYED 3 OCT" instead of "AS PLAYED".
-- **The WIDE group** (TYPE scan): P8, M10, -10, P12, M9, M13, TT, **left of NOTE**: NOTE, then 1 detent left = the
+- **The WIDE group** (TYPE scan): P8, M10, m10, m7, M7 (root + 7th shells), P12, M9, M13, TT, **left of NOTE**: NOTE, then 1 detent left = the
   octave, 2 = the major 10th. Why there:
   - Every MVP position stays where players learned it (MAJ 1 detent right of NOTE, AUG 28).
   - The everyday 10ths are 2-3 detents from NOTE, not 29 (after AUG).
   - "Right = chords, left = intervals" reads as one idea, and NOTE (one note) sits between.
   - A wall each side of NOTE: a spin either way stops before it.
 - Their TOP moves the whole interval by octaves (so it stays the interval it names). Their VOICING moves the upper note
-  (and the name follows: M10 at -1 OCT is "CM3"). Appended to the quality enum (codes 29..35), so the file's codes stay.
+  (and the name follows: M10 at -1 OCT is "CM3"). Appended to the quality enum (codes 29..37), so the file's codes stay.
 - Not added: a root-5th-10th shell (it is a major triad in an open voicing: learn it, or MAJ + VOICING).
 
 ### The played-notes view (user feedback 2)
 - While the page is open, all notes that sound (chords, plain notes, a HOLD pad, the BASS) are lit on the 24 keys and
-  named: the top note white, a sounding chord's root blue, the rest light blue; notes off the keyboard as the edge arrows
+  named (the other keys keep their chord labels, grey): the top note white, a sounding chord's root blue, the rest light blue; notes off the keyboard as the edge arrows
   with a count. It shows while keys are held and ~0.5 s after the last key-up (the last notes that sounded), then the
   map view comes back. A HOLD pad sounds on: its keys stay dark blue in the map view.
 - Priority: a learn (red) > a chord knob turned (~1 s, the edited chord) > the played view > SHAPE's shape > the map.
   It works in every mode (OFF too) and while WRITE auditions.
-- The chip on TE's screens: not changed. Listing 4-5 note names there would make it 3x wider than the chord name, over
+- The chip on TE's screens: a strum arrow before the chord name when the map strums (UX round 2), otherwise not changed. Listing 4-5 note names there would make it 3x wider than the chord name, over
   the top-right area that was verified clear only at its current size; the chord name already says what sounds.
 
 ### WRITE (SHIFT+DROP)
@@ -745,9 +754,12 @@ stock by build_slot.py: the sequencer thread's step CALL at `0x01A431AA` (below)
 - Knobs: blue FROM (FACTORY, 7THS, TRIADS, COPY, EMPTY); green WHICH factory map / KEY (the tonic, wraps) / TRANSPOSE
   (-11..+11); white SCALE (MAJOR, MINOR, DORIAN, PHRYGIAN, LYDIAN, MIXOLYDIAN, LOCRIAN, HARM MINOR, MEL MINOR) / OF
   MAP n (the copy's source); orange TO (the target map; "USED" when it is not empty).
-- DROP writes. After a knob turn, a target that is not empty needs DROP twice ("OVERWRITE MAP n? ] AGAIN", red, ~2.4 s;
+- DROP writes (the untouched restore only within ~2.4 s of SHIFT+DROP; WRITE closes after ~10 s idle). After a knob turn, a target that is not empty needs DROP twice ("OVERWRITE MAP n? ] AGAIN", red, ~2.4 s;
   any knob or key in between drops the question). SPLIT or SHIFT+DROP again cancels. T1..T4 / SHIFT+SPLIT close the
-  page. One undo gesture (SHIFT+LIFT). The slot switches to the map written. Keys audition the preview (no learn).
+  page. One undo gesture (SHIFT+LIFT). The slot keeps playing its own map (mid-set safety): "WRITTEN TO MAP n" says
+  where it went. Keys audition the preview (no learn). SHIFT still held after SHIFT+DROP: "LET GO OF SHIFT".
+- **FROM OLD MAP n:** whatever the last WRITE replaced (in RAM, until power-off), so a wrong WRITE survives the next
+  edit that takes the one undo.
 - 7THS / TRIADS: every in-scale key gets the chord stacked in thirds from it (14 keys), the rest play their note; a
   chord outside the list (harmonic minor's C+^7) is kept as notes and named "?". TOPs keep each octave's top notes in
   one register (near A4 on the lower keys, F#5 on the upper, as DIATONIC C). Flats when the scale's parent major has
@@ -797,4 +809,17 @@ the stale guard> TO:<takeovers> SR:<SMOOTH resets>`. Line 2's FILE shows the loa
   - WRITE outlines the scale's tonic key in the preview.
   Not adopted: delaying a legato change's offs to the new chord's onsets (a hole under long strums; one more state per
   note in the tick: later, if the device shows it); TO in white when empty (orange is the 4th knob; USED is grey).
+- **UX round 2** (fresh subagent, live performer: OP-1, Digitakt, Prophet; house, lo-fi, neo-soul). No blockers.
+  Adopted:
+  - the SMOOTH anchor (white starts from the TOP that sounded, the chord anchored, padlock);
+  - an auditioned edit is what SMOOTH leads on from;
+  - the legato hand-over under STRUM (re-raised from round 1: a 200 ms roll on a 5-voice pad left a hole), with the
+    tick's 6-voice cap;
+  - FROM OLD MAP n (a wrong WRITE survives one more edit);
+  - SHIFT+white right restarts SMOOTH;
+  - the strum arrow on the chip;
+  - WRITE keeps the slot on its map; "LET GO OF SHIFT".
+  Not adopted: a faster STRUM knob on fast turns (the encoder hook gives 1 step per detent on the page by design:
+  hook_steps cap 1); interval tags as "b10" (m / M / P is the standard interval spelling, and the lower-case m can't
+  be read as a chord; worth asking players on the device). Undo already re-voices held chords.
 

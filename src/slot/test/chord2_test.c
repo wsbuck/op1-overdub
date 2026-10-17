@@ -32,6 +32,7 @@ static int in_seq, kh_while_owned, log_n, sounding_max;
 static uint32_t log_t[256];
 static int log_note[256], log_on[256];
 static volatile uint32_t *owner_p;     /* &c2.owner (set in main) */
+static void (*dbg_hook)(void);
 static void te_log(int note, int on)
 {
     if (owner_p && *owner_p && !in_seq)
@@ -64,6 +65,9 @@ void te_note_on(int32_t *n, int flags)
     int c = 0;
     for (int i = 0; i < 128; i++)
         c += sounding[i];
+    if (c > 6 && getenv("VDBG") && c > sounding_max && dbg_hook) {
+        dbg_hook();
+    }
     sounding_max = c > sounding_max ? c : sounding_max;
 }
 int te_synth_shiftkey(void *self, int key) { (void)self; last_te_key = key; te_shift_calls++; return 0; }
@@ -1348,7 +1352,7 @@ static void t_write(void)
     knob(1, 2);                           /* +2 */
     knob(3, 1);                           /* TO MAP 6 */
     c2_press(0, KEY_DROP);
-    ok = c2.d.mode[0] == 7;
+    ok = c2.d.mode[0] == 6;               /* the slot keeps its own map (MAP 5) */
     for (int k = 0; k < 24; k++) {
         struct c2_chord *x = &c2.d.maps[5][k], *y = &c2.d.maps[1][k];
         if (y->q == Q_NONE) {
@@ -1368,18 +1372,28 @@ static void t_write(void)
     shift_key(KEY_DROP);
     knob(0, -100);
     knob(1, 3);                           /* POP */
-    knob(3, 1);                           /* MAP 7 */
+    knob(3, 2);                           /* MAP 7 */
     c2_press(0, KEY_DROP);
     CHECK(map_is(6, c2_factory_maps[3]) && !strcmp(c2.d.set[6].name, "POP"), "FACTORY POP -> MAP 7");
     /* EMPTY over a used map: confirm, then cleared */
     shift_key(KEY_DROP);
-    knob(0, 100);
+    knob(0, -100);
+    knob(0, W_EMPTY);
+    knob(3, 2);                           /* MAP 7 */
     c2_press(0, KEY_DROP);
     c2_press(0, KEY_DROP);
     int empty = 1;
     for (int k = 0; k < 24; k++)
         empty &= c2.d.maps[6][k].q == Q_NONE;
     CHECK(empty && !c2.d.set[6].name[0], "EMPTY -> MAP 7 (after OVERWRITE?)");
+    /* the map a WRITE replaced comes back as FROM OLD MAP 7, beyond the one undo */
+    knob(1, 1);                           /* another edit: the undo snapshot is gone */
+    shift_key(KEY_DROP);
+    knob(0, 100);
+    CHECK(c2.wr_from == W_LAST && c2.wr_last_map == 6, "FROM: OLD MAP 7 (what the last WRITE replaced)");
+    knob(3, 2);
+    c2_press(0, KEY_DROP);
+    CHECK(map_is(6, c2_factory_maps[3]) && !strcmp(c2.d.set[6].name, "POP"), "... written back: POP again");
     /* every transposition of every factory map stays playable (+-35) */
     ok = 1;
     for (int f = 0; f < C2_FACTORY_N; f++)
@@ -1746,6 +1760,39 @@ static void t_smooth(void)
         same &= cur[i] == N0 + 7 + own[i];
     CHECK(same, "SMOOTH off: the chord's own TOP");
     all_up();
+    /* a TOP turn with SMOOTH on starts from the TOP SMOOTH played and anchors the chord */
+    fresh(7);
+    c2.d.mode[0] = 6;
+    struct c2_chord *mm = c2.d.maps[4];
+    mm[2] = mk(0, Q_MIN7, 0, 0);
+    mm[7] = mk(0, Q_7, 0, 0);
+    c2.d.set[4].smooth = 1;
+    c2.page = 1;
+    key_dn(2);
+    key_up(2);
+    key_dn(7);
+    int smt = c2.smooth_top;
+    CHECK(c2.smooth_key == 7 && smt != 0, "SMOOTH voiced C7 with another TOP (%d)", smt);
+    knob(2, 1);
+    CHECK(c2.d.maps[4][7].top == smt + 1 && (c2.d.maps[4][7].flags & C2_ANCHOR) && c2.msg == MSG_ANCHOR,
+          "TOP +1 from the TOP that sounded, the chord anchored");
+    int8_t up7[4];
+    int nu7 = c2_upper(&c2.d.maps[4][7], c2.d.maps[4][7].top, up7), same7 = c2.smooth_n == nu7;
+    for (int i = 0; i < nu7 && same7; i++)
+        same7 &= c2.smooth_prev[i] == up7[i] + 7;
+    CHECK(same7, "the edit auditioned on the held key is what the next chord leads from");
+    key_up(7);
+    key_dn(2);
+    key_up(2);
+    key_dn(7);
+    int curn[8], cn = sounding_notes(curn);
+    CHECK(cn == 4 && curn[3] == N0 + 7 + up7[3], "an anchored chord plays its own TOP under SMOOTH");
+    key_up(7);
+    shift(1);
+    knob(6, 1);
+    shift(0);
+    CHECK(c2.smooth_n == 0 && c2.msg == MSG_SMOOTH_RESTART && c2.d.set[4].smooth, "SHIFT+white right with SMOOTH on: start over");
+    all_up();
     /* the page: SHIFT+white turns it on and off, one undo gesture */
     fresh(7);
     c2.d.mode[0] = 2;
@@ -1861,6 +1908,24 @@ static void t_strum(void)
           "legato change under STRUM: only A starts, B stops, C E G keep sounding");
     all_up();
     seq_run(5);
+    /* a slow legato roll (NEO SOUL, BASS, down 200 ms): the old chord hands its voices over one for one, no hole */
+    strum_setup(-17);
+    c2.d.mode[0] = 4;
+    seq_run(40);
+    key_dn(0);
+    seq_run(250);
+    int least = 99;
+    key_dn(3);
+    key_up(0);
+    for (int i = 0; i < 160; i++) {
+        seq_run(1);
+        int c = count_sounding();
+        least = c < least ? c : least;
+    }
+    CHECK(least >= 4 && count_sounding() == 5, "legato roll down 200 ms: never fewer than 4 voices mid-roll (%d)", least);
+    all_up();
+    seq_run(5);
+    strum_setup(2);
     /* a re-pressed key retriggers through the tick */
     key_dn(4);
     seq_run(30);
@@ -2097,8 +2162,21 @@ static void t_migrate(void)
     CHECK(c2.d.set[1].strum == -7 && c2.d.set[1].smooth == 1, "STRUM (down 70 ms) and SMOOTH persist");
 }
 
+static void dbg_dump(void)
+{
+    printf("  >6 at t %u owner %u\n   want:", (unsigned)host_time, (unsigned)c2.owner);
+    for (int r = 0; r < 96; r++)
+        if (c2.rel_ref[r])
+            printf(" %d", r - 36 + 0x35);
+    printf("\n   on:");
+    for (int r = 0; r < 96; r++)
+        if (c2.on[r])
+            printf(" %d(%d)", r - 36 + 0x35, (int)(c2.off_due[r] - host_time));
+    printf("\n");
+}
 int main(void)
 {
+    dbg_hook = dbg_dump;
     owner_p = &c2.owner;
     memcpy(&c2_boot, &c2, sizeof c2);
     t_model();

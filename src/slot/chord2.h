@@ -149,8 +149,9 @@ struct c2_chord {
     uint8_t n;
     uint8_t has_slash;              /* slash bass kept from a learned chord whose lowest note is not its root */
     int8_t slash;                   /* semitones from the key */
-    uint8_t pad;
+    uint8_t flags;                  /* C2_ANCHOR: a TOP turned with SMOOTH on (SMOOTH plays this TOP exactly) */
 };
+#define C2_ANCHOR 1
 
 /* Per map settings: strum = a signed index into c2_strum_ms (the whole spread; + up: low to high, - down), 0 off. */
 struct c2_set {
@@ -213,7 +214,8 @@ enum { C2_SAVE_NONE, C2_SAVE_OK, C2_SAVE_OPEN, C2_SAVE_WRITE, C2_SAVE_CLOSE, C2_
 enum { MSG_NONE, MSG_CLEARED, MSG_COPIED, MSG_PASTED, MSG_UNDONE, MSG_LEARNED, MSG_MAX4, MSG_EMPTY_CLIP, MSG_LATER,
        MSG_TURN_GREEN, MSG_NOTHING_UNDO, MSG_MODE, MSG_BASS, MSG_REDONE, MSG_PINNED, MSG_UNPINNED, MSG_WALL, MSG_LEARN_CANCEL, MSG_GREEN_FIRST,
        MSG_FACTORY_ASK, MSG_FACTORY_DONE, MSG_FACTORY_NOMAP, MSG_STRUM, MSG_SMOOTH, MSG_NO_TICK, MSG_WRITTEN,
-       MSG_OVERWRITE, MSG_WRITE_CANCEL, MSG_VOI_END, MSG_VOI_HINT, MSG_STRUM_WALL, MSG_COUNT };
+       MSG_OVERWRITE, MSG_WRITE_CANCEL, MSG_VOI_END, MSG_VOI_HINT, MSG_STRUM_WALL, MSG_SMOOTH_RESTART, MSG_SHIFT_UP,
+       MSG_ANCHOR, MSG_COUNT };
 
 /* STRUM's whole spread by detent: fine steps where a strum is a flam, coarse where it is a roll. */
 #define C2_STRUM_MAX 19
@@ -222,7 +224,7 @@ static const uint16_t c2_strum_ms[C2_STRUM_MAX + 1] = { 0, 5, 10, 15, 20, 25, 30
 C2_FN int c2_strum_spread(int st) { st = st < 0 ? -st : st; return c2_strum_ms[st > C2_STRUM_MAX ? C2_STRUM_MAX : st]; }
 
 /* WRITE (SHIFT+DROP): what to write into a map. */
-enum { W_FACTORY, W_SEVENTHS, W_TRIADS, W_COPY, W_EMPTY, W_COUNT };
+enum { W_FACTORY, W_SEVENTHS, W_TRIADS, W_COPY, W_EMPTY, W_LAST, W_COUNT };   /* W_LAST: the map the last WRITE replaced */
 
 #define C2_LEARN_MAX 8
 #define C2_NOTES_SHOW 30            /* frames (~1 s) the keyboard keeps the notes view after a chord knob turn */
@@ -311,6 +313,7 @@ struct c2_state {
     /* STRUM: our notes go through the sequencer thread while a map strums (chord2_impl.h "STRUM") */
     volatile uint32_t owner;        /* 0 the KeyHandler sends our notes, 1 the tick does, 2 the tick hands them back */
     volatile uint32_t due[96];      /* c2_time a wanted note may start */
+    volatile uint32_t off_due[96];  /* c2_time a released note may stop (a legato strum hands voices over one for one) */
     volatile uint8_t onset[96];     /* bumped at each new onset (a retrigger) */
     volatile uint8_t raw_off[96];   /* an untracked key-up the tick must send */
     volatile uint32_t seq_reset;    /* play mode switched: the tick forgets what it sent */
@@ -331,6 +334,9 @@ struct c2_state {
     uint32_t strum_wall;            /* clock when a STRUM turn stopped at OFF (a rest, then it crosses) */
     uint32_t wr_arm;                /* OVERWRITE? armed at this clock + 1 (0 = not) */
     struct c2_chord wr_map[C2_KEYS];   /* the preview (keys audition it) */
+    struct c2_chord wr_last[C2_KEYS];  /* what the last WRITE replaced (FROM: OLD MAP n) */
+    struct c2_set wr_last_set;
+    int32_t wr_last_map;               /* its map, -1 none */
     struct c2_set wr_set;
 };
 
@@ -771,7 +777,7 @@ C2_FN void c2_clear(struct c2_chord *c)
     c->n = 0;
     c->has_slash = 0;
     c->slash = 0;
-    c->pad = 0;
+    c->flags = 0;
 }
 
 /* TYPE turned on a learned chord: it becomes structured (recognised root and quality, or `q`), keeping a learned

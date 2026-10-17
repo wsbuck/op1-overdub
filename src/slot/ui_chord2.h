@@ -460,7 +460,10 @@ static const char *c2u_msg(const struct c2_state *s, int mode, char *b)
     case MSG_NO_TICK: return "STRUM: NO SEQ TICK, PLAYS AT ONCE";
     case MSG_VOI_HINT: return "UP KEEPS THE BASS, DROPS ARE LEFT";
     case MSG_SMOOTH: return s->msg_arg ? "SMOOTH ON: VOICE-LEADS" : "SMOOTH OFF";
-    case MSG_WRITTEN: c2u_s(c2u_i(c2u_s(b, "WRITTEN: MAP "), s->msg_arg + 1), "  SHIFT+[ UNDOES"); return b;
+    case MSG_WRITTEN: c2u_s(c2u_i(c2u_s(b, "WRITTEN TO MAP "), s->msg_arg + 1), "  SHIFT+[ UNDOES"); return b;
+    case MSG_SMOOTH_RESTART: return "SMOOTH STARTS OVER";
+    case MSG_SHIFT_UP: return "LET GO OF SHIFT";
+    case MSG_ANCHOR: return "ANCHORED: SMOOTH KEEPS THIS TOP";
     case MSG_OVERWRITE: c2u_s(c2u_i(c2u_s(b, "OVERWRITE MAP "), s->msg_arg + 1), "? ] AGAIN"); return b;
     case MSG_WRITE_CANCEL: return "WRITE CANCELLED";
     case MSG_VOI_END: return s->msg_arg > 0 ? "WIDEST UP" : "WIDEST DOWN";
@@ -700,9 +703,14 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
         w = w > FP(32) ? w : FP(32);   /* the strip's width */
         fp32 xt = xr - wt - wl - FP(4);
         ctext(r, "TOP", xt, FP(22) + 6 * ts - FP(6), FP(1), GREY, 1);
+        if (c->flags & C2_ANCHOR) {    /* anchored: SMOOTH plays this TOP exactly */
+            xt -= FP(10);
+            padlock(r, xt, FP(22) + 6 * ts - FP(8), WHITE, 0);
+            w += FP(10);
+        }
         int mm = c2_mode_map(mode);
         if (mm >= 0 && s->d.set[mm].smooth && s->smooth_n > 0 && s->smooth_map == mm && s->smooth_key == key &&
-            s->smooth_top != c->top) {  /* SMOOTH played another TOP: it shows, grey, before the stored one */
+            s->smooth_top != c->top && !(c->flags & C2_ANCHOR)) {  /* SMOOTH played another TOP: it shows, grey, before the stored one */
             int8_t sv[C2_NOTES];
             int sb, sn = c2_notes_t(c, s->d.set[mm].bass, s->smooth_top, sv, &sb);
             char sm[12];
@@ -712,7 +720,7 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
             w += ws + FP(6);
         }
         ctext(r, b, xr - wt, FP(22), ts, WHITE, s->turned != 2);
-        ctext(r, fam, xr - wf, FP(34), vs, c->voi ? ORANGE : GREY, s->turned != 3);
+        ctext(r, fam, xr - wf, FP(23) + 7 * ts, vs, c->voi ? ORANGE : GREY, s->turned != 3);   /* under TOP, any size */
         c2u_voi_strip(r, c, xr, FP(50));
         xr -= w + FP(10);
     }
@@ -802,15 +810,18 @@ static void c2u_editor(void *r, const struct c2_state *s, const struct c2_view *
 }
 
 /* WRITE (SHIFT+DROP): what goes into which map; the preview on the keys (they audition it). */
-static const char *const c2u_from_name[W_COUNT] = { "FACTORY", "7THS", "TRIADS", "COPY", "EMPTY" };
+static const char *const c2u_from_name[W_COUNT] = { "FACTORY", "7THS", "TRIADS", "COPY", "EMPTY", "OLD MAP" };
 static void c2_draw_write(void *r, const struct c2_state *s, const struct c2_view *v)
 {
     char big[32], b[4][16], *p;
     int from = s->wr_from < W_COUNT && s->wr_from >= 0 ? s->wr_from : W_EMPTY, fl = s->wr_set.flats != 0;
     ctext(r, "WRITE", FP(8), FP(5), FP(2), WHITE, 0);
-    const char *msg = v->now - s->msg_frame <= C2_FLASH && s->msg == MSG_OVERWRITE ? c2u_msg(s, 2, big) : 0;
+    int fresh = v->now - s->msg_frame <= C2_FLASH;
+    const char *msg = fresh && s->msg == MSG_OVERWRITE ? c2u_msg(s, 2, big) : 0;
     if (msg)
         c2u_tag(r, msg, FP(314), FP(3), FP(1), RED, RED, 1, 2);
+    else if (fresh && s->msg == MSG_SHIFT_UP)
+        ctext(r, "LET GO OF SHIFT", FP(312) - ctext_w("LET GO OF SHIFT", FP(1)), FP(8), FP(1), WHITE, 1);
     else
         ctext(r, "] WRITES  \\ CANCELS", FP(312) - ctext_w("] WRITES  \\ CANCELS", FP(1)), FP(8), FP(1), GREY, 1);
     /* the source, big */
@@ -828,7 +839,9 @@ static void c2_draw_write(void *r, const struct c2_state *s, const struct c2_vie
         p = c2u_i(c2u_s(big, "MAP "), s->wr_src + 1);
         if (t)
             c2u_i(c2u_s(p, t > 0 ? " +" : " -"), t > 0 ? t : -t);
-    } else
+    } else if (from == W_LAST)
+        c2u_i(c2u_s(big, "OLD MAP "), s->wr_last_map + 1);   /* what the last WRITE replaced */
+    else
         c2u_s(big, "EMPTY");
     fp32 st = FP(3);
     char to[4];
@@ -854,7 +867,7 @@ static void c2_draw_write(void *r, const struct c2_state *s, const struct c2_vie
         c2u_i(p, s->wr_shift);
         lab[2] = "OF";
         c2u_i(c2u_s(b[2], "MAP "), s->wr_src + 1);
-    } else if (from == W_EMPTY) {
+    } else if (from == W_EMPTY || from == W_LAST) {
         b[1][0] = b[2][0] = 0;
     } else {
         lab[1] = "KEY";
@@ -985,6 +998,13 @@ static void c2_draw_chip(void *r, const struct c2_state *s, const struct c2_view
         return;
     }
     if (c2u_last(s, v, nm, &fresh)) {
+        int mm = c2_mode_map(mode);
+        if (mm >= 0 && s->d.set[mm].strum) {   /* a strumming map says so off the page too */
+            for (int i = 18; i > 0; i--)
+                nm[i] = nm[i - 1];
+            nm[0] = s->d.set[mm].strum > 0 ? '{' : '}';
+            nm[19] = 0;
+        }
         c2u_tag(r, nm, FP(314), FP(3), FP(2), v->hold ? RED : c2_mode_map(mode) >= 0 ? BLUE : WHITE, fresh ? WHITE : GREY, 1, 1);
         return;
     }
