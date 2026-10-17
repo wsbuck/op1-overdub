@@ -1028,7 +1028,7 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
         v->ckb = keyb;
     }
     if (newc) {                             /* e (Q23 targets), the strike's brightness, its normalisation */
-        int32_t fcq = LERP(mt_strike, MT_STRIKE_W, ks, 1), slope = LERP(mt_strike, MT_STRIKE_W, ks, 2);
+        int32_t fcq = LERP(mt_strike, MT_STRIKE_W, ks, 1) * 2, slope = LERP(mt_strike, MT_STRIKE_W, ks, 2);
         uint32_t n2 = 0;
         for (int k = 0; k < 8; k++) {
             int32_t a = v->ak[k], qk = qh + v->lk[k];
@@ -1039,7 +1039,7 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
                 a = (a * (((MT_MODE_TOP - qk) * 10923) >> 12)) >> 15; /* x (TOP - q) / (TOP - FADE) */
             }
             if (qk > fcq)                   /* `slope` octaves of level per octave above the strike's corner */
-                a = (a * (exp2neg((int32_t)(((((uint32_t)(qk - fcq) * 683u) >> 6) * (uint32_t)slope) >> 12)) >> 15))
+                a = (a * (exp2neg((int32_t)((((((uint32_t)(qk - fcq) * 683u) >> 10) * (uint32_t)slope) >> 8))) >> 15))
                     >> 15;
             v->wk[k] = (int16_t)a;
             n2 += (uint32_t)(a * a) >> 4;
