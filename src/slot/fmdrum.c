@@ -314,7 +314,7 @@ static void squares(struct fd_voice *v, int n, const struct flt *nf)
             :
             : [c] "a"(cp)
             : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P2", "I0", "I1", "I2", "M0", "M1", "A0", "A1", "LC0",
-              "LT0", "LB0", "cc", "memory");
+              "LT0", "LB0", "CC", "memory");
         for (int j = 0; j < 6; j++)
             v->mt[j] = c.ph[j];
         v->mlp = c.lpm + 6 * nf->unit;
@@ -420,12 +420,13 @@ static void hv_core(struct fd_voice *v, int16_t *out, int n, const struct seg *s
         "P1 = [%[c] + 60];\n\t"
         "P2 = [%[c] + 64];\n\t"
         "LSETUP (1f, 2f) LC0 = P2;\n"
-        "1:\tR1 = I2;\n\t"
+        "1:\tM2 = I3;\n\t"                                      /* (moved early: M2 is an address-stage read) */
+        "R1 = I2;\n\t"
         "R7 *= R5;\n\t"                                         /* (m1 + m2) gf */
         "R0 = R7 + R1;\n\t"
         FSIN_A("R0 = EXTRACT (R0, R3.L) (Z) || R2 = [%[c] + 36];\n\t"
+               "M0 = I1;\n\t"
                "R5 = R5 + R2;\n\t"                                /* gf += dgf */
-               "M2 = I3;\n\t"
                "I2 += M2;\n\t"                                    /* mph += mi */
                "I3 += M3;\n\t")                                   /* mi += dmi */
         FSIN_B                                                  /* ms */
@@ -437,7 +438,6 @@ static void hv_core(struct fd_voice *v, int16_t *out, int n, const struct seg *s
         "R0 = R2 + R1;\n\t"
         FSIN_A("R0 = EXTRACT (R0, R3.L) (Z) || R2 = [%[c] + 28];\n\t"
                "R4 = R4 + R2;\n\t"                                /* gm += dgm */
-               "M0 = I1;\n\t"
                "I0 += M0;\n\t"                                    /* cph += ci */
                "I1 += M1;\n\t")                                   /* ci += dci */
         FSIN_B                                                  /* cs */
@@ -457,7 +457,7 @@ static void hv_core(struct fd_voice *v, int16_t *out, int n, const struct seg *s
         :
         : [c] "a"(cp)
         : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "P4", "I0", "I1", "I2", "I3", "M0", "M1",
-          "M2", "M3", "A0", "LC0", "LT0", "LB0", "cc", "memory");
+          "M2", "M3", "A0", "LC0", "LT0", "LB0", "CC", "memory");
     v->cph = c.cph;
     v->cinc = c.ci;
     v->mph = c.mph;
@@ -511,7 +511,7 @@ static void hv_core(struct fd_voice *v, int16_t *out, int n, const struct seg *s
 #define SRC_TAIL                                                                                                     \
     "2:\t[P1++] = R0;\n\t"                                                                                          \
     "[%[c] + 0] = R7;\n\t[%[c] + 20] = R3;\n\t"                                                                     \
-    : : [c] "a"(cp) : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P1", "P2", "I0", "LC0", "LT0", "LB0", "cc",  \
+    : : [c] "a"(cp) : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P1", "P2", "I0", "LC0", "LT0", "LB0", "CC",  \
       "memory"
 #endif
 
@@ -640,7 +640,7 @@ static void hv_filt(struct fd_voice *v, int n, const struct flt *nf)
         "[%[c] + 16] = R6;\n\t"
         :
         : [c] "a"(cp)
-        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "A0", "A1", "LC0", "LT0", "LB0", "cc",
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "A0", "A1", "LC0", "LT0", "LB0", "CC",
           "memory");
     v->lp = c.lp;
     v->bp = c.bp;
@@ -751,7 +751,7 @@ static void hv_mix(struct fd_voice *v, int16_t *out, int n, const struct seg *s)
         "[%[c] + 40] = R3;\n\t"
         :
         : [c] "a"(cp)
-        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P2", "I0", "I1", "I2", "A0", "A1", "LC0", "LT0", "LB0", "cc",
+        : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P2", "I0", "I1", "I2", "A0", "A1", "LC0", "LT0", "LB0", "CC",
           "memory");
     v->gt = c.gt >> 8;
     v->gn = c.gn >> 8;
@@ -764,7 +764,7 @@ static void hv_mix(struct fd_voice *v, int16_t *out, int n, const struct seg *s)
         int32_t cc = out[i], nz = fd_src[i];
         int32_t y = (cc * (gt >> 8)) >> 1;
         y += (nz * (gn >> 8)) >> 1;
-        y += ((nz * cc) >> 15) * (gr >> 8);
+        y += (nz == -32768 && cc == -32768 ? 32767 : (nz * cc) >> 15) * (gr >> 8);   /* (the MAC saturates) */
         y >>= 6;                                                    /* Q23 */
         dcy = y - dcx + fd_qmul(DC_R, dcy);
         dcx = y;
@@ -819,7 +819,6 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     int fresh = v->trig != v->seen;
     if (fresh) {                            /* from silence: phase 0, gains from 0; a sounding voice (retrigger,
                                              * steal) keeps its phases and gains and ramps from them: no click */
-        v->seen = v->trig;
         v->choke = 0;
         if (!v->age || !v->aenv) {          /* (a finished note's DC decay counts as silence; its dcy goes on) */
             v->cph = v->mph = 0;
@@ -832,8 +831,9 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
             if (!v->age)
                 v->dcy = 0;                 /* a voice the slot init silenced mid-note left it loud */
         }
-        v->age = 1;
+        v->age = 1;                         /* before seen: active() must never read 0 for a starting note */
         v->aenv = v->menv = v->senv = ENV1;
+        v->seen = v->trig;
         if (!v->seed) {
             v->seed = 0x2545F491u + vi * 0x9E3779B9u;
             for (int j = 0; j < 6; j++)     /* METAL's squares free-run from spread phases */

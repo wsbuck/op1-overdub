@@ -435,7 +435,11 @@ industrial / techno producer on renders and spectrograms):
   the kits and the 29-preset cap (drum_browser_check), the screen (no division or libc, every line clipped, buffers
   fit the longest readouts), fxpub (synth and drum FX share one live object and its mono slot: only one mode runs).
   Noted, not changed: two hats hit in the same block don't choke each other (the later can't see the pending one);
-  the regular DC blocker's truncating qmul holds a negative value under ~7 LSB (inaudible).
+  the regular DC blocker's truncating qmul holds a negative value under ~7 LSB (inaudible). A second reviewer on the
+  asm (GCC's generated code read): `"cc"` is no clobber on bfin (`"CC"` is: hv_mix writes CC; harmless as compiled,
+  fixed); two M-register moves right before their DAG use (a device stall) moved earlier; render now sets age before
+  marking the note seen (TE's steal scan on the other thread could read 0 for a just-started voice); gen_fmdrum.py
+  asserts the ranges the 16-bit MAC operands assume.
 - Sound review: fm industrial "ships": harsh, near-pink loop spectrum, no clicks, DC, clipping or join glitches;
   FEEDBACK grit -> chaos -> noise and METAL / GRIND deliver. Done (kit values): open / closed / half-open hats NOISE
   METAL 0.85 / 0.9 -> 0.95 (the FM body's 900 Hz ding was -11 dB of the open hat for its whole decay; now ~-19 dB,

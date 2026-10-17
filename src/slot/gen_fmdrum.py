@@ -641,6 +641,11 @@ assert len(_OLD) == 96
 def main():
     exp2, ratio, amp, mod, swp = tables()
     noise, clap, fmz, mgain = noise_table(), clap_table(), fm_table(), metal_gain_table()
+    # fmdrum.c's asm loops take these as 16-bit MAC operands: the clip gain signed (32 x = 32768 would invert the
+    # carrier), q as q - 32768 in -16384 .. 0, the filter's coefficients and weights signed
+    assert all(r[1] < 32768 for r in fmz), "clip gain"
+    assert all(16384 <= r[3] <= 32768 for r in noise), "q"
+    assert all(r[j] <= 32767 for r in noise for j in (2, 4, 5, 6, 8, 9, 10, 13)), "16-bit coefficients"
     ms = [[int(round(10000 * lo * (hi / lo) ** (i / 255))) for i in range(256)] for lo, hi in (DECAY, SNAP, MODDEC)]
     names = "".join(f"\"{z}\", " for z in NOISE_ZONES)
     harm = sum(1 << i for i, r in enumerate(RATIOS) if r in HARMONIC)
