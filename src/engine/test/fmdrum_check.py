@@ -81,7 +81,7 @@ def cases():
     for i, (k0, r) in enumerate(alias):
         c[f"alias{i}"] = (0, 127, 200, P(ratio=r, fm=16.0, mod=3.0, raw={0: k0}))
     c["dc"] = (0, 127, 400, P(hz=110, ratio=1.0, fm=2.4, mod=3.0))
-    c["decay_min"] = (0, 127, 60, P(raw={DECAY: 0}))
+    c["decay_min"] = (0, 127, 120, P(raw={DECAY: 0}))
     c["decay_mid"] = (0, 127, 300, P(decay=0.25))
     c["decay_max"] = (0, 127, 3400, P(raw={DECAY: 32767}))
     for z, k6 in (("off", 0), ("air", G.NZ("AIR", 0.7)), ("snare", G.NZ("SNARE", 0.73)), ("hat", G.NZ("HAT", 0.7)),
@@ -122,6 +122,11 @@ def cases():
     c["chg_fm"] = (0, 127, 80, P(hz=220, ratio=2.0, fm=1.0, decay=2.0, mod=3.0) + ["chg", 40, FM, G.k2_of(4.0)])
     c["chg_noise"] = (0, 127, 80, P(hz=220, decay=2.0, noise=G.NZ("AIR", 0.7)) + ["chg", 40, NOISE, G.NZ("HAT", 0.7)])
     c["retrig"] = (0, 127, 80, P(hz=60, decay=1.0, sweep=12, snap=0.02, fm=1.0, mod=0.03) + ["retrig", 30])
+    # a kit loaded while a loud note sounds (the factory's slot init silences the voices), then the key again: the
+    # new note starts from silence (its attack), not from the old note's filter and DC-blocker state
+    for z, nz in (("fb", 0), ("metal", G.NZ("METAL", 0.5))):
+        c[f"reinit_{z}"] = (0, 127, 80, P(hz=55, decay=4.0, raw={FM: G.k2_fb(5)}, mod=3.0, noise=nz) + ["reinit", 30])
+        c[f"fresh_{z}"] = (0, 127, 50, P(hz=55, decay=4.0, raw={FM: G.k2_fb(5)}, mod=3.0, noise=nz))
     c["worst"] = (23, 127, 30, [G.STOCK_HI[0], 32767, 32767, 32767, 31 * 1024, 32767, 32767, G.NZ("HAT", 0.5)])
     for z in ("METAL", "GRIND"):            # the harsh path's heaviest variants: feedback, square, METAL + GRIND mixed
         c[f"worst_{z.lower()}"] = (23, 127, 30, [G.STOCK_HI[0], 32767, 32767, 32767, 31 * 1024, 32767, 32767,
@@ -329,13 +334,17 @@ def legacy_match(check):
 
 def ref_match(res, ref, check):
     """--ref DIR: each old kit key against a render from before the change (fmdrum_check --keep): residual, spectra"""
-    worst_null, worst_spec, n = -999.0, 0.0, 0
+    worst_null, worst_spec, n, tail = -999.0, 0.0, 0, 0
     for name in ("fm 808", "fm 909", "fm metal", "fm zaps"):
         for k in range(24):
             c = f"kit_{name.replace(' ', '_')}_{k}"
             a = np.fromfile(os.path.join(ref, c + ".bin"), dtype="<i2").astype(float)
             b = res[c]["x"].astype(float)
             m = min(len(a), len(b))
+            nz = np.nonzero(a[:m])[0]       # up to where the reference ends: the DC blocker's decay after that is new
+            if len(nz) and nz[-1] + 1 < m:
+                tail = max(tail, int(np.abs(b[nz[-1] + 1:m]).max()))
+                m = nz[-1] + 1
             a, b = a[:m], b[:m]
             null = 10 * math.log10(max(((a - b) ** 2).sum(), 1e-9) / max((a ** 2).sum(), 1e-9))
             fa, ma = spectrum(a[:32768])
@@ -347,8 +356,9 @@ def ref_match(res, ref, check):
             spec = max(abs(x - y) for x, y in zip(da, db) if x > top - 40)
             worst_null, worst_spec = max(worst_null, null), max(worst_spec, spec)
             n += 1
-    check(worst_spec < 0.5, f"old kits against the reference renders ({n} keys): residual at most {worst_null:.1f} dB "
-          f"re the signal, third-octave spectra (within 40 dB of the top band) within {worst_spec:.2f} dB")
+    check(worst_spec < 0.5, f"old kits against the reference renders ({n} keys, each up to where the reference ends): "
+          f"residual at most {worst_null:.1f} dB re the signal, third-octave spectra (within 40 dB of the top band) "
+          f"within {worst_spec:.2f} dB; after it the DC blocker's decay, at most {tail} LSB")
 
 
 def spectrum(x, f0=None):
@@ -384,9 +394,19 @@ def peak_groups(x):
     return len([p for j, p in enumerate(peaks) if j == 0 or p - peaks[j - 1] > 300])
 
 
+def hp40(x):
+    """one-pole high-pass at 40 Hz: without the DC blocker's sub-audio decay after a note (fmdrum.c TAIL_END)"""
+    a = 1 - 2 * math.pi * 40 / FS
+    y, lo = np.empty(len(x)), 0.0
+    for i, v in enumerate(x.astype(float)):
+        lo = a * lo + (1 - a) * v
+        y[i] = v - lo
+    return y
+
+
 def t60_index(x, start=0):
-    """samples from the peak until the 2 ms RMS last falls below peak RMS - 60 dB"""
-    e = np.sqrt(np.convolve(x.astype(float) ** 2, np.ones(176) / 176, "same"))
+    """samples from the peak until the 2 ms RMS (above 40 Hz) last falls below peak RMS - 60 dB"""
+    e = np.sqrt(np.convolve(hp40(x) ** 2, np.ones(176) / 176, "same"))
     p = int(np.argmax(e))
     below = np.nonzero(e[p:] < e[p] * 1e-3)[0]
     return (below[0] if len(below) else len(x) - p) / FS
@@ -564,6 +584,16 @@ def main():
             dcs.append(abs(x.sum()) / max(np.abs(x).sum(), 1))
     check(max(dcs) < 0.02, f"DC over every kit key's whole note: |sum| / sum |x| at most {100 * max(dcs):.2f} %")
 
+    # ---- the voice's end: no step (the DC blocker decays to 0 first) ----
+    steps = []
+    for n in cs:
+        e = res[n]["end"]
+        if e >= 0:
+            steps.append((abs(int(res[n]["x"][e * 128 + 127])), n))
+    worst_end = max(steps)
+    check(worst_end[0] <= 4, f"notes end without a step: the last sample before silence at most {worst_end[0]} "
+          f"({worst_end[1]}; {len(steps)} notes that end)")
+
     # ---- amplitude decay and the voice's end ----
     for n, want in (("decay_min", G.DECAY[0]), ("decay_mid", 0.25), ("decay_max", G.DECAY[1])):
         x = res[n]["x"]
@@ -605,6 +635,12 @@ def main():
         at = d[b * 128 - 2:b * 128 + 130].max()
         around = max(d[(b - 4) * 128:(b - 1) * 128].max(), d[(b + 2) * 128:(b + 5) * 128].max())
         check(at <= 1.25 * around, f"{n}: largest step at the change {at} vs {around} around it (no click)")
+    for z in ("fb", "metal"):               # after the slot init the note restarts as a new one: from 0, no DC step
+        x, f = res[f"reinit_{z}"]["x"][30 * 128:50 * 128].astype(float), res[f"fresh_{z}"]["x"][:20 * 128].astype(float)
+        first, dc = abs(x[0]), abs(x.mean() - f.mean())
+        check(first <= 64 and dc <= 64 and np.abs(np.diff(x[:32])).max() <= 2 * np.abs(np.diff(f[:32])).max() + 64,
+              f"a kit loaded mid-note ({z}), then the key again: the note starts from 0 (first sample {first:.0f}, "
+              f"the first 23 ms' mean {dc:.0f} off a new note's)")
     x = res["retrig"]["x"]
     p0, p1 = np.abs(x[:30 * 128]).max(), np.abs(x[30 * 128:]).max()
     check(abs(p1 / p0 - 1) < 0.1, f"retrigger restarts the note (peak {p1} vs first {p0})")
@@ -640,10 +676,15 @@ def main():
           f"without HAT noise (ends {ends['choke_outside']}, {ends['choke_notzone']}, {ends['choke_victim']})")
     xm = np.fromfile(os.path.join(w, "choke_metal.bin"), dtype="<i2").astype(np.int64)
     dm = np.abs(np.diff(xm[20 * 128 - 4:22 * 128]))
-    check(20 <= ends["choke_metal"] <= 25 and 20 <= ends["choke_mixed"] <= 25 and ends["choke_grind"] < 0
-          and dm.max() < 2 * np.abs(np.diff(xm[18 * 128:20 * 128])).max(),
-          f"METAL hats on 10..13 choke too: METAL by METAL {ends['choke_metal'] - 20} blocks, METAL by HAT "
-          f"{ends['choke_mixed'] - 20}, no click; a GRIND key rings on ({ends['choke_grind']})")
+    def e300(y):                            # energy above 300 Hz (the hat; not the DC blocker's sub-audio decay)
+        fr, m = spectrum(y)
+        return float((m[fr > 300] ** 2).sum()) + 1e-12
+    gone = 10 * math.log10(e300(xm[24 * 128:32 * 128]) / e300(xm[12 * 128:20 * 128]))   # 6 .. 17 ms after, re before
+    check(20 <= ends["choke_metal"] <= 60 and 20 <= ends["choke_mixed"] <= 60 and ends["choke_grind"] < 0
+          and dm.max() < 2 * np.abs(np.diff(xm[18 * 128:20 * 128])).max() and gone < -50,
+          f"METAL hats on 10..13 choke too: {gone:.0f} dB 6 ms after the hit, the voice free after "
+          f"{ends['choke_metal'] - 20} blocks (METAL by HAT {ends['choke_mixed'] - 20}; the DC decay included), no click; "
+          f"a GRIND key rings on ({ends['choke_grind']})")
 
     # ---- knob layout and tables ----
     rs = G.RATIOS

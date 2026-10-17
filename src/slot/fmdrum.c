@@ -53,7 +53,8 @@
 #define RAM __attribute__((section(".data")))
 #define BLOCK 128
 #define ENV1 (1 << 30)                      /* envelopes, Q30 */
-#define SILENT 339547                       /* -70 dB of ENV1: the voice ends */
+#define SILENT 339547                       /* -70 dB of ENV1: the note ends */
+#define TAIL_END (4 << 8)                   /* .. and the voice once the DC blocker's value is under 4 LSB (Q23) */
 #define RAD 20861                           /* phase units per radian per Q15 sample: 2^32 / 2 pi / 32768 */
 #define LIMIT 807404                        /* 0.77 fs, Q20 of fs: folds back to 20 kHz */
 #define M_FADE 458752                       /* 0.4375 fs: the modulator fades out from here .. */
@@ -820,12 +821,16 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
                                              * steal) keeps its phases and gains and ramps from them: no click */
         v->seen = v->trig;
         v->choke = 0;
-        if (!v->age) {
+        if (!v->age || !v->aenv) {          /* (a finished note's DC decay counts as silence; its dcy goes on) */
             v->cph = v->mph = 0;
             v->gt = v->gn = v->gm = v->gf = v->gr = 0;
             v->gc = 1024;
             v->m1 = v->m2 = 0;
             v->lp = v->bp = 0;
+            v->mlp = 0;
+            v->dcx = 0;
+            if (!v->age)
+                v->dcy = 0;                 /* a voice the slot init silenced mid-note left it loud */
         }
         v->age = 1;
         v->aenv = v->menv = v->senv = ENV1;
@@ -838,6 +843,21 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     if (!v->age) {
         for (int i = 0; i < BLOCK; i++)
             out[i] = 0;
+        return;
+    }
+    if (!v->aenv) {                         /* the note is over: the DC blocker's own decay to 0 (as the voice
+                                             * would go on with silence; a short, low note leaves up to ~-30 dBFS
+                                             * there, which ending the voice at once cut: a click), then the voice
+                                             * ends. Rounded toward 0 (a negative value would stick: qmul floors). */
+        int32_t dcy = v->dcy, dcx = v->dcx;
+        for (int i = 0; i < BLOCK; i++) {
+            dcy = (dcy < 0 ? -fd_qmul(DC_R, -dcy) : fd_qmul(DC_R, dcy)) - dcx;
+            dcx = 0;
+            out[i] = soft_knee(dcy >> 8);
+        }
+        v->dcx = 0;
+        v->dcy = dcy;
+        v->age = dcy > -TAIL_END && dcy < TAIL_END ? 0 : v->age + 1;
         return;
     }
 
@@ -990,7 +1010,12 @@ void fmdrum_render(struct tobj *o, int16_t *out, const int16_t *p)
     v->menv = m1;
     v->senv = s1;
     v->index_q8 = i1;
-    v->age = a1 < SILENT ? 0 : v->age + 1;
+    v->age++;
+    if (a1 < SILENT) {                      /* silent: the DC blocker's decay next, or the voice ends */
+        v->aenv = 0;
+        if (v->dcy > -TAIL_END && v->dcy < TAIL_END)
+            v->age = 0;
+    }
 
     uint32_t dt = cycles() - t0;
     fmdrum_diag.cyc_max = dt > fmdrum_diag.cyc_max ? dt : fmdrum_diag.cyc_max;
@@ -1023,12 +1048,13 @@ void fmdrum_note_on(struct tobj *o, const int16_t *key_params)
     fmdrum_diag.last_voice = (int32_t)vi;
 }
 
-/* TE frees the voice when this returns 0 and steals the voice with the largest value: the oldest. */
+/* TE frees the voice when this returns 0 and steals the voice with the largest value: a finished note's DC decay
+ * first, then the oldest. */
 int32_t fmdrum_active(struct tobj *o)
 {
     unsigned vi = (unsigned)o->voice < FD_VOICES ? (unsigned)o->voice : 0;
     const struct fd_voice *v = &fmdrum_voice[vi];
-    return v->trig != v->seen ? 1 : (int32_t)v->age;
+    return v->trig != v->seen ? 1 : v->age && !v->aenv ? 0x40000000 : (int32_t)v->age;
 }
 
 void fmdrum_note_off(struct tobj *o, const int16_t *key_params)

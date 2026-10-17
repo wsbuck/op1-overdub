@@ -21,9 +21,10 @@ enum { FD_PITCH, FD_SWEEP, FD_FM, FD_DECAY,         /* blue, green, white, orang
 struct fd_voice {
     uint32_t trig, seen;                    /* note-ons written / taken by render */
     int32_t key, vel;                       /* key 0..23, velocity Q15 */
-    uint32_t age;                           /* blocks since the note-on, 0 = silent */
+    uint32_t age;                           /* blocks since the note-on, 0 = silent (the voice is free) */
     uint32_t cph, mph;                      /* carrier, modulator phase */
-    int32_t aenv, menv, senv;               /* amplitude, modulator, sweep envelopes, Q30 (start 1.0) */
+    int32_t aenv, menv, senv;               /* amplitude, modulator, sweep envelopes, Q30 (start 1.0); aenv 0 with age:
+                                             * the note is over, the DC blocker's tail plays out */
     int32_t gt, gn, gm;                     /* tone gain Q23, noise gain Q23, modulation depth (phase units per Q15) */
     uint32_t cinc, minc;                    /* increments at the end of the last block (the next block's start) */
     uint32_t seed;

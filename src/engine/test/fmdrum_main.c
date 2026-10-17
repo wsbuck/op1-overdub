@@ -3,6 +3,7 @@
  *   fmdrum_main KEY VEL BLOCKS P0 .. P7 [chg BLOCK KNOB VALUE] ... [retrig BLOCK] ... [ramp B0 B1 KNOB V0 V1] ...
  *       one note on voice 3: slot init, note-on, BLOCKS x (render, active); "chg" sets a knob of the key before that
  *       block's render (TE copies the key's params every block), "retrig" sends another note-on before that block,
+ *       "reinit" runs the slot init (TE's factory: a kit loaded) and then a note-on before that block,
  *       "ramp" moves a knob linearly from V0 at block B0 to V1 at B1 (a slow turn, or TE's LFO)
  *   fmdrum_main poly BLOCKS N P0..P7 x N
  *       N voices (0..N-1, keys 0..N-1) start together and all render every block: stdout their mix (sum / 4, clamped),
@@ -175,7 +176,7 @@ int main(int argc, char **argv)
     if (argc < 12)
         return 2;
     int key = atoi(argv[1]), vel = atoi(argv[2]), blocks = atoi(argv[3]), v = 3;
-    int chg_b[16], chg_k[16], chg_v[16], nchg = 0, rt_b[8], nrt = 0;
+    int chg_b[16], chg_k[16], chg_v[16], nchg = 0, rt_b[8], nrt = 0, ri_b[4], nri = 0;
     int rp_b0[4], rp_b1[4], rp_k[4], rp_v0[4], rp_v1[4], nrp = 0;
     for (int i = 12; i < argc; i++) {
         if (!strcmp(argv[i], "chg") && i + 3 < argc && nchg < 16) {
@@ -185,6 +186,8 @@ int main(int argc, char **argv)
             i += 3;
         } else if (!strcmp(argv[i], "retrig") && i + 1 < argc && nrt < 8) {
             rt_b[nrt++] = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "reinit") && i + 1 < argc && nri < 4) {
+            ri_b[nri++] = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "ramp") && i + 5 < argc && nrp < 4) {
             rp_b0[nrp] = atoi(argv[i + 1]);
             rp_b1[nrp] = atoi(argv[i + 2]);
@@ -214,6 +217,11 @@ int main(int argc, char **argv)
         for (int j = 0; j < nrt; j++)
             if (rt_b[j] == b)
                 note_on(v, key, vel, kp);
+        for (int j = 0; j < nri; j++)
+            if (ri_b[j] == b) {                              /* the slot reloaded mid-note (factory: slot init), */
+                call(fd_slot_init_entry, (void *)0, 0, 0);   /* then the key again */
+                note_on(v, key, vel, kp);
+            }
         memcpy(params, kp, sizeof params);                   /* TE copies the key's params for each block */
         uint32_t t0 = cycles();
         call(fd_render_entry, voices[v], out, params);
