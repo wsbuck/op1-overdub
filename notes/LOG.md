@@ -1540,3 +1540,62 @@
      - all 12 voices on harsh keys at once: listen for crackle;
      - how it feels.
 - Result: _pending user flash_.
+
+## 2026-10-17 — Test image 85: NIGHT2.OP1 (CHORD v2 after the NIGHT1 device test) + NIGHT2SAFE.OP1
+- NIGHT1 (84) on the device: boot, frame hook (F:, CT), knob swallow (K:511, D:1024, TE's knobs unchanged), SP/LI/DR/
+  UP/DN, the file (SAVE 30 OK, MK:-1, FILE B after a power cycle, mode restored, MAP 3 chip), the chip (no collisions),
+  the voice budget, HOLD with a melody over the pad, the octave extremes, the TYPE scan, SPLIT+key clear, undo / redo
+  all work. "Overall this feels extremely useful and exciting." Broken: learn ("the notes just played normally,
+  LEARNED never appeared").
+- Causes and fixes (notes/chord2.md §12 review log, "Device test NIGHT1"):
+  - **Learn:** with SHIFT down, TE's key dispatcher `FUN_019b6c74` calls the SHIFT slot (our `hold_shiftkey`) for every
+    press before playing it, note keys included. Our "SHIFT used for a combo no longer learns" rule counted each
+    chord note there as a combo, so no learn ever started. TE's note key codes now pass as notes. The host test
+    delivers keys the way `FUN_019b6c74` does and fails without the fix. New diagnostic line 3: `LEARN S: OK: X: B:
+    END: CB:`.
+  - **LIFT / DROP off the page:** not ours. Off the page our press slot hands LIFT / DROP to TE's own press function
+    with the same arguments, the same as stock (`0x01A51058`: LIFT = copy the slot's sound, DROP = paste it). LIFT
+    then DROP on the same slot is a no-op by design. NIGHT1SAFE has the same path.
+  - **No more edit freeze:** the edited key is always the last key pressed, unless pinned. Only a short SPLIT tap pins
+    (blue padlock, blue outline); tapping SPLIT again or closing the page unpins.
+  - New: **SHIFT+DROP, then DROP restores the map to factory** (maps 5..8: clear); SHIFT+LIFT undoes.
+  - New: **the notes view** replaces the small ruler. While a chord knob turns, for ~1 s after, after a learn, and in
+    SHAPE, the main keyboard lights and names the chord's notes (root blue, top white, others light blue). Notes off
+    the keyboard show as an edge arrow with a count. The chord name is bigger; TOP and VOICING sit at the right.
+  - UX round 3 (subagent):
+    - pinned, DROP pastes onto the key tapped;
+    - the factory question names the map, and only a plain DROP confirms;
+    - a long SPLIT does not pin;
+    - a "\ PIN" hint.
+- `firmware/images/NIGHT2.OP1`: built from commit f9a12f8 in a clean `git archive`, with the same command as NIGHT1
+  and `--name NIGHT2`. 29 factory drum presets; te-boot identical to stock.
+  sha256 347b7c5a1c30123826f4f6df6974c4146dd6f257478367ab576b70ffa40ecd5c.
+- `firmware/images/NIGHT2SAFE.OP1`: that build's bundle, `apply.py op1_246.op1 NIGHT2SAFE.OP1 --without chord2`
+  (CHORD1, everything else as NIGHT2); te-boot identical to stock.
+  sha256 f0ecf3402f7916bffd7625edd8f570b23f1af178ebeef8b763460883bb1a1994.
+- **Before flashing:** 29 or fewer saved drum sounds (as NIGHT1). The chord file from NIGHT1 is kept (same format).
+- Retest (SHIFT held on the page shows the diagnostics; line 3 = `LEARN S:<starts> OK:<written> X:<cancelled>
+  B:<blocked> END:<U|N|P|C|E|B|M> CB:<last combo key> [USED]`):
+  1. **Learn.** Slot in MAP 1, open the page (SHIFT+SPLIT), let go of everything.
+     - Tap C4 (it is outlined). Hold SHIFT, play A C E G (they sound and LEARN shows the name in red, the keyboard
+       lights them red), let go of SHIFT: "LEARNED", the keyboard shows the notes ~1.5 s, C4 plays A-7.
+     - Hold SHIFT with no notes: report line 3. Expected `S:1 OK:1 X:0 B:0 END:U`.
+     - If it fails, report line 3 exactly. `S:0` with `B:` going up means SHIFT + note is still counted as a combo
+       (`CB:` names the key). `END:N` or `P` means our release slot missed SHIFT's release. `USED` before any note
+       means the SHIFT press itself was taken as a combo.
+     - Also: SHIFT + notes with the page closed, slot OFF = CHORD1's shape learn (END:U).
+  2. **Edit target.** Turn a knob on C4, then at once press G4: G4 is edited (no wait). Play a chord, then a plain
+     note: the plain note is edited.
+  3. **Pin.** Tap SPLIT: a blue padlock by the key name and a blue outline. Play other keys: the knobs still edit the
+     pinned key. LIFT, tap another key, DROP: pasted there, the pin stays. Tap SPLIT again: "UNPINNED: LAST KEY
+     EDITS" with an open padlock; the next key pressed is edited. Hold SPLIT ~1 s and let go without a key: no pin.
+     Pin, close the page (SHIFT+SPLIT), reopen: unpinned.
+  4. **Notes view.** Turn green on C4: the keyboard shows the chord's notes, named, while turning and ~1 s after,
+     then the chord names again. On the top D key, turn white up: an arrow with a count at the right edge. Is the
+     big name and the TOP / VOICING readout easy to read?
+  5. **Factory restore.** MAP 3 (NEO SOUL): change two keys. SHIFT+DROP: "MAP 3 TO FACTORY: ] AGAIN" (red). Press a
+     key: cancelled. SHIFT+DROP, then DROP: "FACTORY", the keys are back. SHIFT+LIFT: your edits return.
+  6. **LIFT / DROP off the page:** to see TE's own sound copy / paste, LIFT on one synth slot, pick another slot, DROP
+     there; compare with NIGHT2SAFE.
+  7. Quick repeat of NIGHT1's passing steps: boot, file (FILE A/B, SAVE OK), chip, voices, HOLD.
+- Result: _pending user flash_.
