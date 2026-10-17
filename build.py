@@ -90,6 +90,9 @@ def main():
     open(stock_ldr, "wb").write(stock["OP1_vdk.ldr"])
     open(stock_db, "wb").write(stock["content/op1_factory.db"])
 
+    # the bfin GCC 4.3 -O2 hardware-loop CC miscompile (src/slot/test/loopcc.py): no device object may show it
+    run(sys.executable, os.path.join(ROOT, "src", "slot", "test", "loopcc_check.py"), "--scan")
+
     engines = pick(os.path.join(ROOT, "src", "slot", "engines.json"), a.engines, "engines")
     fxs = pick(os.path.join(ROOT, "src", "slot", "fx.json"), a.fx, "FX")
     if not engines:
