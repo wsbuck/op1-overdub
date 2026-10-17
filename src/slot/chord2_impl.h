@@ -205,8 +205,8 @@ static void c2_restore(void)
     if (m < 0 || m >= C2_MAPS || c2.loading || c2_mode_map(c2_mode()) != m)
         return;
     c2_snapshot(0);
-    /* whole-map copies, one flat loop each (a per-key loop around the inlined copy came out wrong from the bfin
-     * GCC 4.3 at -O2 in the simulator: keys after the first left zero) */
+    /* whole-map copies, one flat loop each, the map test outside them: a per-key loop with `m < C2_FACTORY_N` inside
+     * hits the bfin GCC 4.3 -O2 hardware-loop CC bug (src/slot/test/loopcc.py): keys after the first left zero */
     if (m < C2_FACTORY_N) {
         c2_copy(c2.d.maps[m], c2_factory_maps[m], sizeof c2.d.maps[m]);
         c2_copy(&c2.d.set[m], &c2_factory_set[m], sizeof c2.d.set[m]);

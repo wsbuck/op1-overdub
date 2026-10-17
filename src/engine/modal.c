@@ -136,10 +136,14 @@ static void strike(struct vram *v, int ex, int32_t bright, int32_t c, int32_t am
     /* dry run: energy of the burst, sum of (x >> 4)^2 (cached: rain and repeated notes skip it) */
     uint32_t sd = 0x9E3779B9u, e = 0;                       /* same burst every strike */
     int32_t lp = 0, env = 32767 << 8;
+    int32_t pm = -plain;                                    /* all ones for pluck: a mask, not `plain ? w : lp` */
     for (int n = 0; n < len; n++) {
         int32_t w = noise_q15(&sd);
         lp += ((w - lp) * c) >> 15;
-        int32_t x = ((plain ? w : lp) * (env >> 8)) >> 15;
+        /* with `plain ? w : lp`, bfin GCC 4.3 -O2 kept the test in CC across this loop and the loop's own counter
+         * test overwrote it (src/slot/test/loopcc.py): the dry run measured unfiltered noise after the first
+         * sample, so low-passed bursts came out quieter than their target RMS */
+        int32_t x = ((lp ^ ((w ^ lp) & pm)) * (env >> 8)) >> 15;
         e += (uint32_t)((x >> 4) * (x >> 4));
         env -= step;
     }

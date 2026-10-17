@@ -574,9 +574,22 @@ three knobs stay for precision.
     UX round 2 rule "a plain note over a sounding chord doesn't take the edit" went with it; the pin covers that case.
   - New (user): restore a map to factory (SHIFT+DROP, then DROP); the notes view on the main keyboard instead of the
     ruler.
-  - A bfin GCC 4.3 `-O2` quirk found on the way: a per-key loop around the inlined byte copy from the const factory
-    table left every key after the first zero in the simulator (`-O0` and the host were right). The restore copies the
-    whole map in one flat loop instead, and the simulator test checks it.
+  - A bfin GCC 4.3 `-O2` miscompile found on the way: a per-key loop around the inlined byte copy from the const
+    factory table left every key after the first zero in the simulator (`-O0` and the host were right). The restore
+    copies the whole map in one flat loop instead, and the simulator test checks it.
+  - Root cause (a compiler bug, not UB in our code; `-fno-strict-aliasing` does not change it): the loop was
+    `for (k) { if (m < 4) copy key; else clear key; }`. GCC hoisted `m < 4` out of the loop into the CC register.
+    The outer loop did not become a hardware loop (block reordering gave it two latches), so bfin's machine reorg
+    rewrote its `loop_end` insn as `P4 += -1; cc =P4==0; if !cc jump`. That overwrites CC, which `loop_end` never
+    declares. From the second key on, `if !cc` tested the counter, so the clear branch ran. `-O1`, `-O3` (which
+    unswitches the loop), `-fno-move-loop-invariants`, `-fno-gcse` and `-fno-reorder-blocks` each avoid it. Whether
+    it hits depends on context: the same loop inlined into `c2_press` became a hardware loop and was right; it only
+    broke where `c2_restore` stayed out of line. Repro, an assembly scan for the signature, and a scan of every
+    device object: `src/slot/test/loopcc_check.py` (`loopcc.py`, `loopcc_main.c`). The scan found one more instance,
+    modal.c's `strike` dry run (`plain ? w : lp` in the loop), which is now a mask select. Non-pluck bursts had
+    been normalised on unfiltered noise: ~1 dB under their target RMS when bright, ~25 dB when dark. modal is no
+    longer in engines.json, so no current image (NIGHT2 included) has it; the MODAL test images (LOG.md image 23
+    on) probably did.
 - **UX round 3** (fresh subagent, live performer, on the new rules and renders). Adopted:
   - pinned, DROP pastes onto the key tapped (LIFT the pinned chord, tap, DROP: fan it out);
   - the factory question names the map ("MAP 3 TO FACTORY", "CLEAR MAP 6"), and only a plain DROP confirms (SHIFT+DROP
