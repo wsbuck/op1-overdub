@@ -312,11 +312,12 @@ The maps are coded in `design/fx/gen_wheel.py` (`grid_of`, `fortune_of`, `gate_o
   matrices: the wheel's rotation, the playhead, the sword's raise, the snake's rotation, Anubis's translation. The
   SVG header lists every id; `runtime_state()` in the generator is the reference for ui.c.
 - Renderer rules:
-  - 222 drawable elements (121 in the figures, round 3), each one subpath of absolute M / L / C / Z; check_svg PASS;
+  - 212 drawable elements (111 in the figures, round 4), each one subpath of absolute M / L / C / Z; check_svg PASS;
   - the heaviest element is the rim band's stroke, ~1331 cells (35 % of 3840; the heaviest figure element is the
-    lion's cloud, ~1092, 28 %), worst over every gallery state and
+    lion's cloud, ~1210, 32 %), worst over every gallery state and
     animation frame;
-  - drawn per frame: ~60–100 elements before round 3, ~126 after (default state; ~21 k cells).
+  - drawn per frame: ~60–100 elements before round 3, ~126 after (default state; ~21 k cells); round 4's line
+    art ~120 (~31 k cells: a stroke counts both sides).
   - Per frame the C does matrices and flag writes only (a few thousand cycles). Render cost is like pingpong's /
     choir's (2–11 M cycles; Hypothesis until `--svg-cost`).
 - Gallery: the session scratchpad `beatrepeat/index.html` (19 states at 1× and 2×, `wheel.gif`, 123 frames).
@@ -405,6 +406,24 @@ The figures redrawn first (§3 "Figures"); the review on that, all must / should
 | COULD: Anubis's lpg kilt the brightest thing on him | kilt purplegrey, the ears further apart |
 | COULD: the bull's and lion's far wing a grey fern | shortened to 18 |
 | COULD: keep the bull's cloud clear of BAR k/n | kept (x <= 60) |
+
+### Round 4, TE line art (the user: "more outlined"; a fresh subagent as a TE designer, against the stock screens; scratchpad `repeat_art2/`)
+The figures restyled after TE's own screens (1.5 lines about 90 % of the time, square caps, few colours, mostly no
+fill): every figure outlined (`ol()`: 1.5, square caps, round joins), black inside where it must hide what is behind
+(bodies, heads, near wings, clouds; far wings, the snake's body and Anubis's body unfilled); bodies purplegrey,
+heads / faces / pages lpg, inner lines grey; eyes and a few tiny parts solid. Inner details became lines (robe folds
+and girdle, the eagle's breast, the haunches, the nemes bands). The rim: two purplegrey 1.5 lines on an offblue band
+(was a darkblue band); the knob-driven spokes, gate, lots, sword, open books and orange stay as they were.
+
+| finding | change |
+|---|---|
+| MUST: BAR k/n ran into the bull's cloud | its last bump dropped (the cloud ends at x 57) |
+| MUST: the sphinx a knot at 1x (body, nemes and the rim's line together) | lifted off the rim (base y 28.4, a black gap above the line), the nemes stripes 5 -> 3 (one band, as proposed, lost the pharaoh) |
+| SHOULD: the clouds as bright as the figures | darkblue outlines |
+| SHOULD: the bull and lion bodies empty sacks | a purplegrey shoulder fold on the bull, both haunches purplegrey |
+| SHOULD: Anubis cramped against the rim | drawn 2.5 further out (the runtime's translation is relative, unchanged) |
+| COULD: the closed books two greys | one lpg outline and one grey page line |
+| COULD: the wings a sawtooth at 1x; the offblue band | not done (kept) |
 
 ## 5. Decisions (the user, 2026-10-17)
 1. The name is `repeat` (no alias).

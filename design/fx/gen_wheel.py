@@ -191,14 +191,24 @@ def rotm(a, cx=WX, cy=WY):
     return (c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy)
 
 
-# ------------------------------------------------------------------ artwork: the figures (after the art review)
-# Our own flat drawing of the RWS layout (Pamela Colman Smith's card, 1909, public domain), not a trace: the figures
-# are built from a few shared shapes (the feathered wing, the scalloped cloud, the open book) in one neutral palette:
-# wings grey with purplegrey coverts, bodies purplegrey, faces and pages lpg, details darkblue / black. Knob colours
-# only where a knob acts: the books' green pages (VARY), the sword (the roll), the snake / Anubis orange (PITCH).
+# ------------------------------------------------------------------ artwork: the figures (TE line art, round 4)
+# Our own drawing of the RWS layout (Pamela Colman Smith's card, 1909, public domain), not a trace, in TE's line-art
+# style (the stock screens: 1.5 strokes, square caps, few colours, black inside): every figure is outlined, filled
+# black so it hides what lies behind it. Outlines: bodies purplegrey, heads / faces / pages lpg, feathers, clouds and
+# inner lines grey; only the eyes and a few tiny parts are solid. Knob colours only where a knob acts: the books'
+# green pages (VARY), the sword (the roll), the snake / Anubis orange (PITCH).
+OL = 1.5                # TE's line width
+
+
 def T(pts, dx=0.0, dy=0.0, sx=1.0, sy=None):
     sy = sx if sy is None else sy
     return [(dx + sx * x, dy + sy * y) for x, y in pts]
+
+
+def ol(id, pts, colour, sw=OL, close=True, fill=None):
+    """a TE line: closed outlines are filled black (they hide what is behind), open ones not"""
+    return N("path", id, d=P(*pts, close=close), fill=fill or (C["black"] if close else "none"),
+             **A(stroke=colour, stroke_width=f(sw), stroke_linecap="square", stroke_linejoin="round"))
 
 
 def multi_fill(id, polys, colour):
@@ -213,28 +223,26 @@ def arc(cx, cy, rx, ry, a0, a1, n):
 
 
 def cloud(id, x0, y, bumps):
-    """a TE-flat cloud: a flat base at y and a scalloped top (bumps = [(width, height, lift)] left to right: each a
-    half ellipse standing lift above the base), offblue with a thin darkblue edge (one element: a fill and a stroke).
-    Drawn over the figure's feet, so the creatures sit in their clouds"""
+    """a TE line cloud: a scalloped top (bumps = [(width, height, lift)] left to right: each a half ellipse standing
+    lift above the base) over a few shallow lobes, outlined darkblue (it sits back), black inside. Drawn over the figure's feet, so the
+    creatures sit in their clouds"""
     pts, x = [], x0
     for w, h, lift in bumps:
         pts += arc(x + w / 2, y - lift, w / 2, h, 180, 0, 9)
         x += w
-    nb = max(2, round((x - x0) / 18))                     # the underside: a few shallow lobes, right to left
+    nb = max(2, round((x - x0) / 18))                     # the underside, right to left
     wb = (x - x0) / nb
     for i in range(nb):
         pts += arc(x - wb * (i + 0.5), y, wb / 2, 1.6, 0, -180, 7)[1:]
-    return N("path", id, d=P(*pts, close=True), fill=C["offblue"],
-             **A(stroke=C["grey"], stroke_width="0.7", stroke_linejoin="round"))
+    return ol(id, pts, C["darkblue"])                     # recessive, like lander's second lines
 
 
 # the canonical wing: root at (0, 0), the tip toward +x, the leading edge up (y < 0); five primaries on the trailing
-# edge and the coverts (the lighter band along the leading edge) as a second shape
+# edge; COVERT: the line where the coverts end
 WING = [(0, 0), (0.18, -0.2), (0.42, -0.36), (0.7, -0.45), (0.92, -0.47), (1.0, -0.43),
         (0.83, -0.3), (0.93, -0.25), (0.74, -0.15), (0.83, -0.07), (0.63, -0.01), (0.69, 0.08),
         (0.5, 0.08), (0.53, 0.18), (0.34, 0.15), (0.32, 0.24), (0.15, 0.14), (0.02, 0.12)]
-COVERT = [(0, 0), (0.18, -0.2), (0.42, -0.36), (0.64, -0.44), (0.56, -0.33), (0.44, -0.27), (0.42, -0.19),
-          (0.28, -0.13), (0.22, -0.05), (0.08, 0.02)]
+COVERT = [(0.6, -0.42), (0.52, -0.31), (0.42, -0.22), (0.3, -0.12), (0.16, -0.04)]
 
 
 def wing_pts(shape, rx, ry, L, ang, side, w=1.0):
@@ -252,76 +260,68 @@ def wing_pts(shape, rx, ry, L, ang, side, w=1.0):
 
 
 def wing(pre, rx, ry, L, ang, side, w=1.0, covert=True):
-    kids = [fill_path(pre, wing_pts(WING, rx, ry, L, ang, side, w), C["grey"])]
+    kids = [ol(pre, wing_pts(WING, rx, ry, L, ang, side, w), C["purplegrey"],
+               fill=None if covert else "none")]          # a near wing hides the far one
     if covert:
-        kids.append(fill_path(pre + "c", wing_pts(COVERT, rx, ry, L, ang, side, w), C["purplegrey"]))
+        kids.append(ol(pre + "c", wing_pts(COVERT, rx, ry, L, ang, side, w), C["grey"], close=False))
     return kids
 
 
 def book(n, x, y, tilt=0.0):
-    """book<n> at (x, y) (the spine's foot): closed (grey, a white page edge), open (green pages, the spine offgreen)
+    """book<n> at (x, y) (the spine's foot): closed (an lpg outline, one grey page line), open (green pages and spine)
     or a turning page (lightgreen): the creatures read their fortune (VARY)"""
     def p(pts):
         return rot(T(pts, x, y), tilt, x, y)
-    closed = N("g", f"book{n}c", [fill_path(f"book{n}c_d", p([(-7, -6.4), (3.4, -6.4), (7, -3.4), (-3.4, -3.4)]), C["grey"]),
-                                  fill_path(f"book{n}c_e", p([(-3.4, -3.4), (7, -3.4), (7, 0), (-3.4, 0)]), C["lpg"]),
-                                  fill_path(f"book{n}c_s", p([(-7, -6.4), (-3.4, -3.4), (-3.4, 0), (-7, -3)]),
-                                            C["purplegrey"])])
-    opened = N("g", f"book{n}o", [fill_path(f"book{n}o_l", p([(0, 0), (-8.5, -1.5), (-9, -6.5), (0, -4.8)]), C["green"]),
-                                  fill_path(f"book{n}o_r", p([(0, 0), (8.5, -1.5), (9, -6.5), (0, -4.8)]), C["green"]),
-                                  fill_path(f"book{n}o_s", p([(-0.5, 0), (-0.5, -4.8), (0.5, -4.8), (0.5, 0)]),
-                                            C["offgreen"])])
-    flip = N("g", f"book{n}f", [fill_path(f"book{n}f_d", p([(0, -4.8), (3.5, -12), (6, -11), (0.8, -4.2)]),
-                                          C["lightgreen"])])
+    closed = N("g", f"book{n}c", [
+        ol(f"book{n}c_d", p([(-7, -6.4), (3.4, -6.4), (7, -3.4), (7, 0), (-3.4, 0), (-7, -3)]), C["lpg"]),
+        ol(f"book{n}c_p", p([(-7, -6.4), (-3.4, -3.4), (7, -3.4)]), C["grey"], 1, close=False)])
+    opened = N("g", f"book{n}o", [
+        ol(f"book{n}o_d", p([(0, 0), (-8.5, -1.5), (-9, -6.5), (0, -4.8), (9, -6.5), (8.5, -1.5)]), C["green"]),
+        ol(f"book{n}o_s", p([(0, -0.2), (0, -4.6)]), C["green"], 1, close=False)])
+    flip = N("g", f"book{n}f", [ol(f"book{n}f_d", p([(0, -4.8), (3.5, -12), (6, -11), (0.8, -4.2)]), C["lightgreen"],
+                                   1.2)])
     return [closed, opened, flip]
 
 
 def angel():
-    """top left: the angel (a man, winged, robed) holding the open book before its chest, in a cloud. Hidden while a
-    readout shows at the title position"""
+    """top left: the angel (a man, winged, robed and girdled) holding the book before its chest, in a cloud. Hidden
+    while a readout shows at the title position"""
     x = 48
     kids = wing("angel_wingL", x - 5, 25, 26, 24, -1, 0.9) + wing("angel_wingR", x + 5, 25, 26, 24, 1, 0.9)
     robe = [(x - 6, 21), (x + 6, 21), (x + 9, 28), (x + 11, 44), (x + 15, 58), (x + 9, 59), (x + 3, 57.5), (x - 3, 59),
             (x - 9, 57.5), (x - 14, 58.5), (x - 10, 44), (x - 9, 28)]
-    kids += [fill_path("angel_robe", robe, C["purplegrey"]),
-             multi_fill("angel_folds", [[(x - 3.5, 40), (x - 2.5, 40), (x - 5, 56), (x - 6.5, 56)],
-                                        [(x + 3, 40), (x + 4, 40), (x + 7.5, 55.5), (x + 6, 55.5)]], C["grey"]),
-             fill_path("angel_neck", [(x - 1.8, 18), (x + 1.8, 18), (x + 2.2, 22), (x - 2.2, 22)], C["lpg"]),
-             circle("angel_head", x, 14, 5, C["lpg"]),
-             fill_path("angel_hair", arc(x, 14, 5.9, 6.2, 200, -20, 13) + arc(x + 0.6, 12.6, 4.2, 2.6, -10, 190, 9),
-                       C["grey"]),
-             multi_fill("angel_eyes", [blob(x - 2, 14.8, 0.8, 0.7, 8), blob(x + 2, 14.8, 0.8, 0.7, 8)], C["darkblue"]),
-             multi_fill("angel_arms", [[(x - 9, 27), (x - 6, 27), (x - 6, 33), (x - 10, 36), (x - 12, 34)],
-                                       [(x + 9, 27), (x + 6, 27), (x + 6, 33), (x + 10, 36), (x + 12, 34)]], C["grey"]),
+    kids += [ol("angel_robe", robe, C["purplegrey"]),
+             ol("angel_folds", [(x - 6, 56), (x - 3, 41), (x + 3.5, 41), (x + 7, 55.5)], C["grey"], close=False),
+             ol("angel_head", arc(x, 14, 5, 5, 0, 360, 19)[:-1], C["lpg"]),
+             ol("angel_hair", arc(x, 14, 5.6, 5.8, 205, -25, 13) + arc(x + 0.6, 12.4, 4, 2.4, -10, 190, 9), C["grey"]),
+             multi_fill("angel_eyes", [blob(x - 2, 15, 0.8, 0.8, 8), blob(x + 2, 15, 0.8, 0.8, 8)], C["lpg"]),
+             ol("angel_armL", [(x - 9, 27), (x - 6, 27), (x - 6, 33), (x - 10, 36), (x - 12, 34)], C["purplegrey"]),
+             ol("angel_armR", [(x + 9, 27), (x + 6, 27), (x + 6, 33), (x + 10, 36), (x + 12, 34)], C["purplegrey"]),
              cloud("angel_cloud", 8, 66, [(12, 4, 1), (16, 6, 3), (14, 5, 2), (18, 7, 3), (12, 4, 1), (9, 3, 0)])]
     kids += book(1, x, 38)
-    kids += [multi_fill("angel_hands", [blob(x - 10.5, 35, 1.8, 1.8, 10), blob(x + 10.5, 35, 1.8, 1.8, 10)], C["lpg"])]
+    kids += [multi_fill("angel_hands", [blob(x - 10.5, 35, 1.6, 1.6, 10), blob(x + 10.5, 35, 1.6, 1.6, 10)], C["lpg"])]
     return N("g", "angel", kids)
 
 
 def eagle():
-    """top right: the eagle standing on its book, head turned toward the wheel, hooked beak, wings raised"""
+    """top right: the eagle standing on its book, head turned toward the wheel, hooked beak, frown, wings raised"""
     x = 270
     kids = wing("eagle_wingL", x - 4, 25, 26, 30, -1, 0.9) + wing("eagle_wingR", x + 4, 25, 26, 30, 1, 0.9)
     body = [(x - 7, 16), (x - 1, 13.5), (x + 5, 17), (x + 8, 25), (x + 8, 34), (x + 5, 42), (x + 1, 47), (x - 4, 47),
             (x - 7, 40), (x - 9, 31), (x - 9.5, 22)]
     tail = [(x + 1, 41), (x + 6, 40), (x + 14, 49), (x + 11, 49.5), (x + 11.5, 52), (x + 7.5, 50.5), (x + 6.5, 53),
             (x + 2, 47)]
-    kids += [fill_path("eagle_tail", tail, C["grey"]),
-             fill_path("eagle_body", body, C["purplegrey"]),
-             fill_path("eagle_breast", [(x - 5.5, 24), (x - 2, 22.5), (x, 28), (x - 1, 37), (x - 3.5, 41), (x - 6, 35),
-                                        (x - 7, 29)], C["lpg"]),
-             multi_fill("eagle_legs", [[(x - 6, 44), (x - 1.6, 44), (x - 2.4, 50.5), (x - 5, 50.5)],
-                                       [(x + 0, 44), (x + 4, 44), (x + 3.4, 50.5), (x + 0.8, 50.5)]], C["grey"]),
-             fill_path("eagle_head", blob(x - 4, 13, 5.2, 4.2, 18), C["lpg"]),
-             fill_path("eagle_beak", [(x - 8, 10), (x - 15, 11), (x - 16, 15.5), (x - 14, 14.2), (x - 9, 16)], C["grey"]),
-             circle("eagle_eye", x - 5.2, 12.2, 1, C["black"]),
-             stroke_path("eagle_brow", [(x - 9, 10.2), (x - 3, 9.4)], C["grey"], 1),
+    kids += [ol("eagle_tail", tail, C["grey"], fill="none"),
+             ol("eagle_legs", [(x - 4.6, 50.5), (x - 3.6, 44), (x + 1.6, 44), (x + 2.4, 50.5)], C["grey"], close=False),
+             ol("eagle_body", body, C["purplegrey"]),
+             ol("eagle_breast", [(x - 2, 22.5), (x, 28), (x - 1, 37), (x - 3.5, 41)], C["grey"], close=False),
+             ol("eagle_head", blob(x - 4, 13, 5.2, 4.2, 18), C["lpg"]),
+             ol("eagle_beak", [(x - 8.8, 10.2), (x - 13.6, 10.4), (x - 15.8, 12.4), (x - 15.6, 16), (x - 14.2, 13.6), (x - 9, 15.2)],
+                C["lpg"]),
+             circle("eagle_eye", x - 5.2, 12.4, 1, C["lpg"]),
+             ol("eagle_brow", [(x - 8.6, 10.2), (x - 3, 9.2)], C["lpg"], close=False),
              cloud("eagle_cloud", 240, 64, [(12, 4, 0), (16, 6, 2), (13, 5, 3), (17, 7, 2), (12, 4, 1), (4, 2, 0)])]
     kids += book(2, x - 1, 56)
-    kids += [multi_fill("eagle_talons", [[(x - 7, 53.4), (x - 4.4, 50.4), (x - 2.6, 50.4), (x - 2.4, 53.4), (x - 4, 52)],
-                                          [(x - 0.2, 53.4), (x + 1.4, 50.4), (x + 3, 50.4), (x + 4.4, 53.4), (x + 2, 52)]],
-                                         C["purplegrey"])]
     return N("g", "eagle", kids)
 
 
@@ -331,25 +331,26 @@ def bull():
     kids += wing("bull_wing", 31, 102, 28, 64, -1, 0.9)
     body = [(8, 115), (11, 106), (20, 102), (36, 101), (46, 102), (53, 106), (56, 113), (56, 126), (48, 127), (12, 127),
             (7, 122)]
-    kids += [fill_path("bull_body", body, C["purplegrey"]),
-             stroke_path("bull_tail", [(8.5, 112), (5, 117), (5.5, 121), (8, 121.5)], C["grey"], 1.2),
-             fill_path("bull_haunch", arc(17, 117, 8, 7, 90, 270, 9) + [(17, 127), (25, 127), (24, 117)], C["grey"]),
-             fill_path("bull_leg", [(42, 117), (58, 119.5), (62, 121.5), (61.5, 124.5), (40, 125)], C["grey"]),
-             multi_fill("bull_ears", [[(49, 96), (44, 93), (47, 98)], [(63, 96), (68, 93), (65, 98)]], C["grey"]),
-             stroke_path("bull_horns", [(46.5, 85), (47, 90), (51, 94), (56, 94.5), (61, 94), (65, 90), (65.5, 85)],
-                         C["lpg"], 2),
-             fill_path("bull_head", [(50, 94), (62, 94), (63.5, 99), (62, 106), (60.5, 112), (51.5, 112), (50, 106),
-                                     (48.5, 99)], C["purplegrey"]),
-             fill_path("bull_muzzle", arc(56, 110, 5.2, 3.6, 0, 360, 17), C["lpg"]),
-             multi_fill("bull_eyes", [blob(52.5, 101, 1, 0.9, 8), blob(59.5, 101, 1, 0.9, 8)], C["black"]),
-             multi_fill("bull_nostrils", [blob(54, 110.5, 0.8, 0.7, 8), blob(58, 110.5, 0.8, 0.7, 8)], C["grey"]),
-             cloud("bull_cloud", 4, 137, [(9, 3, 0), (14, 6, 4), (16, 7, 6), (13, 6, 5), (8, 3, 2)])]
+    kids += [ol("bull_tail", [(8.5, 112), (5, 117), (5.5, 121), (8, 121.5)], C["grey"], close=False),
+             ol("bull_body", body, C["purplegrey"]),
+             ol("bull_haunch", arc(17, 117, 8, 7, 90, 270, 9)[1:-1] + [(17, 125)], C["purplegrey"], close=False),
+             ol("bull_fold", [(45, 104), (43, 111), (45.5, 117)], C["purplegrey"], close=False),
+             ol("bull_leg", [(42, 117), (58, 119.5), (62, 121.5), (61.5, 124.5), (40, 125)], C["purplegrey"]),
+             ol("bull_ears", [(47, 98), (44, 93), (49, 96), (63, 96), (68, 93), (65, 98)], C["grey"], close=False),
+             ol("bull_horns", [(46.5, 85), (47, 90), (51, 94), (56, 94.5), (61, 94), (65, 90), (65.5, 85)], C["lpg"],
+                close=False),
+             ol("bull_head", [(50, 94), (62, 94), (63.5, 99), (62, 106), (60.5, 112), (51.5, 112), (50, 106),
+                              (48.5, 99)], C["purplegrey"]),
+             ol("bull_muzzle", arc(56, 110, 5.2, 3.6, 0, 360, 17)[:-1], C["lpg"]),
+             multi_fill("bull_eyes", [blob(52.6, 101, 1, 1, 8), blob(59.4, 101, 1, 1, 8)], C["lpg"]),
+             multi_fill("bull_nostrils", [blob(54, 110.5, 0.8, 0.8, 8), blob(58, 110.5, 0.8, 0.8, 8)], C["grey"]),
+             cloud("bull_cloud", 4, 137, [(9, 3, 0), (14, 6, 4), (16, 7, 6), (14, 5, 3)])]
     kids += book(3, 69, 120, -8)
     return N("g", "bull", kids)
 
 
 def lion():
-    """bottom right: the winged lion lying in its cloud, maned head toward the wheel, its book between the paws,
+    """bottom right: the winged lion lying in its cloud, maned head toward the wheel, its book before the paws,
     the tail up with a tuft"""
     kids = wing("lion_wingF", 292, 104, 18, 108, -1, 0.9, covert=False)
     kids += wing("lion_wing", 284, 103, 28, 64, 1, 0.9)
@@ -360,19 +361,17 @@ def lion():
         a = 2 * math.pi * i / 16
         r = 13 if i % 2 == 0 else 9.5
         mane.append((254 + r * math.cos(a), 109 + 0.95 * r * math.sin(a)))
-    kids += [stroke_path("lion_tail", [(307, 112), (312, 108), (313, 100), (311, 95)], C["grey"], 1.2),
-             fill_path("lion_tuft", [(311, 95), (309.5, 91), (311.5, 88), (314, 91), (313, 95)], C["grey"]),
-             fill_path("lion_body", body, C["purplegrey"]),
-             fill_path("lion_haunch", arc(299, 118, 8, 8, 90, -90, 9) + [(292, 127), (292, 118)], C["grey"]),
-             fill_path("lion_mane", mane, C["grey"]),
-             fill_path("lion_face", T([(-4, -6), (4, -6), (6.5, -2), (5.5, 4), (2.5, 8), (-2.5, 8), (-5.5, 4), (-6.5, -2)],
-                                     254, 109, 0.85), C["lpg"]),
-             multi_fill("lion_eyes", [blob(251.6, 107.4, 0.9, 0.8, 8), blob(256.4, 107.4, 0.9, 0.8, 8)], C["black"]),
-             fill_path("lion_nose", [(252.4, 110), (255.6, 110), (254, 112)], C["darkblue"]),
-             stroke_path("lion_mouth", [(251.8, 113.6), (253, 114.6), (254, 113.2), (255, 114.6), (256.2, 113.6)],
-                         C["darkblue"], 0.8),
-             fill_path("lion_legs", [(256, 118), (243, 119.5), (241, 122), (243, 125), (262, 126)], C["purplegrey"]),
-             multi_fill("lion_paws", [blob(242.6, 122.4, 2.6, 2.2, 10), blob(258, 123.4, 2.6, 2.2, 10)], C["grey"]),
+    kids += [ol("lion_tail", [(307, 112), (312, 108), (313, 100), (311.6, 95.4), (309.5, 91), (311.5, 88), (314, 91),
+                              (313, 95), (311.6, 95.4)], C["grey"], close=False),
+             ol("lion_body", body, C["purplegrey"]),
+             ol("lion_haunch", arc(299, 118, 8, 8, 90, -90, 9)[1:-1] + [(292, 125)], C["purplegrey"], close=False),
+             ol("lion_mane", mane, C["grey"]),
+             ol("lion_face", T([(-4, -6), (4, -6), (6.5, -2), (5.5, 4), (2.5, 8), (-2.5, 8), (-5.5, 4), (-6.5, -2)],
+                               254, 109, 0.85), C["lpg"]),
+             multi_fill("lion_eyes", [blob(251.6, 107.2, 0.9, 0.9, 8), blob(256.4, 107.2, 0.9, 0.9, 8)], C["lpg"]),
+             fill_path("lion_nose", [(252.4, 110), (255.6, 110), (254, 112)], C["lpg"]),
+             ol("lion_mouth", [(251.6, 114.2), (254, 112), (256.4, 114.2)], C["lpg"], 1, close=False),
+             ol("lion_legs", [(256, 118), (243, 119.5), (241, 122), (243, 125), (262, 126)], C["purplegrey"]),
              cloud("lion_cloud", 236, 137, [(9, 3, 1), (16, 6, 4), (14, 6, 6), (17, 7, 5), (14, 6, 4), (10, 4, 1)])]
     kids += book(4, 238.5, 121)
     return N("g", "lion", kids)
@@ -411,9 +410,9 @@ def spokes(n):
 
 
 def wheel():
-    rim = [circle("rimband", WX, WY, R_BAND, stroke=C["darkblue"], sw=8),
-           circle("rimout", WX, WY, R_OUT, stroke=C["purplegrey"], sw=1.2),
-           circle("rimin", WX, WY, R_BAND - 4, stroke=C["grey"], sw=0.8)]
+    rim = [circle("rimband", WX, WY, R_BAND, stroke=C["offblue"], sw=8),       # the band dark: the rim is two lines
+           circle("rimout", WX, WY, R_OUT, stroke=C["purplegrey"], sw=OL),
+           circle("rimin", WX, WY, R_BAND - 4, stroke=C["purplegrey"], sw=OL)]
     marks = [fill_path(f"mark{i + 1}", [polar(R_BAND - 2, a), polar(R_BAND, a + 2.6), polar(R_BAND + 2, a), polar(R_BAND, a - 2.6)],
                        C["grey"]) for i, a in enumerate((45, 135, 225, 315))]
     letters = [letter(ch, a) for ch, a in zip("TARO", (0, 90, 180, 270))]
@@ -464,12 +463,11 @@ def sword_pts(colour_blade, colour_grip, pre, deg, length=17):
 
 
 def sphinx():
-    """seated on the wheel's crown, three-quarter: the striped nemes, a face with eyes and the false beard, a
-    pectoral collar, a grey lion body edged purplegrey (darkblue would sink into the rim) (the haunch and tail to the viewer's right), the left
-    forepaw on the rim and the right paw closed on the sword's grip at the pivot (the fist drawn over the turning
-    sword)"""
+    """seated on the wheel's crown, three-quarter, in line art: the nemes (lpg) with its stripes, a face with eyes,
+    the brow band and the false beard, a pectoral collar, the lion body crouched along the crown (purplegrey, the
+    haunch and tail to the viewer's right), the left forepaw on the rim and the right paw closed on the sword's grip
+    at the pivot (the fist drawn over the turning sword)"""
     cx = WX - 2
-    edge = dict(stroke=C["purplegrey"], stroke_width="1", stroke_linejoin="round")
     # the nemes: its half-width by height (the dome, then the lappets flaring to the shoulders)
     hw = [(3.4, 0), (4.0, 2.8), (5.0, 4.6), (6.6, 5.9), (9, 6.4), (13, 6.9), (19.4, 8.6)]
 
@@ -479,45 +477,48 @@ def sphinx():
                 return w0 + (w1 - w0) * (y - y0) / (y1 - y0)
         return hw[-1][1]
     nemes = [(cx + half(y), y) for y, _ in hw] + [(cx - half(y), y) for y, _ in hw[::-1]]
-    stripes = [[(cx - half(y), y), (cx + half(y), y), (cx + half(y + 1.2), y + 1.2), (cx - half(y + 1.2), y + 1.2)]
-               for y in (5.6, 8.6, 11.6, 14.6, 17.6)]
+    stripes = []                                   # one line zigzagging down: across, then along the nemes' edge
+    for i, y in enumerate((9.6, 13.4, 17.2)):           # three bands (five knotted at 1x)
+        s = -1 if i % 2 == 0 else 1
+        stripes += [(cx + s * (half(y) - 0.6), y), (cx - s * (half(y) - 0.6), y)]
     face = [(cx - 3.6, 8.2), (cx + 3.6, 8.2), (cx + 3.8, 12.4), (cx + 2.5, 15.6), (cx, 16.6), (cx - 2.5, 15.6),
             (cx - 3.8, 12.4)]
-    body = [(cx - 10, 31), (cx - 10, 25), (cx - 8.2, 19), (cx + 7, 18.6), (cx + 9.6, 21.4)] + \
-        arc(cx + 13, 31, 9, 5.5, 140, 0, 9)
-    leg = [(cx - 8.2, 31), (cx - 7.8, 22.5), (cx - 3.2, 22.5), (cx - 3.8, 31)]
+    base = 28.4                                  # a black gap above the rim's outer line (y 30)
+    body = [(cx - 10, base), (cx - 10, 25), (cx - 8.2, 19), (cx + 7, 18.6), (cx + 9.6, 21.4)] + \
+        arc(cx + 13, base, 9, 5.5, 140, 0, 9)
+    leg = [(cx - 8.2, base), (cx - 7.8, 22.5), (cx - 3.2, 22.5), (cx - 3.8, base)]
     arm = [(cx + 3, 21.5), (cx + 7.6, 20.6), (SWORD_PV[0] + 2, SWORD_PV[1] - 1.6), (SWORD_PV[0] - 1.6, SWORD_PV[1] + 0.6)]
     collar = arc(cx, 18, 7.6, 4.6, 200, 340, 9) + arc(cx, 18.2, 4.4, 2.2, 340, 200, 7)
-    kids = [stroke_path("sx_tail", [(cx + 21, 30), (cx + 24, 26), (cx + 23, 23)], C["purplegrey"], 1.4),
-            N("path", "sx_body", d=P(*body, close=True), fill=C["grey"], **A(**edge)),
-            N("path", "sx_leg", d=P(*leg, close=True), fill=C["grey"], **A(**edge)),
-            fill_path("sx_pawL", blob(cx - 6, 30.6, 3.6, 1.7, 14), C["purplegrey"]),
-            fill_path("sx_nemes", nemes, C["lpg"]),
-            N("path", "sx_stripes", d=" ".join(P(*s, close=True) for s in stripes), fill=C["darkblue"]),
-            fill_path("sx_collar", collar, C["grey"]),
-            fill_path("sx_face", face, C["purplegrey"]),
-            fill_path("sx_band", [(cx - 4.2, 7.4), (cx + 4.2, 7.4), (cx + 4, 8.8), (cx - 4, 8.8)], C["lpg"]),
+    kids = [ol("sx_tail", [(cx + 21, 27.6), (cx + 24, 24), (cx + 23, 21)], C["purplegrey"], close=False),
+            ol("sx_body", body, C["purplegrey"]),
+            ol("sx_leg", leg, C["purplegrey"]),
+            fill_path("sx_pawL", blob(cx - 6, base, 3.6, 1.5, 14), C["purplegrey"]),
+            ol("sx_nemes", nemes, C["lpg"]),
+            ol("sx_stripes", stripes, C["purplegrey"], 1, close=False),
+            ol("sx_collar", collar, C["grey"]),
+            ol("sx_face", face, C["lpg"]),
+            ol("sx_band", [(cx - 4, 8.4), (cx + 4, 8.4)], C["lpg"], close=False),
             multi_fill("sx_eyes", [[(cx - 3, 11), (cx - 0.9, 10.8), (cx - 1.1, 12), (cx - 2.8, 12)],
-                                   [(cx + 3, 11), (cx + 0.9, 10.8), (cx + 1.1, 12), (cx + 2.8, 12)]], C["darkblue"]),
-            fill_path("sx_beard", [(cx - 1, 16.2), (cx + 1, 16.2), (cx + 0.8, 20.4), (cx - 0.8, 20.4)], C["grey"]),
-            N("path", "sx_arm", d=P(*arm, close=True), fill=C["grey"], **A(**edge))]
+                                   [(cx + 3, 11), (cx + 0.9, 10.8), (cx + 1.1, 12), (cx + 2.8, 12)]], C["lpg"]),
+            fill_path("sx_beard", [(cx - 1, 16.2), (cx + 1, 16.2), (cx + 0.8, 20.4), (cx - 0.8, 20.4)], C["purplegrey"]),
+            ol("sx_arm", arm, C["purplegrey"])]
     sword = N("g", "sword", [N("g", "swordrest", sword_pts(C["purplegrey"], C["purplegrey"], "swr", SWORD_REST, 13.6)),
                              N("g", "swordup", sword_pts(C["green"], C["lightgreen"], "swu", 0))])
-    fist = fill_path("sx_fist", blob(SWORD_PV[0], SWORD_PV[1] - 0.4, 2.4, 2, 12), C["purplegrey"])
+    fist = ol("sx_fist", blob(SWORD_PV[0], SWORD_PV[1] - 0.4, 2.2, 1.8, 12), C["purplegrey"])
     return N("g", "sphinx", kids + [sword, fist])
 
 
 def snake():
-    """Typhon, descending on the left: a tapered body in three waves along the arc r SNAKE_R,
-    the head down with an eye and a forked tongue; the group rotates about the wheel's centre, so the wheel carries
-    it down as the repeats sink in pitch"""
+    """Typhon, descending on the left: a tapered body in three waves along the arc r SNAKE_R, outlined (grey, or
+    orange while PITCH is down), the head down with an eye and a forked tongue; the group rotates about the wheel's
+    centre, so the wheel carries it down as the repeats sink in pitch"""
     n, span = 30, 30
     left, right = [], []
     for i in range(n + 1):
         u = i / n                                            # 0 the neck .. 1 the tail's tip
         a = SNAKE_A0 + 5 + span * u
         r = SNAKE_R + 2.8 * math.sin(u * 5 * math.pi) * (1 - 0.3 * u)
-        w = 5.5 * (1 - u) ** 0.8 + 0.4
+        w = 4.6 * (1 - u) ** 0.8 + 0.2
         left.append(polar(r + w / 2, a))
         right.append(polar(r - w / 2, a))
     body = left + right[::-1]
@@ -525,27 +526,28 @@ def snake():
     head = [polar(SNAKE_R + 2.8, h + 6), polar(SNAKE_R + 4.1, h + 3), polar(SNAKE_R + 3.2, h - 1),
             polar(SNAKE_R + 0.6, h - 3.6), polar(SNAKE_R - 1.8, h - 3.2), polar(SNAKE_R - 3.5, h), polar(SNAKE_R - 3.1, h + 3),
             polar(SNAKE_R - 2.4, h + 6)]
-    tongue = [polar(SNAKE_R + 1, h - 7.8), polar(SNAKE_R - 0.2, h - 5.6), polar(SNAKE_R - 0.2, h - 3.2),
+    tongue = [polar(SNAKE_R + 1, h - 7.8), polar(SNAKE_R - 0.2, h - 5.6), polar(SNAKE_R - 0.2, h - 3.8),
               polar(SNAKE_R - 0.2, h - 5.6), polar(SNAKE_R - 1.4, h - 7.6)]
     track = [circle(f"sinkdot{i + 1}", *polar(SNAKE_R + 7.5, SINK_A0 - SNAKE_TRAVEL * (i + 1) / NDOT), 1.3, C["orange"])
              for i in range(NDOT)]
     a = SINK_A0 - SNAKE_TRAVEL * 7 / NDOT + 6                     # TAPE STOP's mark: a bar past the 6th dot
     track.append(stroke_path("sinkend", [polar(SNAKE_R + 4.5, a), polar(SNAKE_R + 10.5, a)], C["orange"], 1.8, cap="butt"))
-    eye = polar(SNAKE_R + 1, h + 0.8)
+    eye = polar(SNAKE_R + 0.9, h + 1)
 
     def variant(pre, c):
-        return N("g", pre, [fill_path(f"{pre}_b", body, c), fill_path(f"{pre}_h", head, c),
-                            stroke_path(f"{pre}_t", tongue, c, 0.6)])
+        return N("g", pre, [ol(f"{pre}_b", body, c, fill="none"), ol(f"{pre}_h", head, c),
+                            ol(f"{pre}_t", tongue, c, 0.8, close=False)])
     return [N("g", "sinktrack", track), N("g", "snake", [
         variant("snakegrey", C["grey"]), variant("snakeorg", C["orange"]),
-        fill_path("snake_eye", blob(*eye, 0.9, 0.9, 8), C["black"])])]
+        fill_path("snake_eye", blob(*eye, 0.9, 0.9, 8), C["lpg"])])]
 
 
 def anubis():
-    """Hermanubis, rising on the right, in profile toward the wheel: the jackal head (tall ears, the long snout), a
-    lpg collar, a purplegrey kilt, striding legs, an arm reaching for the rim. Feet on the arc r ANUB_R; the group translates
-    upright along the arc"""
+    """Hermanubis, rising on the right, in profile toward the wheel, in line art: the jackal head (tall ears, the
+    long snout), a lpg collar, a purplegrey kilt, striding legs, an arm reaching for the rim (grey, or orange while
+    PITCH is up). Feet on the arc r ANUB_R; the group translates upright along the arc"""
     x, b = polar(ANUB_R, ANUB_A0)
+    x += 2.5                                     # drawn 2.5 out from the rim (the runtime moves it by a delta)
 
     def p(pts):
         return T(pts, x, b)
@@ -558,19 +560,18 @@ def anubis():
     arm = p([(-2.6, -25.8), (-0.4, -23.4), (-7.6, -18.6), (-12.6, -21.4), (-14.2, -20.4), (-13.4, -22.8),
              (-10.6, -23.8), (-7.8, -21.8)])
     kilt = p([(-4.3, -16.6), (3.6, -16.6), (4.6, -10.6), (-0.4, -11.4), (-6.6, -8.4)])
-    collar = p([(-5.2, -26.2), (-2.6, -27.4), (1.4, -27.8), (3.6, -26.4), (3.8, -24.4), (0.4, -24.6), (-3.2, -23.8),
-                (-5.4, -24.2)])
+    collar = p([(-4.8, -25.8), (-2.6, -26.8), (1.4, -27.2), (3.4, -25.8)])
     track = [circle(f"risedot{i + 1}", *polar(RISE_R, ANUB_A0 - ANUB_TRAVEL * (i + 1) / NDOT), 1.3, C["orange"])
              for i in range(NDOT)]
     a = ANUB_A0 - ANUB_TRAVEL * 7 / NDOT + 3                      # SPIN UP's mark: a bar past the 6th dot
     track.append(stroke_path("riseend", [polar(RISE_R - 3, a), polar(RISE_R + 3, a)], C["orange"], 1.8, cap="butt"))
 
     def variant(pre, c):
-        return N("g", pre, [fill_path(f"{pre}_t", body, c), fill_path(f"{pre}_h", head, c), fill_path(f"{pre}_a", arm, c)])
+        return N("g", pre, [ol(f"{pre}_t", body, c, fill="none"), ol(f"{pre}_h", head, c), ol(f"{pre}_a", arm, c)])
     return [N("g", "risetrack", track), N("g", "anubis", [
         variant("anubgrey", C["grey"]), variant("anuborg", C["orange"]),
-        fill_path("anub_kilt", kilt, C["purplegrey"]), fill_path("anub_collar", collar, C["lpg"]),
-        fill_path("anub_eye", p([(-4.6, -34.2), (-2.8, -35), (-3.2, -33.8)]), C["black"])])]
+        ol("anub_kilt", kilt, C["purplegrey"]), ol("anub_collar", collar, C["lpg"], close=False),
+        fill_path("anub_eye", p([(-4.8, -34), (-2.8, -34.8), (-3.2, -33.4)]), C["lpg"])])]
 
 
 MARKER = "wheel1"       # ui_repeat.h draws the file only if it finds this id (this generation: one subpath per element)
