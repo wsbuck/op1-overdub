@@ -17,7 +17,8 @@
  *   orange mix: dry .. wet (crossfade; 0 is bit exact dry)
  * Feedback, tone and mix glide linearly over each block.
  *
- * The lines live in a FREE SDRAM range (pingpong_ram, build_slot.py "ram"): not loaded, contents undefined at boot.
+ * The lines live in a FREE SDRAM range (pingpong_ram, build_slot.py "ram"): not loaded, contents undefined at boot,
+ * and shared with the repeat FX through fx_line_owner (pingpong.h).
  * Each instance counts the samples written since boot (filled) and reads anything older as 0, so the stale
  * contents are never heard. The state survives the FX being switched off and on: re-enabled, it plays on from
  * where it stopped, like a tape that was paused.
@@ -44,6 +45,7 @@ extern int16_t pingpong_ram[];
 
 struct pp pingpong_state[2] RAM = {{0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, {0, 0}, 0, 0, 0, 0}};
 struct fx_pub pingpong_pub[2] RAM = {{{0}, 0}, {{0}, 0}};   /* the knobs each instance used last (fxpub.h) */
+uint32_t fx_line_owner[2] RAM = {FX_OWNER_NONE, FX_OWNER_NONE};   /* pingpong.h: shared with repeat.c */
 #define mono_st pingpong_state[0]
 #define st_st pingpong_state[1]
 
@@ -89,6 +91,16 @@ static inline int32_t tone(int32_t x, int32_t *lp, int32_t tn)
     return tn < 0 ? x + (((s - x) * -tn) >> 15) : x - ((s * tn) >> 15);
 }
 
+/* Take the lines over from repeat (pingpong.h fx_line_owner): what it left there is never read (the echo tail is
+ * lost; the delay starts from silence). */
+static inline void own(struct pp *s, int set)
+{
+    if (fx_line_owner[set] != FX_OWNER_PINGPONG) {
+        fx_line_owner[set] = FX_OWNER_PINGPONG;
+        s->filled = 0;
+    }
+}
+
 /* Knob targets; the first block starts on them (no glide in from the zeroed state). */
 static void targets(struct pp *s, const int16_t *p, int32_t *dt, int32_t *gt, int32_t *tt, int32_t *mt)
 {
@@ -121,6 +133,7 @@ void pingpong_mono(void *self, int16_t *buf, const int16_t *p)
     (void)self;
     struct pp *s = &mono_st;
     int16_t *ring = pingpong_ram + 2 * RING;
+    own(s, 0);
     int32_t dt, gt, tt, mt;
     targets(s, p, &dt, &gt, &tt, &mt);
     fx_publish(&pingpong_pub[0], p);
@@ -156,6 +169,7 @@ void pingpong_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p)
     (void)self;
     struct pp *s = &st_st;
     int16_t *rl = pingpong_ram, *rr = pingpong_ram + RING;
+    own(s, 1);
     int32_t dt, gt, tt, mt;
     targets(s, p, &dt, &gt, &tt, &mt);
     fx_publish(&pingpong_pub[1], p);

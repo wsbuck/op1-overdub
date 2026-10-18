@@ -1,7 +1,11 @@
-# Beat repeat FX (`repeat`, proposed firmware id 12; screen: the Wheel of Fortune)
+# Beat repeat FX (`repeat`, firmware id 12, DB fx_types 15; screen: the Wheel of Fortune)
 
-**Status: design only (2026-10-17). No firmware code, nothing built.** Mockups: `design/fx/wheel.svg` from
-`design/fx/gen_wheel.py` (run it with a directory to get the gallery). FX contract: fx-slot.md; tempo: fx-pingpong.md
+**Status (2026-10-18): phase 0 (the probe), 1 (the MVP) and 1b (the screen) built and sim-checked, with VARY's
+per-repeat grids, the real TAPE STOP and the coupled tone from phase 2b; on the device as test image REPEAT1 (LOG.md
+88), not yet tested there. Not built: the manual SPLIT key (phase 2), the sequencer-start hook, drum / master keys
+(phase 3). "As built" (§7) supersedes the design where they differ.** Source: `src/slot/repeat.c`, `repeat.h`,
+`ui_repeat.h`; the screen `design/fx/wheel.svg` from `design/fx/gen_wheel.py` (run it with a directory to get the
+mockup gallery). FX contract: fx-slot.md; tempo: fx-pingpong.md
 "Tempo". Tags: **Verified** = read at the call site in the disassembly, **Confirmed** = read in code or decompile,
 **Hypothesis** = inferred, **Memory** = from memory of Live, not checked against a source.
 
@@ -342,18 +346,46 @@ The maps are coded in `design/fx/gen_wheel.py` (`grid_of`, `fortune_of`, `gate_o
 | (could) Rim letters thin | 1.3 stroke |
 | (could) Wagon wheel in continuous turns | Not done (noted in §3) |
 
-## 5. Open questions for the user
-1. **Name:** `repeat` (with alias `beatrepeat`)? TE's names are short (delay, grid, punch); ours are pingpong and
-   distortion.
-2. **Fills on CHANCE:** seeded by the bar number (the same "random" fills on every playback from the same spot), or
-   fresh every time?
-3. **Manual key:** hold SPLIT (momentary) only, or also a latch (e.g. SHIFT + SPLIT is the CHORD page, so a double
-   tap)? And is a 1/16 lock right, or should it lock to the grid (up to a half note's wait)?
-4. **Master manual key:** worth a probe of the mixer screen's controller (which key is free there)?
-5. **ALWAYS on the hard-left stop:** OK that it breaks "clockwise = more" for the sake of a quick latch?
-6. **Pingpong sharing:** OK that switching between pingpong and repeat on the same position loses pingpong's echo tail?
-7. **Coupled tone:** keep the low-pass and fade with the drop, and the high-pass with the rise, or keep the repeats
-   full-range?
+### Round 2, sound (a fresh subagent as a Beat Repeat producer, on WAVs of the real DSP: a drum loop and a synth line through 16 settings; scratchpad `repeat/wavs/`)
+Kept as measured: every gate ends on the bar line, the live slice is bit-exact dry, the latch phase-aligned (corr.
+1.00), TAPE STOP's rate linear 1 -> 0 within +-0.03 and near silence before a clean downbeat, -12's centroid 6.0 ->
+1.3 kHz and -5.5 dB, no boundary clicks, peaks never above dry.
+
+| finding | change |
+|---|---|
+| MUST: a rising pitch wrapped the read inside the slice: a second hit at 1 / rate of the slice (a flam 16 ms early at x1.19, a gallop, a clean roll only at x2): sloppy buildups | (A faster read of dense 16ths still meets the next 16th's hit at L / r: that is the source's own, a kick or a stab slice is no longer doubled.) **No wrap:** a faster read runs on past the slice's end (the line holds what followed), so every hit stays on the grid; the slice is halved on the grid when r x L would overtake the write by the slice's end; the boundary's tail fades at rate 1 |
+| SHOULD: the staircase's steps were fractional semitones (-1.37, -2.75 ..): out of key on melodic material | **Whole semitones** (round(S k / (N - 1))); the ramps keep their fine steps |
+| SHOULD: CHANCE / VARY fills always landed on beat 4 (the gate ends on the bar line) | **With GATE <= 1/4 they roll on every beat line** at a quarter of the chance (the same fills per bar, scattered: Live's glitch use); larger gates keep the bar roll |
+| COULD: with the tape stopped, the first click counted as beat 2 (and the snap at boot could take our clock below 0) | **The first click is beat 1** when the clock has never had the tape or a click; the snap never goes below 0 |
+| COULD: dense grids +1 .. +4 dB over dry | not done (Live does the same; noted) |
+| COULD: 64 .. 128-sample equal-power crossfades on sustained material | not done (the 32-sample linear one measured clean here; device listening first) |
+| COULD: VARY 3 fired 16 of 16 bars | the map is 83 % (repeat_check: 80.5 % over 200 bars): chance; the per-beat roll changed it anyway |
+
+### Round 2, UI (a fresh subagent as a TE-style designer, on the C-path renders; scratchpad `repeat/gallery/`)
+| finding | change |
+|---|---|
+| MUST: the FX off looked like waiting (only 3 lots fewer); FORTUNE OFF showed a gate that never fires | FX off and FORTUNE OFF: the dim gate ring only (as ALWAYS); the playhead hidden with the FX off |
+| MUST: the playhead tick reached into the rim and read as a letter | shortened to r 35 .. 42.6, halo 3.0 |
+| MUST: `GATE 1/4` read like a GRID value | the gate in sixteenths below a bar: `GATE 4/16`; the line screen too |
+| SHOULD: `VARY 2 67%` cryptic | `VARY 67% X2` |
+| SHOULD: the manual state can't show (phase 2) | marked phase 2 (§7) |
+| SHOULD: TAPE STOP = -12 and SPIN UP = +12 (6 dots each) | a mode bar past the 6th dot (`sinkend`, `riseend`) |
+| SHOULD: the resting snake floated by the sphinx; Anubis's staff touched the rim | snake 8 deg lower (its dots stay); Anubis r 72 -> 75 |
+| COULD: the resting sword read as a broken spoke | blade 20 % shorter |
+| COULD: the probe page: unlabelled hex, faint grey, the bare TAPE | `SPEED 1.00 = HEX 08000000` on its own line, lpg, `CLOCK TAPE / METRO` |
+| COULD: the line screen had no roll state | FIRING / WAITING / LATCHED in green |
+| COULD: wagon wheel in continuous turns; 1/32 spokes at 1x | not done (noted; the lead spoke keeps the direction) |
+| (note) the per-beat CHANCE gates end on beat lines, the ring still draws the gate ending at 12 | accepted: the ring shows the gate's length |
+
+## 5. Decisions (the user, 2026-10-17)
+1. The name is `repeat` (no alias).
+2. CHANCE and VARY fills are seeded by the bar number (and the instance / synth slot): the same fills from the same
+   spot on every playback.
+3. The SPLIT key (phase 2) will be momentary, locked to blue's GRID (not the 1/16 of UX round 1).
+4. A probe for a free mixer-screen key comes later.
+5. ALWAYS on the hard-left stop is OK.
+6. Losing pingpong's echo tail when switching to repeat (the shared lines) is acceptable.
+7. Keep the coupled low-pass / fade with the drop and the high-pass with the rise.
 
 ## 6. Build plan (MVP first)
 | phase | what | checks | device probes / risks |
@@ -370,3 +402,91 @@ The maps are coded in `design/fx/gen_wheel.py` (`grid_of`, `fortune_of`, `gate_o
   - Varispeed drift (accepted).
   - SDRAM latency on the reads (measure).
   - The screen's AGG budget is fine (35 %), but the C must hide what the mockup hides (the spoke sets).
+
+## 7. As built (2026-10-18: phases 0, 1, 1b, with VARY, the real TAPE STOP and the coupled tone of 2b)
+### Files
+- `src/slot/repeat.c` (DSP), `repeat.h` (the knob maps = gen_wheel.py's, and `struct rep`, the state the screen
+  reads), `src/slot/ui_repeat.h` (the screen and the probe page, included by ui.c), `design/fx/wheel.svg` from
+  `gen_wheel.py` (now the shipped file: marker id `wheel1`, published as `content/display/wheel.svg`, build.py
+  `FX_SVGS`).
+- `fx.json`: `repeat`, id 12 (DB fx_types 15), default `[12288, 5120, 9216, 16384]`. build_slot.py `FX_UI_KINDS`
+  repeat 5, and refuses an FX list with repeat but without pingpong (the shared lines). The FX tables grow by
+  themselves: name loops 15 entries (with the aliases ens, drive), factory / ScreenId bounds 13, the range table 13
+  rows, the five `FX_FLAG_TABLES` copies 13 bytes (id 12 reads 0: the LFO targets knob `>> 12`).
+- TE words (build_slot.py `TE_UI`): `_te_tape_state` 0xFF802960, `_te_tape_pos` 0xFF802974, `_te_metro_count`
+  0x01AADADC, `_te_play_slot` 0xFF8016D4 (the fills' seed), `_te_ppqn_tick` 0x018C1884 (the probe only); the tempo
+  `_te_tempo_spb` as pingpong. ui_repeat.h also reads the tape speed word 0xFF802968 and SHIFT (0x01DD7F78).
+  Reads only: nothing writes TE state.
+
+### DSP
+- **Bar clock (per block, `clock()`):** tape rolling (state 1 / 2, playhead < 2^30): position = playhead << 2 (Q8);
+  else our own count, +64 samples a block, snapped to the metronome: the countdown (Q14) says where the next click
+  is, and that is moved onto our nearest beat line (so bars continue the tape's count across a stop; with no clock
+  before, at boot, the next click is beat 1). Countdown out
+  of range (< 0 or > 1.06 beats): free running. Stopped for minutes: whole 8-bar groups are dropped before the
+  uint32 wraps. One shift-subtract division a block (bar index and phase; it loops over the quotient's bits only).
+- **Trigger:** the position shifted by the gate (eff gate in sixteenths) crosses a bar line L: the gate ends on L.
+  It fires at the exact sample (Q8 phase). A line passed in the last 128 samples (varispeed, a locate) still fires
+  at sample 0, never twice. EVERY n: `L % n == 0`; CHANCE / VARY: `mix32(L * golden + seed) >> 16 < chance` (seed:
+  instance and synth slot). With GATE <= 1/4, CHANCE / VARY roll on every beat line instead (L = the beat, a
+  quarter of the chance: the same fills per bar). A lost roll counts `lost` (the screen's blink).
+- **Gates count samples** (grem, Q8): the end is the bar line's sample; the last 32 samples fade to dry. A trigger
+  inside a gate extends it (merge); one on the very sample where the old gate ends starts a fresh gate; one inside
+  the end fade lets that fade finish over the new live slice (the live slice is the dry input itself).
+- **Slices (forward):** the first slice is the live input (read back from the line at lag 0: bit exact dry); every
+  boundary restarts the read at the slice start with a 32-sample crossfade from the old read (the tail continues
+  past the slice end: the line keeps recording). The line records until it would reach the slice's start
+  (`FREEZE` = 65408 samples after it), so gates and the latch can last any time.
+- **ALWAYS (the latch):** at the next 1/16 line, or at once within 30 ms after one (then phase-aligned to that
+  line); the slice is the grid that ended on the line (backward); a crossfade from dry. Pitch: the total after one
+  bar, then held. Leaving ALWAYS: dry within one 32-sample crossfade.
+- **Grid per slice:** blue's (with the fold: a grid longer than 65280 samples plays its half, on the grid);
+  VARY draws each repeat's grid (`rep_vary_pick`: blue's family, +-a places, at most half the gate).
+- **Pitch:** STEP: repeat k of N at round(S x k / (N - 1)) whole semitones (2^(n/192) by the 2^(i/16) table,
+  interpolated); a rate > 1 reads on past the slice's end (no wrap: the hits stay on the grid; supersedes §2's
+  "an upward step wraps within the slice"), the slice halved on the grid if the read would overtake the write. SPIN UP and
+  the looped TAPE STOP: a per-sample ramp (Q28) from the gate's start, 1 -> 2 / 1 -> 0. **The real TAPE STOP**
+  (when half the gate fits the line: 1 bar down to 80.8 BPM) reads on from the gate's start at the decelerating
+  rate while the line records; it fades over the last 15 % (and to silence if the rate reaches 0 while latched).
+- **Coupled tone:** down a one-pole low-pass (`b = 2^(-2.44 d)`, open = exactly the input, ~1.4 kHz at d = 1) and
+  -6 dB at the full drop; up a high-pass from ~5 Hz to ~600 Hz; d = |pitch| / 12 (ramps: their progress). Gains and
+  the coefficient glide per block (the gain linearly across it). Rounded multiplies: no bias.
+- **Memory:** pingpong's lines through `fx_line_owner[2]` (pingpong.h: [0] mono line, [1] stereo pair): the FX that
+  finds another owner takes the set over, resets `filled` (and repeat its gate). Reads older than `filled` are 0.
+- **CPU:** idle, and blocks with nothing playing: a copy loop. Repeating: a steady loop specialised by channels,
+  pitch direction and ramp (noinline functions, so its values stay in registers; the bfin GCC spilled ~30 live
+  values in the general loop), the general loop only for event samples (starts, the end fade, the line not yet
+  full).
+
+### Probe (phase 0): SHIFT held on the repeat screen
+- Lines: `TAPE <state> <name> POS <playhead / 64>`; `TAPE BAR n BEAT b.cc` (from the playhead and the tempo, 4/4
+  from 0); `SPB <samples per beat> <BPM>`; `METRO <countdown samples> TICK <0x018C1884>`; `SPEED <word / 0x08000000>
+  = HEX <word>` (0xFF802968); `OURS BAR n BEAT b CLOCK TAPE|METRO [IDLE]` (repeat's clock, IDLE = the FX not
+  running); `FIRES n LOST n DRY|GATE|LATCH REP k`.
+- What to look for on the device: LOG.md test image 88's checklist.
+
+### Screen (phase 1b): ui_repeat.h `draw_wheel`
+- runtime_state's rules, from the DSP state while it runs (fx_live: the published knobs, so TE's LFO moves it) and
+  the stored knobs otherwise; the sword rises over 0.2 s on a won roll, the lots blink out 0.27 s on a lost one, a
+  page turns 0.27 s when a VARY repeat drew another grid. The manual key's lit hub is phase 2 (never shown yet).
+- Readout: a stored-knob turn (>= 512 raw) shows the value 1.5 s at the title position (the angel hides), never TE's
+  LFO alone; `GRID 1/4` and under it `1/2 TOO LONG` when folded.
+- Without wheel.svg (or an older one without `wheel1`): a line screen (the four values, the bar with the gate, the
+  playhead, FIRING / WAITING / LATCHED).
+
+### Checks (all pass, 2026-10-18)
+- `src/slot/test/repeat_check.py` (312 simulator runs, ~11 min; `repeatsim.py`, `repeat_main.c`): grid timing (11
+  grids x 40 / 60 / 80.8 / 120 / 133.3 / 220 BPM: every boundary, each repeat's read start and the return to dry
+  within 1 sample); bar alignment (odd tape position, a locate, the metronome with the tape stopped, a stop mid-gate);
+  CHANCE seeded by the bar; every FORTUNE mode (rates over 200 bars, VARY's picks); every GATE x 5 grids and the grid
+  wins; the pitch staircase within 6.6 cents; TAPE STOP within 1.5 samples of its curve, never ahead, the fade, the
+  looped one at 60 BPM, SPIN UP, a latched stop is silent; no clicks in 114 runs (knob jumps and an LFO on all
+  knobs included); pingpong hand-over exact zeros both ways, boot garbage never heard; invalid tempo / transport /
+  playhead / metronome words; no DC (an input and its negation give opposite outputs: |mean| <= 0.6 LSB);
+  the fold; stereo channels; cycles.
+- `fx_abi_check.py`, `fx_lfo_check.py` (repeat added), `repeat_screen_check.py` (the C path vs runtime_state: the
+  deterministic states within 0.8 mean pixel difference; readout, blink, probe, line screen, cells).
+- **CYCLES per call** (simulator, no SDRAM latency), mean / max over 2.5 bars, mono / stereo: idle 1.1 k / 1.4 k;
+  default (one fill every 4 bars) 1.6 k / 2.2 k mean, 12.8 k / 16.7 k peak; 1/64 latched at -12 7.3 k / 11.0 k (peak
+  15.5 k stereo); VARY 6.6 k / 10.1 k (15.2 k); TAPE STOP 9.2 k / 13.4 k (14.0 k); SPIN UP 7.9 k / 11.9 k (16.4 k).
+  Pingpong: 16.2 k / 16.9 k stereo. The design's 4-8 k was optimistic.

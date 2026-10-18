@@ -33,6 +33,7 @@
 #include "ensemble.h"
 #include "pingpong.h"
 #include "crush.h"
+#include "repeat.h"
 #include "fxpub.h"
 #include "inprobe.h"
 #include "drumprobe.h"
@@ -87,15 +88,16 @@ extern const int16_t grain_data[] __attribute__((weak));        /* granular engi
 /* Our FX (fx.json; build_slot.py generates fx_kind/fx_count). Weak: an image without one of them still links. */
 extern const uint8_t fx_kind[];           /* screen kind per FX id 8.. */
 extern const int32_t fx_count;
-enum { FX_ENSEMBLE = 1, FX_PINGPONG = 2, FX_DISTORTION = 3, FX_CRUSH = 4 };   /* = FX_UI_KINDS in build_slot.py */
+enum { FX_ENSEMBLE = 1, FX_PINGPONG = 2, FX_DISTORTION = 3, FX_CRUSH = 4, FX_REPEAT = 5 };   /* = build_slot.py FX_UI_KINDS */
 extern int32_t distortion_curve(const int16_t *p, int32_t x) __attribute__((weak));
 extern const char *distortion_mode_name(const int16_t *p) __attribute__((weak));
 extern struct ens ensemble_state[2] __attribute__((weak));
 extern struct pp pingpong_state[2] __attribute__((weak));
 extern struct crush crush_state[2] __attribute__((weak));   /* crush.c: gain reduction and smoothed knobs */
+extern struct rep repeat_state[2] __attribute__((weak));    /* repeat.c: the bar clock and the repeats (repeat.h) */
 /* The knobs each FX used last (fxpub.h): after TE's LFO, which the stored knobs never show */
 extern struct fx_pub ensemble_pub[2] __attribute__((weak)), pingpong_pub[2] __attribute__((weak)),
-    distortion_pub[2] __attribute__((weak)), crush_pub[2] __attribute__((weak));
+    distortion_pub[2] __attribute__((weak)), crush_pub[2] __attribute__((weak)), repeat_pub[2] __attribute__((weak));
 extern struct dp_diag drumprobe_diag __attribute__((weak));     /* drumprobe.c, only in builds with the drum probe */
 /* Our drum engines (build_slot.py): ids drum_first .. + drum_count, screen kind per id (DRUM_KINDS) */
 extern const int32_t drum_first, drum_count;
@@ -2483,16 +2485,18 @@ static int draw_card(void *r)
 #define draw_card(r) 0
 #endif
 
+#include "ui_repeat.h"
+
 /* The knobs the FX used (fxpub.h) instead of the stored ones, so the screen moves with TE's LFO: TE modulates only its
  * per-block copy 0xFF801724 that process gets (notes/fx-slot.md "LFO"). Trusted while the FX runs, i.e. its block
  * count moved since this screen's frame before (~23 blocks per 30 fps frame); else (FX off, the screen just opened
  * after a gap, nothing published) the stored knobs. Knobs 4..7 (no LFO reaches them) stay the stored ones. */
 static uint32_t fx_frame RAM = 0;
-static uint32_t fx_seen_n[4][2] RAM = { { 0 } }, fx_seen_f[4][2] RAM = { { 0 } };
+static uint32_t fx_seen_n[5][2] RAM = { { 0 } }, fx_seen_f[5][2] RAM = { { 0 } };
 static const int16_t *fx_live(int kind, int stereo, const int16_t *stored, int16_t *buf)
 {
-    struct fx_pub *const pubs[4] = { ensemble_pub, pingpong_pub, distortion_pub, crush_pub };
-    const struct fx_pub *u = kind >= 1 && kind <= 4 ? pubs[kind - 1] : 0;
+    struct fx_pub *const pubs[5] = { ensemble_pub, pingpong_pub, distortion_pub, crush_pub, repeat_pub };
+    const struct fx_pub *u = kind >= 1 && kind <= 5 ? pubs[kind - 1] : 0;
     if (!u)
         return stored;
     u += stereo;
@@ -2541,6 +2545,8 @@ void fx_ui_draw(int id, int mode, int slot)
         else
             draw_crush(r, k, mode == 3);
     }
+    else if (kind == FX_REPEAT)
+        draw_wheel(r, k, stored, k != stored, mode == 3, mode << 4 | slot, mode != 0);
 }
 
 /* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the

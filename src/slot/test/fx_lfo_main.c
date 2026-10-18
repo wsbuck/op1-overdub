@@ -1,5 +1,5 @@
 /* Simulator driver for fx_lfo_check.py: our FX under a TE-style LFO, and what they publish for the screen (fxpub.h).
- *   fx_lfo FX MODE BLOCKS     FX 0 ensemble, 1 pingpong, 2 distortion, 3 crush; MODE m (mono) or s (stereo)
+ *   fx_lfo FX MODE BLOCKS     FX 0 ensemble, 1 pingpong, 2 distortion, 3 crush, 4 repeat; MODE m (mono) or s (stereo)
  * TE's LFO writes its modulated knobs into the per-block params copy the FX gets (0xFF801724), so here every block
  * gets a new params array: the stored knobs plus a triangle stepped once per block (each knob its own rate and phase,
  * full range, clamped 0 .. 32767 as TE's range row does); after block BLOCKS / 2 the params hold still.
@@ -13,17 +13,20 @@
 #include "crush.h"
 
 volatile int32_t te_tempo_spb = 22050 << 14;    /* pingpong.c: TE's tempo word, 120 BPM */
+volatile int32_t te_tape_state = 2, te_metro_count = 22050 << 14, te_play_slot = 0;   /* repeat.c: the tape plays */
+volatile uint32_t te_tape_pos = 0;
 
 #define DECL(f) void f##_mono(void *, int16_t *, const int16_t *); \
     void f##_stereo(void *, int16_t *, int16_t *, const int16_t *); extern struct fx_pub f##_pub[2];
-DECL(ensemble) DECL(pingpong) DECL(distortion) DECL(crush)
+DECL(ensemble) DECL(pingpong) DECL(distortion) DECL(crush) DECL(repeat)
 typedef void (*mono_t)(void *, int16_t *, const int16_t *);
 typedef void (*stereo_t)(void *, int16_t *, int16_t *, const int16_t *);
-static const mono_t mono[4] = { ensemble_mono, pingpong_mono, distortion_mono, crush_mono };
-static const stereo_t stereo[4] = { ensemble_stereo, pingpong_stereo, distortion_stereo, crush_stereo };
-static struct fx_pub *const pubs[4] = { ensemble_pub, pingpong_pub, distortion_pub, crush_pub };
-static const int16_t stored[4][4] = { { 15360, 21504, 0, 16384 }, { 28672, 14000, 12000, 10000 },
-                                      { 16000, 16384, 7475, 32767 }, { 10240, 12288, 10240, 0 } };   /* fx.json */
+static const mono_t mono[5] = { ensemble_mono, pingpong_mono, distortion_mono, crush_mono, repeat_mono };
+static const stereo_t stereo[5] = { ensemble_stereo, pingpong_stereo, distortion_stereo, crush_stereo, repeat_stereo };
+static struct fx_pub *const pubs[5] = { ensemble_pub, pingpong_pub, distortion_pub, crush_pub, repeat_pub };
+static const int16_t stored[5][4] = { { 15360, 21504, 0, 16384 }, { 28672, 14000, 12000, 10000 },
+                                      { 16000, 16384, 7475, 32767 }, { 10240, 12288, 10240, 0 },
+                                      { 12288, 5120, 9216, 16384 } };   /* fx.json */
 
 static int16_t sine(uint32_t ph)
 {
@@ -57,6 +60,7 @@ int main(int argc, char **argv)
             l[i] = sine(ph);
             r[i] = sine(ph + 0x40000000u);
         }
+        te_tape_pos += 64 * 64;
         uint32_t n0 = pubs[fx][st].blocks;
         if (st)
             stereo[fx](self, l, r, p);

@@ -19,6 +19,12 @@ struct pp {
 
 extern struct pp pingpong_state[2];         /* [0] mono (synth/drum FX), [1] stereo (master FX) */
 
+/* Who uses the lines (pingpong_ram): [0] the mono line, [1] the stereo pair. pingpong and repeat share them (one mono
+ * FX and one master FX run at a time); the FX that finds another owner takes the set over and resets what it has
+ * written (filled), so it never reads the other's samples (notes/fx-beatrepeat.md "Memory"). */
+enum { FX_OWNER_NONE, FX_OWNER_PINGPONG, FX_OWNER_REPEAT };
+extern uint32_t fx_line_owner[2];
+
 /* Blue (raw 0 .. 32767, 1024 per detent): FREE time below PP_SYNC0, 20 ms * 2^(6 k / 20480) (detents 0 .. 20, 3.33
  * detents per octave, flat at 1.28 s from 20480); from PP_SYNC0 one tempo division per detent (21 .. 32, each
  * centred on its detent), shortest first. */

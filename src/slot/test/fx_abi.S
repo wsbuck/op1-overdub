@@ -18,6 +18,8 @@
     FX_STEREO_ENTRY _distortion_stereo_entry, _distortion_stereo
     FX_MONO_ENTRY _crush_mono_entry, _crush_mono
     FX_STEREO_ENTRY _crush_stereo_entry, _crush_stereo
+    FX_MONO_ENTRY _repeat_mono_entry, _repeat_mono
+    FX_STEREO_ENTRY _repeat_stereo_entry, _repeat_stereo
     .endif
 
     .macro CHECK reg, hi, lo, bit

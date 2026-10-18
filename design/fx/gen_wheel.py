@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""wheel.svg, the screen of the proposed "repeat" FX (a beat repeat; notes/fx-beatrepeat.md): an original, flat
-TE-style reading of the Tarot's Wheel of Fortune (card X). DESIGN MOCKUP: no firmware code drives it yet. The
-generator is the source: run it, never edit the SVG by hand.
+"""wheel.svg, the screen of the "repeat" FX (a beat repeat; notes/fx-beatrepeat.md): an original, flat TE-style
+reading of the Tarot's Wheel of Fortune (card X), drawn by src/slot/ui_repeat.h (draw_wheel) through TE's SVG
+renderer. The generator is the source: run it, never edit the SVG by hand.
 
   python3 design/fx/gen_wheel.py [GALLERY_DIR]
 
@@ -11,8 +11,9 @@ recolours at run time: every state change is a visibility flag or a group matrix
 gallery state and animation frame), and, with GALLERY_DIR, renders the gallery states (320x160 and 2x PNG,
 rsvg-convert), an animation GIF (magick) and index.html.
 
-The knob maps (grid_of, fortune_of, gate_of, pitch_of, eff_gate, vary_pick) are the design's reference for the C;
-timeline() models the DSP's trigger logic (bars of 4 beats from tape position 0, 120 BPM) for the mockups."""
+The knob maps (grid_of, fortune_of, gate_of, pitch_of, eff_gate, vary_pick) are the reference for src/slot/repeat.h;
+runtime_state() is the reference for ui_repeat.h (src/slot/test/repeat_screen_check.py compares the two); timeline()
+models the DSP's trigger logic (bars of 4 beats from tape position 0, 120 BPM) for the gallery."""
 import math
 import os
 import random
@@ -37,8 +38,10 @@ R_HUB = 17
 R_CH = 12.5             # the lots (chance) inside the hub
 SPOKES = [2, 3, 4, 6, 8, 12, 16, 24, 32]
 NGATE, NCH, NDOT = 16, 12, 6
-SNAKE_R, SNAKE_A0, SNAKE_SPAN, SNAKE_TRAVEL = 61, 300, 26, 75   # on an arc left of the rim, carried down by the wheel
-ANUB_R, ANUB_A0, ANUB_TRAVEL = 72, 125, 55                       # feet on an arc right of the rim, climbing upright
+SNAKE_R, SNAKE_A0, SNAKE_SPAN, SNAKE_TRAVEL = 61, 292, 26, 75   # on an arc left of the rim, carried down by the wheel
+SINK_A0 = 300                                                    # its setting dots (from 300 deg down)
+ANUB_R, ANUB_A0, ANUB_TRAVEL = 75, 125, 55                       # feet on an arc right of the rim, climbing upright
+RISE_R = 84                                                      # its setting dots
 SWORD_PV = (168, 30)    # the sword's pivot on the sphinx's right paw (viewer's right)
 SWORD_REST = 109        # degrees it turns down to rest on the rim's crown
 
@@ -134,12 +137,12 @@ def readout(knob, raw, where="synth"):
             return "EVERY BAR" if a == 1 else f"EVERY {a} BARS"
         if m == "chance":
             return f"CHANCE {round(100 * p)}%"
-        return f"VARY {a} {round(100 * p)}%"
+        return f"VARY {round(100 * p)}% X{a}"
     if knob == 2:
         g = gate_of(raw)
         if g >= 16:
             return {16: "GATE 1 BAR", 32: "GATE 2 BARS", 64: "GATE 4 BARS"}[g]
-        return f"GATE {g // math.gcd(g, 16)}/{16 // math.gcd(g, 16)}"
+        return f"GATE {g}/16"
     m, s = pitch_of(raw)
     return {"flat": "PITCH FLAT", "stop": "TAPE STOP", "spin": "SPIN UP"}.get(m) or f"PITCH {s:+d} ST"
 
@@ -328,8 +331,8 @@ def gate_ring():
     for b in range(4):
         kids.append(stroke_path(f"beat{b + 1}", [polar(R_GATE - 3, 90 * b), polar(R_GATE + 3, 90 * b)],
                                 C["lpg"] if b == 0 else C["grey"], 1.2, cap="butt"))
-    kids.append(N("g", "playhead", [stroke_path("playhalo", [polar(35, 0), polar(46, 0)], C["offblue"], 3.6, cap="butt"),
-                                    stroke_path("playcore", [polar(35.6, 0), polar(45.4, 0)], C["lpg"], 1.6, cap="butt")]))
+    kids.append(N("g", "playhead", [stroke_path("playhalo", [polar(35, 0), polar(42.6, 0)], C["offblue"], 3.0, cap="butt"),
+                                    stroke_path("playcore", [polar(35.6, 0), polar(42, 0)], C["lpg"], 1.5, cap="butt")]))
     return N("g", "gatering", kids)
 
 
@@ -343,9 +346,9 @@ def hub():
     return N("g", "hub", kids)
 
 
-def sword_pts(colour_blade, colour_grip, pre, deg):
+def sword_pts(colour_blade, colour_grip, pre, deg, length=17):
     px, py = SWORD_PV
-    blade = rot([(px, py - 3), (px, py - 20)], deg, px, py)
+    blade = rot([(px, py - 3), (px, py - 3 - length)], deg, px, py)
     guard = rot([(px - 3.5, py - 3), (px + 3.5, py - 3)], deg, px, py)
     grip = rot([(px, py - 3), (px, py + 1)], deg, px, py)
     return [stroke_path(f"{pre}_blade", blade, colour_blade, 1.8), stroke_path(f"{pre}_guard", guard, colour_blade, 1.6),
@@ -365,7 +368,7 @@ def sphinx():
             fill_path("sx_face", blob(cx, by - 17.5, 3.4, 4.3, 16), C["lpg"]),
             fill_path("sx_pawL", blob(cx - 7.5, by - 1.2, 4, 1.8, 14), C["purplegrey"]),
             fill_path("sx_pawR", blob(cx + 7.5, by - 1.2, 4, 1.8, 14), C["purplegrey"])]
-    sword = N("g", "sword", [N("g", "swordrest", sword_pts(C["grey"], C["grey"], "swr", SWORD_REST)),
+    sword = N("g", "sword", [N("g", "swordrest", sword_pts(C["grey"], C["grey"], "swr", SWORD_REST, 13.6)),
                              N("g", "swordup", sword_pts(C["green"], C["lightgreen"], "swu", 0))])
     return N("g", "sphinx", kids + [sword])
 
@@ -385,8 +388,10 @@ def snake():
     body = left + right[::-1]
     head = [polar(SNAKE_R + 3.8, SNAKE_A0 + 4.6), polar(SNAKE_R + 2.8, SNAKE_A0 + 0.6), polar(SNAKE_R, SNAKE_A0 - 3.4),
             polar(SNAKE_R - 2.8, SNAKE_A0 + 0.6), polar(SNAKE_R - 3.8, SNAKE_A0 + 4.6)]
-    track = [circle(f"sinkdot{i + 1}", *polar(SNAKE_R + 7.5, SNAKE_A0 - SNAKE_TRAVEL * (i + 1) / NDOT), 1.3, C["orange"])
+    track = [circle(f"sinkdot{i + 1}", *polar(SNAKE_R + 7.5, SINK_A0 - SNAKE_TRAVEL * (i + 1) / NDOT), 1.3, C["orange"])
              for i in range(NDOT)]
+    a = SINK_A0 - SNAKE_TRAVEL * 7 / NDOT + 6                     # TAPE STOP's mark: a bar past the 6th dot
+    track.append(stroke_path("sinkend", [polar(SNAKE_R + 4.5, a), polar(SNAKE_R + 10.5, a)], C["orange"], 1.8, cap="butt"))
     eye = polar(SNAKE_R + 0.9, SNAKE_A0 + 1.6)
     return [N("g", "sinktrack", track), N("g", "snake", [
         N("g", "snakegrey", [fill_path("snakegrey_b", body, C["grey"]), fill_path("snakegrey_h", head, C["grey"])]),
@@ -402,8 +407,10 @@ def anubis():
     head = [(x - 3.5, b - 24), (x - 4.5, b - 27.5), (x - 12, b - 28.5), (x - 12, b - 30.5), (x - 4.5, b - 33), (x - 4, b - 37),
             (x - 2.8, b - 46), (x - 1, b - 38), (x + 1, b - 38), (x + 2.8, b - 46), (x + 4, b - 37), (x + 5, b - 31),
             (x + 3.5, b - 24)]
-    track = [circle(f"risedot{i + 1}", *polar(ANUB_R + 12, ANUB_A0 - ANUB_TRAVEL * (i + 1) / NDOT), 1.3, C["orange"])
+    track = [circle(f"risedot{i + 1}", *polar(RISE_R, ANUB_A0 - ANUB_TRAVEL * (i + 1) / NDOT), 1.3, C["orange"])
              for i in range(NDOT)]
+    a = ANUB_A0 - ANUB_TRAVEL * 7 / NDOT + 3                      # SPIN UP's mark: a bar past the 6th dot
+    track.append(stroke_path("riseend", [polar(RISE_R - 3, a), polar(RISE_R + 3, a)], C["orange"], 1.8, cap="butt"))
     return [N("g", "risetrack", track), N("g", "anubis", [
         N("g", "anubgrey", [fill_path("anubgrey_t", torso, C["grey"]), fill_path("anubgrey_h", head, C["grey"])]),
         N("g", "anuborg", [fill_path("anuborg_t", torso, C["orange"]), fill_path("anuborg_h", head, C["orange"]),
@@ -412,16 +419,19 @@ def anubis():
         fill_path("anub_eye", blob(x - 2, b - 32, 0.8, 0.8, 8), C["black"])])]
 
 
+MARKER = "wheel1"       # ui_repeat.h draws the file only if it finds this id (this generation: one subpath per element)
+
+
 def asset():
     kids = [angel(34, 20), eagle(286, 20), bull(34, 112), lion(286, 112),
-            wheel(), gate_ring(), hub(), *snake(), *anubis(), sphinx()]
+            wheel(), gate_ring(), hub(), *snake(), *anubis(), sphinx(), N("g", MARKER)]
     return N("svg", None, kids, version="1.1", xmlns="http://www.w3.org/2000/svg", x="0", y="0", width="320", height="160",
              viewBox="0 0 320 160")
 
 
 HEADER = f"""
-wheel.svg - MOCKUP for the proposed "repeat" FX screen (a beat repeat; notes/fx-beatrepeat.md): the Tarot's Wheel of
-Fortune, our own flat drawing (not a copy of any deck), generated by design/fx/gen_wheel.py (do not edit by hand).
+wheel.svg - the "repeat" FX screen (a beat repeat; notes/fx-beatrepeat.md; drawn by src/slot/ui_repeat.h): the Tarot's
+Wheel of Fortune, our own flat drawing (not a copy of any deck), generated by design/fx/gen_wheel.py (do not edit).
 No recolours: every change is a visibility flag (B[node + 0x50]) or a group matrix. Wheel centre ({WX}, {WY}).
 gen_wheel.py runtime_state() is the reference for every id below.
   wheel             matrix = rotate(a) about the centre: a steps by 360 / slices-per-bar of the grid played on every
@@ -431,8 +441,10 @@ gen_wheel.py runtime_state() is the reference for every id below.
   leadspoke         always shown (lightblue): the step per repeat is visible on symmetric spokes
   gate1 .. gate16   white, shown when i > 16 - gate (the gate within the bar, ending at 12)      [white: GATE]
   gatex1 .. gatex16 lpg, shown for the stretch when the grid wins (16 - gate_eff < i <= 16 - gate)
-  lap1, lap2        GATE 2 BARS: lap1; 4 BARS: both. ALWAYS and the manual key: no gate (gatedim only)
-  playhead          matrix = rotate(360 * bar phase) about the centre (one turn per bar, tape bars)
+  lap1, lap2        GATE 2 BARS: lap1; 4 BARS: both. ALWAYS, the manual key, FORTUNE OFF and the FX off: no gate
+                    (gatedim only: nothing will fire)
+  playhead          matrix = rotate(360 * bar phase) about the centre (one turn per bar, tape bars); hidden with the
+                    FX off
   ch1 .. ch12       ch<i> shown when i <= lots: chance x 12; EVERY n: 12 / n; ALWAYS 12; OFF 0; FX off: none
                     (a lost roll hides them for ~4 frames)                                      [green: FORTUNE]
   book<n>c/o/f      closed / open / a turning page; VARY a opens a books in the order bull 3, lion 4, eagle 2, angel 1
@@ -441,10 +453,12 @@ gen_wheel.py runtime_state() is the reference for every id below.
   hubman            the hub lit green while the manual REPEAT key (SPLIT) is held
   snakegrey/snakeorg  orange while PITCH is down (a negative step, TAPE STOP)                     [orange: PITCH]
   snake             matrix = rotate(-{SNAKE_TRAVEL} * depth) about the centre: depth = the current repeat's |pitch| / 12
-                    (TAPE STOP: the gate's progress); sinkdot1 .. {NDOT}: the setting (1 2 3 5 7 12 st -> 1 .. 6 dots)
+                    (TAPE STOP: the gate's progress); sinkdot1 .. {NDOT}: the setting (1 2 3 5 7 12 st -> 1 .. 6 dots);
+                    sinkend / riseend: a bar past the 6th dot for TAPE STOP / SPIN UP
   anubgrey/anuborg, anubis, risedot1 .. {NDOT}: the same for up (translate along r {ANUB_R} from {ANUB_A0} to
                     {ANUB_A0 - ANUB_TRAVEL} deg, upright)
   angel, eagle, bull, lion  static (the angel hidden while a readout shows at the title position)
+  {MARKER}            an empty group: the runtime draws this file only if it finds it
 Overlay (immediate, the C's stroke font): a stored-knob turn shows its value ~1.5 s at (8, 7) in the knob's colour.
 """
 
@@ -578,13 +592,15 @@ def runtime_state(k, rt):
     st("wheel")["m"] = rotm(rt["turned"])
     g = gate_of(k[2])
     ge = eff_gate(grid_of(k[0])[0], g)
-    nogate = rt["manual"] or rt["latch"]
+    mode0 = fortune_of(k[1])[0]
+    nogate = rt["manual"] or rt["latch"] or rt["bypass"] or mode0 == "off"   # nothing will fire: the dim ring only
     for i in range(1, NGATE + 1):
         st(f"gate{i}")["hide"] = nogate or i <= 16 - g
         st(f"gatex{i}")["hide"] = nogate or not (16 - ge < i <= 16 - g)
     st("lap1")["hide"] = nogate or g < 32
     st("lap2")["hide"] = nogate or g < 64
     st("playhead")["m"] = rotm(360 * rt["phase"])
+    st("playhead")["hide"] = rt["bypass"]
     mode, a, p = fortune_of(k[1])
     lots = {"always": NCH, "off": 0, "every": round(NCH / max(1, a)), "chance": round(NCH * p),
             "vary": round(NCH * p)}[mode]
@@ -616,6 +632,8 @@ def runtime_state(k, rt):
     for i in range(1, NDOT + 1):
         st(f"sinkdot{i}")["hide"] = not (down and i <= dots)
         st(f"risedot{i}")["hide"] = not (upw and i <= dots)
+    st("sinkend")["hide"] = pm != "stop"
+    st("riseend")["hide"] = pm != "spin"
     d = rt["depth"] if rt["rep"] >= 0 else 0
     st("snake")["m"] = rotm(-SNAKE_TRAVEL * d) if down else (1, 0, 0, 1, 0, 0)
     p0, p1 = polar(ANUB_R, ANUB_A0), polar(ANUB_R, ANUB_A0 - ANUB_TRAVEL * d)

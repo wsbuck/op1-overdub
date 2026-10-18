@@ -113,7 +113,7 @@ MAX_FACTORY_DRUM_PRESETS = 32              # stock 24 + 8 kits (fmdrum 5, metal 
 #                                            sounds (stock 34)
 MAX_FOLDER_LABEL = 13                      # the preset browser prints a column label with snprintf(buf, 14, "%s")
 FEATURE_BITS = {"hold": 1, "chord": 2, "chord2": 4}   # slot.S _feature_mask; must match hold_impl.h / chord2_impl.h FEAT_*
-FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4}   # by source; must match ui.c's FX_* enum
+FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4, "repeat": 5}   # by source; = ui.c's FX_* enum
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
          "_te_note_off": 0x01A85840, "_te_note_on": 0x01A85750, "_te_make_note": 0x01A85014, "_te_synth_shiftkey": 0x01A50904,
@@ -125,6 +125,10 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          "_te_engine_ids": 0xFF8016E4, "_te_ssamp": 0x01DF6F78, "_te_knobs": 0xFF8013C4,
          "_te_synth_slot": 0x01AAAC0C,   # grain_source.h
          "_te_tempo_spb": 0x01AADAD8,    # the tempo, samples per beat Q14 (pingpong.c; notes/fx-pingpong.md "Tempo")
+         # repeat.c's bar clock and ui.c's probe (notes/fx-beatrepeat.md "Sync"): transport, playhead (samples x 64),
+         # metronome countdown (Q14), the keyboard's synth slot, the sequencer's 96-PPQN tick (the probe only)
+         "_te_tape_state": 0xFF802960, "_te_tape_pos": 0xFF802974, "_te_metro_count": 0x01AADADC,
+         "_te_play_slot": 0xFF8016D4, "_te_ppqn_tick": 0x018C1884,
          # audio-input buffers (src/engine/inprobe.h, notes/input.md; as src/engine/build.sh)
          "_te_audio_in": 0xFF800CB4, "_te_rx_sel": 0xFF800364, "_te_rx": 0xFF800370, "_te_alt_in": 0x01AB2E2C,
          # drum side (notes/drum-engine.md, src/slot/drumprobe.h)
@@ -225,6 +229,8 @@ def main():
     ap.add_argument("--build", default=os.path.join(ROOT, "firmware", "build", "slot"))
     a = ap.parse_args()
     fxs = json.load(open(a.fx)) if a.fx else []
+    if any(f["source"] == "repeat" for f in fxs) and not any(f["source"] == "pingpong" for f in fxs):
+        sys.exit("fx repeat plays from pingpong's lines (pingpong_ram, fx_line_owner): build it with pingpong")
     if a.chord and not a.hold:
         sys.exit("--chord needs --hold (chord notes are released through the key-up hook)")
     engines = json.load(open(a.engines))

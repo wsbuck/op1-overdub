@@ -184,9 +184,9 @@ void te_line(void *raster, const int32_t *a, const int32_t *b, int32_t width, co
     printf("%d %d %d %d %d %d\n", a[0], a[1], b[0], b[1], width, (int)((rgba - host_palette) / 4));
 }
 
-/* Our FX for previews: ids 8 ensemble, 9 pingpong, 10 distortion, 11 crush (fx.json order). */
-const uint8_t fx_kind[4] = { 1, 2, 3, 4 };
-const int32_t fx_count = 4;
+/* Our FX for previews: ids 8 ensemble, 9 pingpong, 10 distortion, 11 crush, 12 repeat (fx.json order). */
+const uint8_t fx_kind[5] = { 1, 2, 3, 4, 5 };
+const int32_t fx_count = 5;
 /* crush: the real crush.c (linked by preview.py) runs on silence until its knob smoothing has settled, so crush_state
  * holds what the device would publish; then CRUSH_GR (0 .. 32767) sets the gain reduction and CRUSH_LEVEL the input
  * level (silence gives none of either), CRUSH_FLIPS adds that many bit flips per frame, CRUSH_TURN=frame:knob:value
@@ -243,12 +243,60 @@ struct ens { uint32_t lfo, vib; int32_t depth, vdepth, ens, mix; int32_t d[2][3]
 struct ens ensemble_state[2] = { { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } }, { 0x30000000u, 0, 0, 0, 0, 0, { { 0 } } } };
 
 struct pp pingpong_state[2];
+/* repeat (engines 112 / 212): the real repeat.c (linked by preview.py) runs on the host, 1470 samples (one 30 fps frame)
+ * of a 441 Hz sine before each frame, on TE's words as the device has them: the tape playing from position 0 at REP_BPM
+ * (default 120) or, REP_TAPE=0, stopped (the metronome's countdown); REP_SHIFT=1 holds SHIFT (the probe page);
+ * REP_TURN=frame:knob:value turns a stored knob before that frame (the readout). With
+ * FX_OFF=n the FX stops running for the last n frames (the screen's FX-off look; the clock stays where it was). */
+int16_t pingpong_ram[3 * 65536];
+uint32_t fx_line_owner[2];
+volatile int32_t te_tempo_spb, te_tape_state, te_metro_count, te_play_slot, te_ppqn_tick;
+volatile uint32_t te_tape_pos;
+uint8_t host_shift;
+int32_t host_tape_speed = 0x08000000;
+void repeat_mono(void *self, int16_t *buf, const int16_t *p);
+void repeat_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
+static uint64_t rep_t;                      /* samples run */
+static uint32_t rep_ph;
+static void repeat_frame(int i, int frames, int stereo)
+{
+    float bpm = getenv("REP_BPM") ? (float)atof(getenv("REP_BPM")) : 120.0f;
+    int rolling = !getenv("REP_TAPE") || atoi(getenv("REP_TAPE"));
+    int off = getenv("FX_OFF") ? atoi(getenv("FX_OFF")) : 0;
+    host_shift = getenv("REP_SHIFT") && atoi(getenv("REP_SHIFT"));
+    const char *turn = getenv("REP_TURN");                        /* "frame:knob:value": a stored-knob turn */
+    if (turn && atoi(turn) == i)
+        host_knobs[atoi(strchr(turn, ':') + 1)] = (int16_t)atoi(strrchr(turn, ':') + 1);
+    if (off && i >= frames - off)
+        return;
+    int32_t spb = (int32_t)(2646000.0f / bpm * 16384.0f);
+    while (rep_t < (uint64_t)(i + 1) * 1470) {
+        int16_t l[64], r[64];
+        for (int j = 0; j < 64; j++, rep_ph += 42949673u) {          /* 441 Hz */
+            l[j] = (int16_t)(12000 * sin(rep_ph * 1.4629180792671596e-09));
+            r[j] = l[j];
+        }
+        te_tempo_spb = spb;
+        te_tape_state = rolling ? 2 : 0;
+        te_tape_pos = (uint32_t)(rep_t * 64);
+        uint64_t q14 = rep_t << 14, beat = (uint64_t)spb;
+        te_metro_count = (int32_t)(beat - q14 % beat);              /* clicks on the beats from 0 */
+        if (stereo)
+            repeat_stereo(0, l, r, fx_params());
+        else
+            repeat_mono(0, l, fx_params());
+        rep_t += 64;
+    }
+}
+static int host_fx;
 /* One display frame of audio time (30 fps): the FX clocks the screens read. */
 static void host_tick(int i)
 {
     (void)i;
     for (int s = 0; s < 2; s++) {
         struct fx_pub *pubs[3] = { &ensemble_pub[s], &pingpong_pub[s], &distortion_pub[s] };
+        if (host_fx == 12)                                  /* repeat runs itself (repeat_frame) */
+            continue;
         for (int j = 0; j < 3 && !getenv("FX_OFF"); j++) {   /* FX_OFF: the FX not running (switched off) */
             fx_publish(pubs[j], fx_params());
             pubs[j]->blocks += 22;
@@ -542,12 +590,15 @@ int main(int argc, char **argv)
         return 0;
     }
     else if (e >= 100) {
+        host_fx = e % 100;
         if (e % 100 == 11)
             crush_settle();
         for (int i = 0; i < frames; i++) {
             if (i == frames - 1)
                 host_drawing = 1;
             host_tick(i);
+            if (e % 100 == 12)
+                repeat_frame(i, frames, e < 200);
             if (e % 100 == 11)
                 crush_frame(i);
             fx_ui_draw(e % 100, e >= 200 ? 0 : 3, 0);

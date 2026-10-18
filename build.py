@@ -29,7 +29,8 @@ import op1pack  # noqa: E402
 
 STOCK_URL = "https://teenage.engineering/_software/op-1/op1_246.op1"
 STOCK_SHA256 = "c5315218f825f143b415ca554516541898abee843d3a236df0b54c04e1fb13a9"
-FX_SVGS = {"ensemble": "choir.svg", "pingpong": "pingpong.svg", "distortion": "pedals.svg", "crush": "crush3d.svg"}   # by source
+FX_SVGS = {"ensemble": "choir.svg", "pingpong": "pingpong.svg", "distortion": "pedals.svg", "crush": "crush3d.svg",
+           "repeat": "wheel.svg"}   # by source
 TEST_CARD_SVGS = {"crush": ["crushcard.svg"]}    # --test-card: crush's boot test card (ui.c draw_card), also published
 SVG_FLAGS = {"crushcard.svg": ["--card"]}         # check_svg.py: the card has several subpaths on purpose
 ENGINE_SVGS = {"fm4": "fm4.svg"}   # by source: engine screens drawn through the SVG route (design/synth/)
