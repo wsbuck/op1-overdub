@@ -277,7 +277,20 @@ The maps are coded in `design/fx/gen_wheel.py` (`grid_of`, `fortune_of`, `gate_o
   - Kept: the wheel with T-A-R-O on the rim, the sphinx with its sword on the crown, the snake descending left,
     Anubis rising right, the four winged creatures with books in the corners.
   - Dropped: the Hebrew letters (four small diamonds instead), and after UI round 1 the alchemical symbols (clutter
-    at 1×, moiré at 1/64) and the clouds (they read as mud; each creature stands on a flat offblue pill).
+    at 1×, moiré at 1/64). The clouds went in round 1 (mud) and came back in round 3 as scalloped offblue cushions
+    with a thin grey edge, drawn over the creatures' feet.
+  - Figures (round 3, after the user's "the guys on the outside need work"): built from a few shared shapes (a
+    feathered wing of five primaries with purplegrey coverts, the scalloped cloud, a three-face closed book / an open
+    green one), neutral palette (wings grey, bodies purplegrey, faces lpg, details darkblue / black).
+    - Sphinx: striped lpg nemes (darkblue bands), purplegrey face with eyes, the brow band and the false beard, a grey
+      pectoral collar, a grey lion body edged purplegrey crouched along the crown (low haunch, short tail), the left
+      forepaw on the rim, the right paw a fist over the sword's grip at the pivot; the sword has a pommel.
+    - Angel (robe with folds, hair, arms holding the book), eagle (standing on its book, hooked beak, frown, tail),
+      bull (lying, horns, ears, muzzle, the book before it), lion (lying, a 16-point mane, face, paws, the book in
+      front, a tufted tail); all winged.
+    - Snake: three waves, tapering 5.9 -> 0.4, a head wider than the neck, an eye and a forked tongue.
+    - Anubis: in profile toward the wheel, jackal head with two tall ears and a long snout, lpg collar, purplegrey
+      kilt, striding legs, an arm reaching for the rim; the body, head and arm turn orange.
 
 ### Mapping (after UI round 1; each knob's effect in its knob's colour; structure in darkblue / offblue / grey / purplegrey)
 | state | image | colour |
@@ -299,10 +312,11 @@ The maps are coded in `design/fx/gen_wheel.py` (`grid_of`, `fortune_of`, `gate_o
   matrices: the wheel's rotation, the playhead, the sword's raise, the snake's rotation, Anubis's translation. The
   SVG header lists every id; `runtime_state()` in the generator is the reference for ui.c.
 - Renderer rules:
-  - 172 drawable elements, each one subpath of absolute M / L / C / Z; check_svg PASS;
-  - the heaviest element is the rim band's stroke, ~1331 cells (35 % of 3840), worst over every gallery state and
+  - 222 drawable elements (121 in the figures, round 3), each one subpath of absolute M / L / C / Z; check_svg PASS;
+  - the heaviest element is the rim band's stroke, ~1331 cells (35 % of 3840; the heaviest figure element is the
+    lion's cloud, ~1092, 28 %), worst over every gallery state and
     animation frame;
-  - drawn per frame: ~60–100 elements.
+  - drawn per frame: ~60–100 elements before round 3, ~126 after (default state; ~21 k cells).
   - Per frame the C does matrices and flag writes only (a few thousand cycles). Render cost is like pingpong's /
     choir's (2–11 M cycles; Hypothesis until `--svg-cost`).
 - Gallery: the session scratchpad `beatrepeat/index.html` (19 states at 1× and 2×, `wheel.gif`, 123 frames).
@@ -376,6 +390,21 @@ Kept as measured: every gate ends on the bar line, the live slice is bit-exact d
 | COULD: the line screen had no roll state | FIRING / WAITING / LATCHED in green |
 | COULD: wagon wheel in continuous turns; 1/32 spokes at 1x | not done (noted; the lead spoke keeps the direction) |
 | (note) the per-beat CHANCE gates end on beat lines, the ring still draws the gate ending at 12 | accepted: the ring shows the gate's length |
+
+### Round 3, UI art (a fresh subagent as a TE-style illustrator, on the C-path renders against the RWS card; scratchpad `repeat_art/`)
+The figures redrawn first (§3 "Figures"); the review on that, all must / should applied, two coulds.
+
+| finding | change |
+|---|---|
+| MUST: the sphinx's darkblue body sank into the darkblue rim (only the nemes read); the grey resting sword was invisible on it | body, leg and arm grey with the purplegrey edge; darkblue only in the nemes stripes; the resting sword purplegrey |
+| MUST: the sphinx's tall round haunch and curly tail read as a mouse beside it | a low long haunch along the crown (9 x 5.5), a short thick tail (1.4) |
+| MUST: the eagle read as a dove / owl (round lpg head, small beak, big breast) | a 7-unit hooked grey beak, the head an ellipse, a long frowning brow, the breast narrowed |
+| SHOULD: the sword pointing down read as an arrow (guard by the tip) | the guard narrowed to +-3, the grip to py + 3.5 and a pommel |
+| SHOULD: the lion's face, paws and book merged into one lpg jumble; the face read as a man | mane 13 / 9.5 in 16 points, the face 85 %, grey paws, darkblue nose and mouth, the book in front of the paws |
+| SHOULD: the grey snake a thin worm at 1x | neck 5.5 wide, a head 1 unit wider than the neck, the belly line dropped |
+| COULD: Anubis's lpg kilt the brightest thing on him | kilt purplegrey, the ears further apart |
+| COULD: the bull's and lion's far wing a grey fern | shortened to 18 |
+| COULD: keep the bull's cloud clear of BAR k/n | kept (x <= 60) |
 
 ## 5. Decisions (the user, 2026-10-17)
 1. The name is `repeat` (no alias).
