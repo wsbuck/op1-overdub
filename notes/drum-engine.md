@@ -452,3 +452,159 @@ industrial / techno producer on renders and spectrograms):
   FEEDBACK 7 vs SQUARE 1 nearly the same (respacing FB_BETA changes saved sounds' meaning; after the device test),
   SQUARE getting darker rather than brighter (by design, round 2), the square kicks' infrasonic push (judge on a sub),
   CLAP 9 dB under (rejected before), ratchet 17 without audible ratchet pulses (usable as a blat).
+
+## metal: struck and abused metal (2026-10-17)
+A third drum engine for extreme metallic and industrial percussion, next to fmdrum (unchanged). The user found fmdrum's
+harsh zones better but not extreme enough, with the metallic parameter tied to the noise's decay (it shares DECAY).
+metal has an exciter with its own decay and a resonator bank, then the extreme layer. Files: `src/slot/metal.c`
+(+ `metal.h`), tables and kits from `src/slot/gen_metal.py` (`metal_tables.h`, `metal_kits.json`), screen
+`src/slot/ui_metal.h`, sim `src/engine/test/metal_check.py` (+ `metal_main.c`, `metal_abi.S`). engines.json
+`{"drum": true, "kits": "src/slot/metal_kits.json", "test": true}`, DRUM_KINDS 3; kits in the browser column `metal`.
+
+### The voice (metal.c)
+- **Modes:** 8 magic-circle oscillators (`x -= e y; y += e x`, e = 2 sin(pi f / fs), 16-bit state, two modes per 32-bit
+  word with the vector ops: 4 instructions per pair-sample). The map is area preserving (bijective on the integer
+  lattice), so a mode never grows or dies by itself; its level is a separate gain, so its decay is exact. e from the
+  block's pitch with error diffusion (Q8 below its LSB: a low mode's e is ~70, its LSB 1.4 %). The oscillators'
+  amplitude is renormalised (one Newton step of 1 / sqrt on the invariant x^2 + y^2 - e x y, at most +-3 % a block)
+  every block while their frequency factor moves, else every 8th block. A mode starts at its zero crossing, so even an
+  instant hammer strike doesn't click. Modes fade out from 11 to 14 kHz (e near 1).
+- **MATERIAL:** BAR (free-free beam 1, 2.756, 5.404, 8.933, 13.34, 18.64, 24.81, 31.87), PLATE (circular plate with
+  doublets 1, 1.73, 2.33, 3.91, 4.11, 6.30, 6.61, 8.77), BELL (hum, prime, tierce .. 1, 2, 2.39, 3.01, 4, 5.04, 5.94,
+  8.06), PIPE (stretched harmonics with a beating pair 1, 1.012, 2.03 ..), SHEET (the 808's six square ratios plus two);
+  each with mode levels and a decay slope alpha (a mode's T60 = DECAY x ratio^-alpha). Detents 0, 8, 16, 24, 32 are the
+  materials; between them the ratios morph geometrically, levels and alpha linearly.
+- **SPREAD:** the log ratios x 0.25 (detent 0) .. 1 (16) .. 2 (32), plus a fixed detune pattern (+-15 cents) that grows
+  toward both ends.
+- **STRIKE** (zones on detents, the knob plays one detent ahead, see below): BOOM 0-7 (the softest beater, a pitch
+  drop +36 .. 0 st on its own envelope, T60 250 .. 50 ms, a 0.3 ms attack: kicks), MALLET 8-15, HAMMER 16-23 (the strike's brightness corner 120 Hz ..
+  16 kHz with an 18 .. 4 dB/oct roll-off, the modes' attack 5 ms .. 0, the click's level and colour), SCRAPE 24-28
+  (resonant noise: the modes' sum AM-ed by low-passed noise, bands 2 kHz .. 80 Hz wide around every partial, the modes
+  held up by the exciter's envelope while it lasts, a swell), RATTLE 29-32 (the burst chopped into random impacts that
+  strike the modes again: chains). The modes are normalised to a constant RMS sum (MODE_AMP), so a darker strike isn't
+  quieter.
+- **Exciter:** LCG noise through two one-poles at once (a vector), the exciter (its own envelope, NDECAY 1.5 ms .. 4 s)
+  and the resonant noise's modulator; independent of DECAY (checked both ways).
+- **DRIVE:** CLEAN 0; FOLD 1-10 (a sine folder, gain 1 .. 10, mix rising from 0); CLIP 11-20 (the fold eases back, each
+  mode crossfades to its square sat(y << 3): the 808's square cluster at the material's ratios, then a hard clip x 1 ..
+  8); SCREAM 21-32 (the squares fall to 0.35 by 24 and hold there, never darker than CLIP, gone by 29; a ring mod
+  with an operator at PITCH x 2.414 (no difference tone below the fundamental); the operator's DX7-style feedback from
+  22, linear to 3 by 28, then a square curve to 6; from 29 it FMs the modes: e x (1 + fmd m)). The level after the clip is compensated per
+  table point (`metal_check.py --level-comp`: the median of three reference strikes (a plate MALLET, a bar HAMMER, a sheet
+  SCRAPE) at equal RMS to DRIVE 0, plus a lift of +2 dB by FOLD's end and +4 dB from CLIP's end, since equal RMS made
+  driven keys sound weak).
+- **GRIT:** CLEAN 0; CRUSH 1-12 (7 -> 2 bits, two power-of-two steps crossfaded: continuous); ALIAS 13-32 (sample
+  and hold 16 kHz -> 600 Hz, the bits held at 2 over its first quarter, then relaxing to 5). The readouts CR n / AL n
+  (the zone's level, never repeating), the bits and the rate in the title; GRIT 0 reads OFF.
+- **Output:** a one-pole DC blocker by shift (lp += (x - lp) >> 10, 13.7 Hz) and dsp.h's soft knee; driven keys (already
+  clipped) a plain saturation. A finished note plays out the DC blocker's tail (rounded toward 0) and reports itself to
+  TE as the first to steal.
+- **Zoned knobs play one detent ahead** (as fmdrum's NOISE): STRIKE, DRIVE and GRIT read their tables at k + 1023, the
+  shift taken back across the last zone (metal.h `mt_sound`). A zone's first detent is already in it, its last is the
+  zone at full, and every join is continuous (checked: one raw step across each edge mid-note against the same note
+  without it, residual under -40 dB). The readouts show the zone the knob plays.
+- **Choke:** keys 10..13 cut each other (any metal key there, the same key too), a 5 ms release.
+- **Levels:** velocity scales the modes and the exciter; kit keys peak -12 .. -2 dBFS with no sample >= 32000.
+
+### Cost (sim cycles; the device ran ~2.3 x the sim for DRUMPROBE, ~0.96 M per block in all)
+Passes per run (pre: noise and exciter, the operator, the frequency factor per 4 samples; the modes a pair at a time,
+the loop unrolled x 4 with the gains stepping every 4th sample; post: A the drive, B the grit and the DC blocker), each
+a Blackfin asm loop in GCC inline asm with its state in registers; the C loops under `#ifndef __bfin__` are the
+reference, and metal_check builds both and compares every case bit for bit (307 cases incl. 48 random keys with
+turns and retriggers). Per-block setup is cached by the knobs (the modes' ratios, decay factors, e targets, the
+strike's weights). The noise pass is skipped once the exciter has died out.
+- Per voice-block: a clean ringing key ~8 k, the heaviest call 24.4 k (190 per sample; random keys).
+- 12 voices at once (all starting in the same block, its worst block): each kit's 12 heaviest keys 231 .. 257 k
+  (check: <= 260 k); every heavy feature at once on all 12: 246 .. 277 k (<= 280 k; the dearest: CLIP's squares with
+  the ring and ALIAS). At 2.3 x: ~0.59 .. 0.64 M, 61 .. 67 % of the device's limit. Attacks of 32 samples or less
+  start at once from silence (no split run).
+- Kept from the cost work: the squares as a second gain vector and a second MAC (not a blend); the frequency factor
+  per 4 samples; the operator's increment and feedback per block; a 1024-point sine without interpolation in the fold
+  and the operator (a drive stage); the cheap DC blocker. Rejected: fewer modes (the materials need 8), a half-rate
+  operator (chaos at the wrong rate).
+
+### Checks (metal_check.py, before the first image)
+Pitch within 0.5 cents (-36..+36 st; 14.15 Hz .. 3.54 kHz); every material's modes within 1 cent of its ratios, SPREAD's
+stretch within 2 cents; the ring's T60 within 2 % of DECAY and the exciter's within 15 % of NDECAY, each unchanged by
+the other knob; 122 sustained notes over every DRIVE / GRIT detent and STRIKE zone bounded, no DC, no runaway; zone
+joins; slow sweeps of the plain knobs (as TE's LFO) and fast turns without zipper or clicks; velocity; retriggers; a
+kit loaded mid-note; the voice's end; kit levels; the choke group; 12 voices; no libgcc or libc (undefined symbols:
+TE's arrays only); slot init; the ABI; the asm against the C loops.
+
+### Review log
+Round 1 (fresh reviewers: an industrial / noise / metal percussion sound designer and DSP engineer, on WAVs, ladders,
+sweeps, loops and spectrograms against fm industrial; an OP-1 player and TE-style designer on 136 screen renders).
+- Sound, done:
+  - driven keys lost their transient (the shaper squashed the attack into the tail) and CRUSH gated tails: the A/B
+    output path now works on the strike's level (the modes' gains x R / m), and a 32-bit post gain (m / R x DRIVE's
+    level) puts the envelope back after the drive and the grit; it also removes the gain stall below;
+  - the exciter added dry after the drive (and after the grit);
+  - BOOM's drop has its own envelope (+36 .. 0 st, T60 40 .. 120 ms) instead of NDECAY's;
+  - a gain stall (a real bug): long driven tails sat at the modes' 16-bit gain ramp's +-16 rest, which the clip gain
+    turned into a -60 dBFS buzz until -70 dB (scrap 17): fixed by the post gain, and a note now ends (with a one-block
+    output fade) once every mode's target is under that rest;
+  - STRIKE barely brightened: HAMMER tilts the modes up to +3 dB per octave (SCRAPE and RATTLE too), the exciter's
+    levels raised (HAMMER 0.2 .. 0.6, SCRAPE 0.6 .. 0.45, RATTLE 0.5), the modes up to 14 kHz (fade from 11, was 9 ..
+    12; the fade's slope had a wrong constant);
+  - a pitch trim (-3 dB per octave above 500 Hz, to -9 dB: the open hats were the loudest keys);
+  - SCREAM's feedback on a square curve from detent 24 (29..32 were interchangeable), the ring at most 0.8 (the pitch
+    survives); ALIAS starts at 16 kHz (its first 4 detents were above hearing) with the bits held at 3 over its
+    first quarter (turning past CRUSH 12 cleaned the sound up); DRIVE's lift 7 -> 4 dB (the punch survives now);
+  - the kits retuned as suggested (kicks, toms, snare, rim, hats, crash, ping, the extreme kit's toms, gong, grinder
+    storm, hell bell).
+- Sound, not done: the DC blocker's dead band (up to ~-65 dBFS of DC for <= 0.4 s at a note's end: inaudible, and
+  pass B has no free register for the rounding constant); a separate clean lowest mode after SCREAM (a pass of its
+  own; the ring's 0.8 cap keeps a fifth of the dry modes instead); the ALIAS entry trim (re-measured in round 2).
+- UX, done:
+  - tall objects reached into the title: every object now fits y 40..100 (smaller scale 0.62 .. 0.38, shifted
+    inside), the striker's head and handle clamped below y 24..30;
+  - RATTLE's links lay along the top edge, two hanging off, like a chain (they floated above the title);
+  - DRIVE's 6-character values ran into DECAY's column: FD / CL / SC n in the value row (the title spells them);
+  - the top two detents of zoned knobs showed the same level (31, 32): levels from the rounded raw detent;
+  - classes by role first: RIM and CLAP and PING added, HAT only on SHEET / PLATE, SCREAM no longer a class (a
+    screaming key keeps its role, its key mark turns pink); key marks by family shape (drums a double line, metals a
+    tick, noise a zigzag) instead of near-identical greys, no red next to DECAY's orange;
+  - MATERIAL reads PL>BE / PLATE>BELL 46% (a new '>' glyph in gen_font.py); GRIT ALIAS reads AL10K; GRIT's value
+    row MT_PALE instead of the grey that looked disabled, titles in the knob's (SHIFT) colour; long titles smaller so
+    they end before the striker;
+  - CLIP squares the outline relative to the object's own height (flat bars and plates showed nothing); the mode
+    comb follows STRIKE's brightness and tilt.
+- UX, not done: one between-detent rule with fmdrum (metal shows the nearest detent's level, fmdrum the next: kept,
+  metal's readout is per detent); "TIGHT BEAT" in SPREAD's title (the title stays short).
+
+Round 2 (fresh reviewers, the same roles, on the round-1 fixes; the sound reviewer rendered ~40 variants of their own).
+- Sound, found fixed: driven transients (CLIP's first 5 ms 6-7 dB over the tail, was 0-1; kit crest +4-5 dB), CRUSH
+  no longer gates tails, HAMMER ~6 dB brighter. Not yet clearly beyond fm industrial: denser mids, less sub and air.
+- Sound, done:
+  - SCREAM's ring with the operator at PITCH x 1.414 cancelled the fundamental and put a 0.414 f difference tone below
+    it (subsonic on kicks: 43 % of extreme 2's energy under 20 Hz): the operator at x 2.414, and the DC blocker raised
+    6.9 -> 13.7 Hz;
+  - SCREAM 22-28 was darker and calmer than CLIP: the curve above (feedback from 22, the squares held at 0.35); its -4 dB
+    step at 29: LV re-measured as the median of three references;
+  - BOOM: attack 3 -> 0.3 ms (it clicks now), the drop's T60 250 .. 50 ms across BOOM (the deepest drop the longest;
+    4-7 had no audible drop);
+  - CRUSH 1-5 were dead (12 -> 7.6 bits on a full-scale signal): 7 -> 2 bits; ALIAS 13-17 sounded like CRUSH 12 and
+    29-32 collapsed to sub mush: the bits 2 -> 5, the floor 300 -> 600 Hz;
+  - SCRAPE and RATTLE were dull with a short NDECAY: the burst lasts at least 0.12 s; RATTLE chopped only at 31-32: chop
+    lin(0.6, 1) and the whole voice ducks up to -12 dB between impacts (they survive DRIVE);
+  - kits: no SCREAM kicks (extreme 0 a CLIP / HAMMER kick, extreme 2 CLIP 20), foundry 1 / scrap 1 and the toms DRIVE 18
+    (they played as boxy toms), the snares louder (the backbeat sat 5-7 dB under the toms), the hats DRIVE 30 / SPREAD 6
+    / GRIT 0 (the whistle gone, flatness 0.002 -> 0.21), foundry's inaudible GRIT 2-4 values removed (the CRUSH remap makes the rest audible), extreme crash / gong DECAY 2 / 2.5
+    s (the loop was a wash).
+- Sound, not done: SCREAM 31-32 still converge on near-white noise whatever the material (that is chaos; the curve
+  now spends 22-30 on distinct stages); the loops' 20-60 Hz and above-6 kHz shares against fm's were not re-measured
+  after the changes (the device listen decides); sweep_DECAY tested nothing (the note died before the knob moved: a
+  review-material fault, DECAY's continuity is in metal_check).
+- UX, done:
+  - mt_class with the reviewer's rules (tested on all 72 kit keys: ten wrong keys fixed, CRASH alive again): GRIND
+    nk >= 205, HAT only up to HAMMER, BELL dk >= 150, CRASH dk >= 165, ANVIL before PING below 1.5 kHz, PING from 500 Hz;
+  - colours: metal marks GREY (MT_PALE is GRIT's value colour), a screaming key a white spike above its mark (DRIVE's
+    colour) instead of a pink close to NDECAY's orange;
+  - GRIT CR n / AL n with the units in the title (6BIT twice and AL316 / AL10K gone), GRIT 0 OFF (two CLEANs in one
+    column);
+  - the objects' details clipped and torn with the outline; sparks from the outline's leftmost and bottom points (not
+    under the striker); RATTLE's chain hangs at the outline's right edge, 5..8 links shaking with RATTLE;
+  - BOOM's drop drawn as a third curve (PURPLEGREY) in the graph; the comb's lowest three modes at least 3 px under BOOM;
+    a DARKBLUE bracket over keys 10..13 (the choke group); the header comments.
+- UX, not done: the lit key fill clipped below the black keys (the fill is TE's key strip's, shared with fmdrum); an
+  "FM" suffix in DRIVE's title from SC4 (the title already spells SCREAM n, and a 20-character title shrinks).

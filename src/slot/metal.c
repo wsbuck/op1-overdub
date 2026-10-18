@@ -12,12 +12,12 @@
  *            ops), struck: its level from the material and the strike's brightness, its own ring decay (DECAY x
  *            ratio^-alpha: higher modes shorter, by material)
  *   exciter  low-passed noise with its own envelope (NDECAY), its colour and level from STRIKE: a thud (BOOM, with a
- *            pitch drop that follows NDECAY), a mallet, a hammer's click, a scrape (the modes AM-ed by low-passed
+ *            pitch drop on its own envelope), a mallet, a hammer's click, a scrape (the modes AM-ed by low-passed
  *            noise: noise bands on every partial, the modes held up while it lasts), a rattle (random impacts)
  *   drive    FOLD (a sine folder), CLIP (each mode a square: the 808's square cluster at the material's ratios, then
- *            a hard clip), SCREAM (ring mod with a feedback-FM operator at PITCH x sqrt 2, then the operator FMs
+ *            a hard clip), SCREAM (ring mod with a feedback-FM operator at PITCH x 2.414, then the operator FMs
  *            the modes, the feedback to chaos)
- *   grit     CRUSH (bits 14 .. 3) and ALIAS (sample and hold 88 kHz .. 300 Hz)
+ *   grit     CRUSH (bits 7 .. 2) and ALIAS (sample and hold 16 kHz .. 600 Hz)
  * Knobs (per key, TE's dbox path, range row 9; metal.h MT_*), read every block, so turning one changes a sounding note:
  *   [0] blue   PITCH     14 Hz .. 3.5 kHz         [4] SHIFT+blue    STRIKE  BOOM MALLET HAMMER SCRAPE RATTLE
  *   [1] green  MATERIAL  BAR PLATE BELL PIPE SHEET [5] SHIFT+green   SPREAD  TIGHT .. NATURAL .. WIDE
@@ -559,12 +559,12 @@ static void pass_pair(struct mt_voice *v, int j, int n, const int16_t *da, const
 static int16_t mt_s[BLOCK] RAM;
 
 #ifdef __bfin__
-/* the DC blocker (a one-pole high-pass at 6.9 Hz: lp += (x - lp) >> 11, lp Q23 in R7) and the knee: y (Q23) in R0
+/* the DC blocker (a one-pole high-pass at 13.7 Hz: lp += (x - lp) >> 10, lp Q23 in R7) and the knee: y (Q23) in R0
  * -> out (P1); the knee out of line above 0.75 FS (constants at [P5 + 64 .. 72]). NEXT: the loop's last instruction
  * (the next sample's load). */
 #define OUT_DC(NEXT)                                                                                                 \
     "R1 = R0 - R7 (NS);\n\t"                                                                                        \
-    "R2 = R1 >>> 11;\n\t"                                                                                           \
+    "R2 = R1 >>> 10;\n\t"                                                                                           \
     "R7 = R7 + R2;\n\t"                                                                                             \
     "R0 = R1 >>> 8;\n\t"                                                                                            \
     "R1 = ABS R0;\n\t"                                                                                              \
@@ -592,7 +592,7 @@ static int16_t mt_s[BLOCK] RAM;
 /* the same with a plain 16-bit saturation instead of the knee (driven keys: already clipped) */
 #define OUT_DC_SAT(NEXT)                                                                                             \
     "R1 = R0 - R7 (NS);\n\t"                                                                                        \
-    "R2 = R1 >>> 11;\n\t"                                                                                           \
+    "R2 = R1 >>> 10;\n\t"                                                                                           \
     "R7 = R7 + R2;\n\t"                                                                                             \
     "R0 = R1 << 8 (S);\n\t"                                                                                         \
     "R0 >>>= 16;\n\t"                                                                                               \
@@ -667,7 +667,7 @@ static void pass_clean(struct mt_voice *v, int16_t *out, int n, int32_t dgp)
         int32_t s = sat16(sat16(((mt_acc[i] >> 16) * (gp >> 16)) >> 12) + mt_ex[i]);
         gp = (int32_t)((uint32_t)gp + (uint32_t)dgp);
         int32_t y = (s << 8) - lp;                                   /* Q23, the DC blocker */
-        lp += y >> 11;
+        lp += y >> 10;
         out[i] = soft_knee(y >> 8);
     }
     v->dcy = lp;
@@ -876,7 +876,7 @@ static void pass_out(struct mt_voice *v, int16_t *out, int n, const struct post 
             gp = (int32_t)((uint32_t)gp + (uint32_t)dgp);
         }
         int32_t y = (s << 8) - lp;                                   /* Q23, the DC blocker */
-        lp += y >> 11;
+        lp += y >> 10;
         out[i] = (int16_t)(SAT ? sat16(y >> 8) : soft_knee(y >> 8));
     }
     v->gp = gp;
@@ -1011,7 +1011,7 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
         int32_t lp = v->dcy;                /* (the input is 0: y = -lp, rounded so it reaches 0 from both sides) */
         for (int i = 0; i < BLOCK; i++) {
             out[i] = soft_knee(-lp >> 8);
-            lp += (-lp + 1024) >> 11;
+            lp += (-lp + 512) >> 10;
         }
         v->dcy = lp;
         v->level = 0;
@@ -1021,7 +1021,10 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
     v->level = 0;
 
     /* ---- the exciter's envelope; RATTLE's impacts ---- */
-    int32_t ex1 = env_step(v->exenv, v->choke ? CHOKE_DEC : mt_ex_dec[mt_pos(p[MT_NDECAY]) >> 7]);
+    int32_t ndi = mt_pos(p[MT_NDECAY]) >> 7;
+    if (ks >= 24 * 1024 && ndi < 142)       /* SCRAPE and RATTLE: the burst lasts at least 0.12 s */
+        ndi = 142;
+    int32_t ex1 = env_step(v->exenv, v->choke ? CHOKE_DEC : mt_ex_dec[ndi]);
     int32_t chop = LERP(mt_strike, MT_STRIKE_W, ks, 11), hold = LERP(mt_strike, MT_STRIKE_W, ks, 10);
     int32_t gate = 32767, imp = 0;
     if (chop) {
@@ -1194,13 +1197,15 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
         b.a1[k] = (b.a1[k] * scl) >> 12;                                  /* (a1 <= m: at most R) */
     int32_t gq = (int32_t)(((uint32_t)mlev * (uint32_t)recip_q22((uint32_t)rmax)) >> 7);   /* Q15: m / R */
     gq = gq > 32767 ? 32767 : gq;
+    if (chop)                               /* RATTLE: between impacts the whole voice ducks (up to -12 dB) */
+        gq = (gq * (32767 - ((((chop * (32767 - v->rat)) >> 15) * 3) >> 2))) >> 15;
     int32_t gp1 = last ? v->gp : ((b.po.lv * gq) >> 15) << 16;
     v->mdv = md0;
     int split = 0;
     if (fresh) {
         if (!from_silence)
             att = 32;                       /* a retrigger: from the gains it has */
-        if (att <= 8) {                     /* a hammer: at once (each mode starts at its zero crossing) */
+        if (att <= 32 && from_silence) {   /* a hammer (0.36 ms or less): at once (each mode starts at its zero crossing) */
             for (int k = 0; k < 8; k++) {
                 v->amp[k] = (int16_t)((full[k] * (32767 - b.sq)) >> 15);
                 v->ampq[k] = (int16_t)((full[k] * b.sq) >> 15);
@@ -1209,7 +1214,7 @@ void metal_render(struct tobj *o, int16_t *out, const int16_t *p)
             split = (att + 15) & ~15;
         }
         if (from_silence)                   /* the post gain: at once for a hammer, else the attack's ramp */
-            v->gp = att <= 8 ? gp1 : 0;
+            v->gp = att <= 32 ? gp1 : 0;
         if (from_silence) {                 /* the exciter starts at its full level */
             v->gex = (((((exg * 32767) >> 15) * vel12) >> 12) * gate >> 15) << 16;
             v->grn = (rnw * gate) >> 15;

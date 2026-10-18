@@ -13,16 +13,16 @@ Per key, 8 int16 (TE's dbox per-key values, range row 9: K0 -24320..24832, K1-K7
                        ratios (geometric), levels and decay slopes
   K2 white   DRIVE     0 clean; FOLD 1-10 (a sine folder, gain 1 .. 10); CLIP 11-20 (each mode turns into a square:
                        the 808's square cluster, then a hard clip); SCREAM 21-32 (ring mod with a feedback-FM
-                       operator, then that operator FMs the modes; feedback to chaos)
+                       operator, then that operator FMs the modes; feedback to chaos; the operator at PITCH x 2.414)
   K3 orange  DECAY     ring T60 of the lowest mode, 30 ms .. 16 s (higher modes shorter, by material)
-  K4 SHIFT+blue    STRIKE  BOOM 0-7 (a heavy beater: pitch drop +24 .. 0 st), MALLET 8-15 (soft -> hard), HAMMER
+  K4 SHIFT+blue    STRIKE  BOOM 0-7 (a heavy beater: pitch drop +36 .. 0 st, its own decay 250 .. 50 ms), MALLET 8-15 (soft -> hard), HAMMER
                            16-23 (steel: bright, a click), SCRAPE 24-28 (a noise burst that rings the modes: resonant
                            noise, wide -> narrow), RATTLE 29-32 (the burst chopped into random impacts: chains)
   K5 SHIFT+green   SPREAD  mode stretch: TIGHT 0-15 (ratios^0.25 .. ^1, detuned: a beating cluster), NATURAL 16
                            (the material), WIDE 17-32 (ratios^1 .. ^2)
-  K6 SHIFT+white   GRIT    0 clean; CRUSH 1-12 (14 .. 3 bits); ALIAS 13-32 (sample and hold 88 kHz .. 300 Hz, half an
-                           octave per detent, the bits relax 3 .. 8)
-  K7 SHIFT+orange  NDECAY  the exciter's own T60 (noise, click, thud, the BOOM drop, the scrape), 1.5 ms .. 4 s;
+  K6 SHIFT+white   GRIT    0 clean; CRUSH 1-12 (7 .. 2 bits); ALIAS 13-32 (sample and hold 16 kHz .. 600 Hz, the bits
+                           relax 2 .. 5)
+  K7 SHIFT+orange  NDECAY  the exciter's own T60 (noise, click, thud, the scrape), 1.5 ms .. 4 s;
                            independent of DECAY
 Keys 10..13 are a choke group (metal.c). Kits share the key roles: 0-2 kicks, 3/5/7 toms, 4/6 snares, 8 rim, 9 clap,
 10-13 hats, 14-15 cymbals, 16-23 free.
@@ -66,7 +66,7 @@ DETUNE = [0, 9, -13, 7, -11, 15, -6, 10]   # cents at the ends of SPREAD (TIGHT 
 MODE_TOP = 14000.0                         # Hz: modes fade out from MODE_FADE to here (the magic circle's e < 1)
 MODE_FADE = 11000.0
 TRIM_HZ = 500.0                            # the output trims -3 dB per octave of PITCH above this, to -9 dB
-OP_RATIO = 1.4142                          # SCREAM's FM operator: PITCH x this (ring carrier and the modes' modulator)
+OP_RATIO = 2.4142                          # SCREAM's FM operator: PITCH x this (ring carrier and the modes' modulator)
 MODE_AMP = 20000                           # Q15: the strike weights' RMS sum (headroom for the drive)
 ZONE_STRIKE = [("BOOM", 0, 8), ("MALLET", 8, 16), ("HAMMER", 16, 24), ("SCRAPE", 24, 29), ("RATTLE", 29, 33)]
 ZONE_DRIVE = [("CLEAN", 0, 1), ("FOLD", 1, 11), ("CLIP", 11, 21), ("SCREAM", 21, 33)]
@@ -193,7 +193,7 @@ STRIKE_COLS = ["bend", "fc", "slope", "att", "swell", "exl", "exc", "rnw", "rnc"
 
 
 def strike_point(k):
-    """bend (st at the start, decaying with NDECAY), fc (Hz: the strike's brightness), slope (dB per octave above fc),
+    """bend (st at the start, decaying on its own: bt60), fc (Hz: the strike's brightness), slope (dB per octave above fc),
     att (ms: the modes' attack), swell (x NDECAY's T60 added to it), exl (the exciter's own level), exc (Hz: its
     one-pole low-pass), rnw (resonant noise: the modes AM-ed by low-passed noise, 0..1), rnc (Hz: that noise's
     band), hold (the modes held up by the exciter's envelope while it lasts), chop (RATTLE: random impacts)"""
@@ -202,7 +202,7 @@ def strike_point(k):
     p = dict(bend=0.0, bt60=0.12, fc=16000.0, slope=4.0, boost=0.5, att=0.0, swell=0.0, exl=0.6, exc=14000.0,
              rnw=0.0, rnc=2000.0, hold=0.0, chop=0.0)
     if name == "BOOM":                      # the softest beater, a pitch drop +36 .. 0 st (T60 40 .. 120 ms, its own)
-        p.update(bend=36 * (1 - t), bt60=lin(0.04, 0.12, t), fc=geo(120, 300, t), slope=18.0, boost=0.0, att=3.0,
+        p.update(bend=36 * (1 - t), bt60=geo(0.25, 0.05, t), fc=geo(120, 300, t), slope=18.0, boost=0.0, att=0.3,
                  exl=lin(0.35, 0.18, t), exc=geo(180, 400, t))
     elif name == "MALLET":
         p.update(fc=geo(300, 2500, t), slope=lin(18, 12, t), boost=0.0, att=lin(3.0, 1.0, t), exl=lin(0.18, 0.2, t),
@@ -215,7 +215,7 @@ def strike_point(k):
                  rnc=geo(2000, 80, t), hold=lin(0.3, 1.0, t))
     else:                                   # RATTLE: chopped into impacts
         p.update(swell=lin(0.3, 0.0, t), exl=0.5, exc=16000.0, rnw=1.0, rnc=geo(80, 600, t), hold=1.0,
-                 chop=lin(0.25, 1.0, t))
+                 chop=lin(0.6, 1.0, t))
     return p
 
 
@@ -237,10 +237,13 @@ def drive_point(k):
     elif name == "SCREAM":
         # the squares give way to the ring over detents 21..24; the operator FMs the modes from 24 (never both: the
         # pair loop for squares and FM together is the dearest)
-        # the feedback on a square curve from 24 (chaos only at the top), the ring at most 0.8 (the pitch stays)
-        u = 0.0 if t <= 0.25 else (t - 0.25) / 0.75
-        p.update(fw=0.5, fg=2.0, sq=max(0.0, 1.0 - t / 0.25), cg=geo(8.0, 5.0, t), rw=min(0.8, t * 1.8),
-                 fb=6.0 * u ** 2, fmd=0.55 * u ** 1.2)
+        # the feedback from detent 22, linear to 3 by 28, then a square curve to 6; the squares down to 0.35 by 24, held
+        # (never darker than CLIP), gone by ~29 where the operator starts FM-ing the modes (never both: the pair loop
+        # for squares and FM together is the dearest); the ring at most 0.8 (the pitch stays)
+        fb = 0.0 if t < 0.09 else 3.0 * (t - 0.09) / 0.55 if t < 0.64 else 3.0 + 3.0 * ((t - 0.64) / 0.36) ** 2
+        sq = 1.0 - 0.65 * t / 0.25 if t < 0.25 else 0.35 if t < 0.64 else max(0.0, 0.35 * (1 - (t - 0.64) / 0.11))
+        fmd = 0.0 if t <= 0.75 else 0.55 * ((t - 0.75) / 0.25) ** 1.2
+        p.update(fw=0.5, fg=2.0, sq=sq, cg=geo(8.0, 5.0, t), rw=min(0.8, t * 1.8), fb=fb, fmd=fmd)
     return p
 
 
@@ -255,12 +258,12 @@ def grit_point(k):
     if name == "CLEAN":
         return dict(bits=16.0, rate=FS)
     d = max(k, 0) / 1024.0
-    if name == "CRUSH":                     # 16 bits (CLEAN) -> 3, fast at first: detent 1 already ~12 bits
-        return dict(bits=16.0 - 13.0 * t ** 0.5, rate=FS)
-    # the hold from 16 kHz at once (its first detent plays t ~ 0.05), down to 300 Hz; the bits held at 3 for the first
-    # quarter (turning past CRUSH never cleans up), then relaxing to 8
-    rate = geo(FS, 16000.0, t / 0.05) if t < 0.05 else geo(16000.0, 300.0, (t - 0.05) / 0.95)
-    return dict(bits=3.0 if t < 0.25 else lin(3.0, 8.0, (t - 0.25) / 0.75), rate=rate)
+    if name == "CRUSH":                     # 16 bits (CLEAN) -> 7 by the first detent (t 1/12), then 7 -> 2
+        return dict(bits=16.0 - 9.0 * t * 12 if t < 1 / 12 else lin(7.0, 2.0, (t - 1 / 12) / (11 / 12)), rate=FS)
+    # the hold from 16 kHz at once (its first detent plays t ~ 0.05), down to 600 Hz; the bits held at 2 for the first
+    # quarter (turning past CRUSH never cleans up), then relaxing to 5
+    rate = geo(FS, 16000.0, t / 0.05) if t < 0.05 else geo(16000.0, 600.0, (t - 0.05) / 0.95)
+    return dict(bits=2.0 if t < 0.25 else lin(2.0, 5.0, (t - 0.25) / 0.75), rate=rate)
 
 
 def per_block_t60(t60):
@@ -336,15 +339,15 @@ def LEVEL_LIFT_DB(i):
     return 0.0 if d < 1 else 2 * (d - 1) / 10 if d < 11 else 2 + 2 * (d - 11) / 10 if d < 21 else 4.0
 
 
-LV = [4096, 3933, 3741, 3529, 3304, 3093, 2881, 2675, 2477, 2292, 2119, 1961, 1817, 1687, 1621, 1585,
-      1555, 1530, 1509, 1494, 1483, 1476, 1474, 1477, 1484, 1495, 1510, 1528, 1548, 1569, 1590, 1611,
-      1630, 1648, 1665, 1679, 1691, 1702, 1711, 1722, 1732, 1696, 1668, 1645, 1626, 1610, 1595, 1582,
-      1571, 1562, 1555, 1549, 1546, 1545, 1545, 1547, 1550, 1553, 1557, 1559, 1557, 1552, 1544, 1532,
-      1517, 1503, 1489, 1476, 1463, 1452, 1445, 1443, 1445, 1453, 1460, 1468, 1475, 1483, 1491, 1498,
-      1506, 1520, 1536, 1554, 1576, 1594, 1622, 1680, 1791, 1884, 1918, 1902, 1881, 1848, 1821, 1799,
-      1781, 1765, 1752, 1740, 1730, 1723, 1721, 1727, 1733, 1735, 1740, 1751, 1772, 1786, 1805, 1814,
-      1828, 1843, 1709, 1657, 1642, 1646, 1651, 1668, 1693, 1701, 1710, 1739, 1764, 1769, 1767, 1751,
-      1724]
+LV = [4096, 3935, 3745, 3535, 3313, 3105, 2896, 2693, 2499, 2316, 2146, 1991, 1849, 1722, 1658, 1626,
+      1600, 1578, 1562, 1550, 1543, 1540, 1541, 1542, 1525, 1513, 1504, 1499, 1500, 1525, 1551, 1579,
+      1609, 1639, 1668, 1690, 1705, 1715, 1723, 1737, 1752, 1717, 1687, 1662, 1641, 1624, 1609, 1599,
+      1591, 1586, 1583, 1580, 1577, 1571, 1564, 1558, 1552, 1545, 1538, 1533, 1528, 1523, 1515, 1507,
+      1497, 1488, 1479, 1470, 1463, 1457, 1453, 1453, 1457, 1464, 1472, 1480, 1487, 1495, 1503, 1511,
+      1518, 1532, 1546, 1562, 1582, 1601, 1639, 1708, 1818, 1908, 1942, 1916, 1887, 1859, 1840, 1826,
+      1817, 1809, 1803, 1796, 1791, 1790, 1793, 1747, 1709, 1655, 1632, 1624, 1616, 1617, 1613, 1623,
+      1628, 1638, 1652, 1667, 1685, 1711, 1725, 1733, 1743, 1751, 1769, 1795, 1831, 1825, 1825, 1811,
+      1788]
 
 
 def c_array(name, ctype, vals, per=12):
@@ -428,20 +431,20 @@ B, PL, BE, PI, SH = (MATK(m) for m in MATERIALS)
 KITS = {
     "metal foundry": ("lo-fi", [
         key(48, B, 10, 0.45, 0, 16, 0, 0.07),          # 0 F   anvil kick (BOOM, folded)
-        key(42, PL, 8, 0.7, 0, 12, 0, 0.08),         # 1 F#  tank kick
+        key(42, PL, 18, 0.7, 0, 12, 0, 0.08),         # 1 F#  tank kick
         key(55, B, 16, 0.3, 2, 16, 0, 0.05),        # 2 G   square kick (CLIP)
-        key(110, PI, 12, 0.6, 15, 16, 0, 0.03),        # 3 G#  pipe tom low
-        key(190, PL, 12, 0.2, 27, 22, 3, 0.15),       # 4 A   sheet snare (SCRAPE)
-        key(160, PI, 12, 0.5, 15, 16, 0, 0.03),        # 5 A#  pipe tom mid
-        key(230, SH, 13, 0.25, 25, 18, 2, 0.1),      # 6 B   clank snare (CLIP + SCRAPE)
-        key(235, PI, 12, 0.45, 15, 16, 0, 0.03),       # 7 C   pipe tom high
-        key(1250, B, 12, 0.07, 23, 20, 4, 0.004),      # 8 C#  rim: anvil tick
+        key(110, PI, 18, 0.6, 15, 16, 0, 0.03),        # 3 G#  pipe tom low
+        key(190, PL, 18, 0.22, 25, 22, 0, 0.2),       # 4 A   sheet snare (SCRAPE)
+        key(160, PI, 18, 0.5, 15, 16, 0, 0.03),        # 5 A#  pipe tom mid
+        key(230, SH, 13, 0.25, 25, 18, 0, 0.1),      # 6 B   clank snare (CLIP + SCRAPE)
+        key(235, PI, 18, 0.45, 15, 16, 0, 0.03),       # 7 C   pipe tom high
+        key(1250, B, 12, 0.07, 23, 20, 0, 0.004),      # 8 C#  rim: anvil tick
         key(500, SH, 10, 0.18, 30, 14, 0, 0.1),      # 9 D   clap: rattled sheet
-        key(3300, SH, 18, 0.05, 23, 22, 3, 0.015),    # 10 D# closed hat (808 cluster)
-        key(3300, SH, 18, 0.03, 23, 22, 3, 0.008),   # 11 E  pedal chick
-        key(3300, SH, 18, 0.15, 23, 22, 3, 0.04),    # 12 F  half-open hat
-        key(3300, SH, 18, 0.45, 23, 22, 3, 0.08),      # 13 F# open hat
-        key(520, PL, 20, 3.0, 25, 26, 2, 0.5),        # 14 G  sheet crash
+        key(3300, SH, 30, 0.05, 23, 6, 0, 0.015),    # 10 D# closed hat (808 cluster)
+        key(3300, SH, 30, 0.03, 23, 6, 0, 0.008),   # 11 E  pedal chick
+        key(3300, SH, 30, 0.15, 23, 6, 0, 0.04),    # 12 F  half-open hat
+        key(3300, SH, 30, 0.45, 23, 6, 0, 0.08),      # 13 F# open hat
+        key(520, PL, 20, 3.0, 25, 26, 0, 0.5),        # 14 G  sheet crash
         key(95, PL, 2, 9.0, 6, 8, 0, 0.3),           # 15 G# gong
         key(880, B, 0, 1.6, 20, 16, 0, 0.004),       # 16 A  anvil (clean)
         key(310, BE, 1, 3.5, 14, 16, 0, 0.01),       # 17 A# bell
@@ -454,13 +457,13 @@ KITS = {
     ]),
     "metal scrap": ("dem drums", [
         key(52, SH, 12, 0.4, 1, 16, 4, 0.07),        # 0 drum-can kick
-        key(45, PI, 10, 0.6, 0, 16, 0, 0.07),          # 1 oil drum kick
+        key(45, PI, 18, 0.6, 0, 16, 0, 0.07),          # 1 oil drum kick
         key(60, B, 20, 0.3, 3, 16, 0, 0.1),          # 2 clipped thud
-        key(100, PL, 12, 0.6, 16, 10, 0, 0.05),       # 3 trash tom low
+        key(100, PL, 18, 0.6, 16, 10, 0, 0.05),       # 3 trash tom low
         key(210, SH, 12, 0.25, 27, 16, 4, 0.12),     # 4 trash snare
-        key(140, PL, 12, 0.5, 16, 10, 0, 0.05),       # 5 trash tom mid
+        key(140, PL, 18, 0.5, 16, 10, 0, 0.05),       # 5 trash tom mid
         key(260, PL, 16, 0.2, 24, 20, 8, 0.08),      # 6 can snare (crushed)
-        key(200, PL, 12, 0.4, 16, 10, 0, 0.05),       # 7 trash tom high
+        key(200, PL, 18, 0.4, 16, 10, 0, 0.05),       # 7 trash tom high
         key(1600, PI, 6, 0.08, 20, 16, 0, 0.008),    # 8 can rim
         key(700, PL, 10, 0.15, 31, 18, 6, 0.12),      # 9 clap: hubcap rattle
         key(2200, PL, 12, 0.05, 22, 24, 0, 0.015),   # 10 closed lid hat
@@ -479,22 +482,22 @@ KITS = {
         key(950, SH, 6, 0.4, 30, 12, 16, 0.2),       # 23 aliased rattle
     ]),
     "metal extreme": ("lo-fi", [
-        key(40, B, 25, 0.45, 0, 16, 0, 0.06),          # 0 scream kick (SCREAM)
+        key(42, B, 20, 0.5, 23, 16, 0, 0.05),          # 0 scream kick (SCREAM)
         key(50, SH, 20, 0.5, 2, 12, 10, 0.06),       # 1 crushed square kick
-        key(36, PL, 26, 0.9, 1, 16, 0, 0.25),        # 2 ring-mod sub boom
+        key(36, PL, 20, 0.9, 1, 16, 0, 0.25),        # 2 ring-mod sub boom
         key(105, PI, 22, 0.42, 14, 16, 0, 0.03),       # 3 ring tom low
-        key(200, SH, 28, 0.3, 27, 16, 6, 0.15),      # 4 scream snare
+        key(200, SH, 20, 0.3, 26, 16, 9, 0.2),      # 4 scream snare
         key(150, PI, 22, 0.35, 14, 16, 0, 0.03),       # 5 ring tom mid
         key(240, PL, 18, 0.25, 26, 24, 20, 0.12),    # 6 aliased snare
         key(215, PI, 22, 0.32, 14, 16, 0, 0.03),     # 7 ring tom high
         key(1400, B, 24, 0.1, 22, 18, 12, 0.01),     # 8 rim: zap tick
         key(600, SH, 20, 0.2, 31, 16, 8, 0.12),      # 9 clap: shredded rattle
-        key(2000, SH, 20, 0.05, 23, 22, 4, 0.015),   # 10 closed hat: buzz
-        key(2100, SH, 20, 0.03, 23, 22, 4, 0.008),   # 11 pedal
-        key(2000, SH, 20, 0.16, 23, 22, 4, 0.04),    # 12 half-open
-        key(2000, SH, 20, 0.35, 23, 22, 4, 0.08),     # 13 open hat: buzz
-        key(300, SH, 28, 3.5, 25, 10, 6, 0.5),       # 14 noise crash
-        key(140, PL, 27, 4.0, 7, 4, 0, 0.3),         # 15 chaos gong
+        key(2000, SH, 30, 0.05, 23, 6, 0, 0.015),   # 10 closed hat: buzz
+        key(2100, SH, 30, 0.03, 23, 6, 0, 0.008),   # 11 pedal
+        key(2000, SH, 30, 0.16, 23, 6, 0, 0.04),    # 12 half-open
+        key(2000, SH, 30, 0.35, 23, 6, 0, 0.08),     # 13 open hat: buzz
+        key(300, SH, 28, 2.0, 25, 10, 6, 0.5),       # 14 noise crash
+        key(140, PL, 27, 2.5, 7, 4, 0, 0.3),         # 15 chaos gong
         key(800, B, 26, 1.2, 20, 16, 0, 0.005),      # 16 screaming anvil
         key(60, PL, 27, 1.5, 28, 14, 0, 2.0),        # 17 grinder storm
         key(250, SH, 24, 0.7, 32, 14, 16, 1.2),      # 18 chain shredder
@@ -560,7 +563,7 @@ def tables_h():
         h += ["  {"] + ["    " + ", ".join(str(v) for v in row[i:i + 12]) + "," for i in range(0, 256, 12)] + ["  },"]
     h += ["};",
           "/* STRIKE >> 8 (129 points): " + ", ".join(STRIKE_TCOLS) + ":\n"
-          " * bend (K0 units at the start, decaying with NDECAY), the brightness corner (K0 units / 2), the roll-off above it\n"
+          " * bend (K0 units at the start, decaying on its own), the brightness corner (K0 units / 2), the roll-off above it\n"
           " * (octaves of level per octave, Q12), attack (samples), swell (x NDECAY's T60, Q15), the exciter's gain (Q12, its\n"
           " * noise normalised), its one-pole coefficient Q15, resonant noise mix Q15, its one-pole Q15, its gain (Q9: RMS 0.5),\n"
           " * hold Q15, chop Q15, the drop's decay (log2 per block, Q16), the modes' tilt up (octaves of level per octave, Q12) */",

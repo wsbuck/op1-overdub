@@ -36,7 +36,7 @@ from simrun import CPU_BUDGET  # noqa: E402
 
 FS = 88200
 PITCH, MATERIAL, DRIVE, DECAY, STRIKE, SPREAD, GRIT, NDECAY = range(8)
-POLY_KITS = 255000                         # 12 voices, sim cycles per block: each kit's 12 heaviest keys
+POLY_KITS = 260000                         # 12 voices, sim cycles per block: each kit's 12 heaviest keys
 POLY_WORST = 280000                        # .. every heavy feature at once on all 12 (SCREAM + SCRAPE + ALIAS)
 
 
@@ -272,10 +272,11 @@ def load(w, cs):
 
 
 def level_comp():
-    """DRIVE's level per table point: three reference strikes, RMS over their first 0.25 s, matched to DRIVE 0's"""
+    """DRIVE's level per table point: three reference strikes (a plate MALLET, a bar HAMMER, a sheet SCRAPE), the median
+    of their RMS over the first 0.25 s, matched to DRIVE 0's"""
     w = tempfile.mkdtemp(prefix="metal_lv_")
-    refs = [K(hz=110, mat=G.B, decay=1.0, strike=12), K(hz=220, mat=G.PL, decay=1.0, strike=18),
-            K(hz=660, mat=G.SH, decay=0.6, strike=22)]
+    refs = [K(hz=150, mat=G.PL, decay=1.0, strike=12), K(hz=110, mat=G.B, decay=1.0, strike=20),
+            K(hz=300, mat=G.SH, decay=0.8, strike=26, ndecay=0.3)]
     cs = {}
     for i in range(129):
         k2 = min(i * 256, 32767)
@@ -291,7 +292,7 @@ def level_comp():
     base = [rms_db(res[f"lv0_{j}"]["x"][:FS // 4]) for j in range(len(refs))]
     lv = []
     for i in range(129):
-        d = np.mean([rms_db(res[f"lv{i}_{j}"]["x"][:FS // 4]) - base[j] for j in range(len(refs))]) - G.LEVEL_LIFT_DB(i)
+        d = np.median([rms_db(res[f"lv{i}_{j}"]["x"][:FS // 4]) - base[j] for j in range(len(refs))]) - G.LEVEL_LIFT_DB(i)
         lv.append(int(round(min(8191, max(256, 4096 * 10 ** (-d / 20))))))
     lv[0] = 4096
     src = open(os.path.join(SLOT, "gen_metal.py")).read()

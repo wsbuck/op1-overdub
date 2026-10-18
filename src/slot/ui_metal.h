@@ -29,7 +29,7 @@ extern struct mt_voice metal_voice[] __attribute__((weak));
 
 #define MT_SHOW 45                              /* frames a turned knob's readout stays in the title (~1.5 s) */
 #define MT_PALE 17                              /* TE's palette 17 (230, 231, 255) */
-/* classes: the key's role (SCREAM is no role: a screaming key keeps its role, its key mark turns pink) */
+/* classes: the key's role (SCREAM is no role: a screaming key keeps its role, its key mark gets a white spike) */
 enum { MC_KICK, MC_TOM, MC_SNARE, MC_RIM, MC_CLAP, MC_HAT, MC_CRASH, MC_GONG, MC_BELL, MC_PING, MC_ANVIL, MC_CLANG,
        MC_CHAIN, MC_GRIND };
 static const char *const mt_class_name[14] = { "KICK", "TOM", "SNARE", "RIM", "CLAP", "HAT", "CRASH", "GONG", "BELL",
@@ -39,7 +39,7 @@ static const char *const mt_class_name[14] = { "KICK", "TOM", "SNARE", "RIM", "C
 enum { MF_DRUM, MF_METAL, MF_NOISE };
 static const uint8_t mt_class_family[14] = { MF_DRUM, MF_DRUM, MF_DRUM, MF_DRUM, MF_DRUM, MF_METAL, MF_METAL, MF_METAL,
                                              MF_METAL, MF_METAL, MF_METAL, MF_METAL, MF_NOISE, MF_NOISE };
-static const uint8_t mt_family_colour[3] = { PURPLEGREY, MT_PALE, GREY };
+static const uint8_t mt_family_colour[3] = { PURPLEGREY, GREY, DARKBLUE };
 static const uint8_t mt_shift_colour[4] = { LIGHTBLUE, LIGHTGREEN, MT_PALE, LIGHTORANGE };
 static const uint8_t mt_title_colour[8] = { BLUE, GREEN, WHITE, ORANGE, LIGHTBLUE, LIGHTGREEN, MT_PALE, LIGHTORANGE };
 static const char *const mt_knob_name[8] = { "PITCH", "MATERIAL", "DRIVE", "DECAY", "STRIKE", "SPREAD", "GRIT",
@@ -68,7 +68,7 @@ static int mt_level(const uint8_t *edge, int z, int16_t v)
 }
 
 /* what a key's values make it: its role (DECAY: index 65 ~ 0.15 s, 93 ~ 0.3 s, 105 ~ 0.4 s, 142 ~ 1 s, 170 ~ 2 s;
- * PITCH: -9300 ~ 80 Hz, 2300 ~ 300 Hz, 9000 ~ 610 Hz, 12300 ~ 900 Hz) */
+ * PITCH: -9300 ~ 80 Hz, 2300 ~ 300 Hz, 7277 ~ 500 Hz, 12300 ~ 900 Hz, 17015 ~ 1.5 kHz; NDECAY: 205 ~ 1.1 s) */
 static int mt_class(const int16_t *k)
 {
     int sz = MT_SZ(k[MT_STRIKE]), dz = MT_DZ(k[MT_DRIVE]);
@@ -77,7 +77,7 @@ static int mt_class(const int16_t *k)
     int sheet_plate = mat >= 28672 || (mat >= 4096 && mat < 12288);
     if (sz == SZ_RATTLE)
         return dk < 93 ? MC_CLAP : MC_CHAIN;
-    if (sz == SZ_SCRAPE && dz >= DZ_CLIP && nk >= 176)       /* a long scrape, driven: a grinder */
+    if (sz == SZ_SCRAPE && dz >= DZ_CLIP && nk >= 205)       /* a long scrape, driven: a grinder */
         return MC_GRIND;
     if (pitch < -9300)
         return dk >= 200 ? MC_GONG : MC_KICK;
@@ -85,15 +85,17 @@ static int mt_class(const int16_t *k)
         return MC_SNARE;
     if (pitch >= 12300 && dk < 65 && sz == SZ_HAMMER && !sheet_plate)
         return MC_RIM;
-    if (pitch >= 12300 && dk < 190 && sheet_plate)
+    if (pitch >= 12300 && dk < 190 && sheet_plate && sz <= SZ_HAMMER)
         return MC_HAT;
     if (dk >= 190 && pitch < 2300)
         return MC_GONG;
-    if (mat >= 12288 && mat < 20480 && dk >= 160)
+    if (mat >= 12288 && mat < 20480 && dk >= 150)
         return MC_BELL;
-    if (dk >= 175 && sheet_plate && sz >= SZ_HAMMER)
+    if (dk >= 165 && sheet_plate && sz >= SZ_HAMMER)
         return MC_CRASH;
-    if (pitch >= 9000 && dk >= 105)
+    if (mat < 4096 && sz == SZ_HAMMER && pitch < 17015)        /* (under 1.5 kHz) */
+        return MC_ANVIL;
+    if (pitch >= 7277 && dk >= (pitch >= 17015 ? 90 : 105))   /* (500 Hz, 1.5 kHz) */
         return MC_PING;
     if (pitch < 2300)
         return MC_TOM;
@@ -156,29 +158,30 @@ static char *mt_value(char *p, int i, const int16_t *k, int full)
         }
         return mt_two(put_str(put_dec(put_str(p, "X"), ip), "."), h);
     }
-    if (i == MT_GRIT) {
+    if (i == MT_GRIT) {                         /* the row: CR n / AL n (one per detent); the title adds the units */
         int z = MT_GZ(v);
         int32_t g = mt_grit_pos(v) >> 8;
         if (z == GZ_CLEAN)
-            return put_str(p, "CLEAN");
-        if (full)
-            p = put_str(put_str(p, mt_grit_zone[z]), " ");
+            return put_str(p, "OFF");
+        p = put_dec(put_str(p, full ? (z == GZ_CRUSH ? "CRUSH " : "ALIAS ") : z == GZ_CRUSH ? "CR" : "AL"),
+                    (uint32_t)mt_level(mt_grit_edge, z, v));
+        if (!full)
+            return p;
+        p = put_str(p, " ");
         if (z == GZ_CRUSH)
             return put_str(put_dec(p, (uint32_t)((mt_grit_bits[g] + 128) >> 8)), "BIT");
         uint32_t hz = ((mt_grit_hold[g] >> 16) * 1378u) >> 10;   /* the hold's rate: inc / 2^32 x 88200 */
-        if (!full)
-            p = put_str(p, "AL");
         if (hz < 1000)
-            return full ? put_str(put_dec(p, hz), "HZ") : put_dec(p, hz);
+            return put_str(put_dec(p, hz), "HZ");
         uint32_t kh = 0;
         while (hz >= 1000) {
             hz -= 1000;
             kh++;
         }
         p = put_dec(p, kh);
-        if (kh < 10 && full)
+        if (kh < 10)
             p = put_dec(put_str(p, "."), (hz * 655) >> 16);
-        return put_str(p, full ? "KHZ" : "K");
+        return put_str(p, "KHZ");
     }
     return fd_put_time(p, mt_time_10us[i == MT_DECAY ? 0 : 1][mt_pos(v) >> 7]);
 }
@@ -188,6 +191,7 @@ static char *mt_value(char *p, int i, const int16_t *k, int full)
 struct mt_obj {
     fp32 x[40], y[40];
     fp32 tx, ty;                                /* the outline's top point: where the striker lands */
+    fp32 lx, ly, bx, by, rx;                    /* its leftmost and bottom points (sparks), its right edge (the chain) */
 };
 
 static void mt_object(struct mt_obj *o, const int16_t *k, int32_t ring, uint32_t seed, uint32_t frame)
@@ -205,7 +209,7 @@ static void mt_object(struct mt_obj *o, const int16_t *k, int32_t ring, uint32_t
     int32_t tear = dz == DZ_SCREAM ? 8192 + ((dt * 3) >> 2) : 0;
     int32_t gmask = -1, xmask = -1;             /* GRIT: CRUSH snaps both axes (1 .. 8 px), ALIAS the columns */
     if (gz == GZ_CRUSH) {
-        int32_t b = mt_grit_bits[mt_grit_pos(k[MT_GRIT]) >> 8] >> 8;  /* 14 .. 3 */
+        int32_t b = mt_grit_bits[mt_grit_pos(k[MT_GRIT]) >> 8] >> 8;  /* 7 .. 2 */
         gmask = -(1 << (8 + (b >= 12 ? 0 : b >= 9 ? 1 : b >= 6 ? 2 : 3)));
     } else if (gz == GZ_ALIAS) {
         gmask = -(1 << 11);
@@ -224,6 +228,14 @@ static void mt_object(struct mt_obj *o, const int16_t *k, int32_t ring, uint32_t
     int32_t ymin = 1 << 20, ymax = -(1 << 20);
     for (int i = 0; i < 40; i++) {
         int32_t x = px[i], y = py[i];
+        if (i >= 24) {                           /* the details follow the outline's clip and tear */
+            if (clip)
+                y = y > lim ? lim : y < -lim ? -lim : y;
+            if (tear) {
+                int32_t h = (int32_t)(fd_hash((uint32_t)i * 0x27D4EB2Fu + seed) >> 20) - 2048;
+                x += (h * (tear >> 10)) >> 6;
+            }
+        }
         if (i < 24) {
             if (fold) {                          /* ripples, more and deeper up the zone */
                 uint32_t a = (uint32_t)i * (0x0AAAAAABu * (uint32_t)(3 + (fold >> 13))) + (frame << 26);
@@ -250,8 +262,8 @@ static void mt_object(struct mt_obj *o, const int16_t *k, int32_t ring, uint32_t
     /* inside y 40 .. 100 (centre 70): clear of the title, the striker above it, the comb below */
     int32_t shift = ymin < -(30 << 8) ? -(30 << 8) - ymin : ymax > (30 << 8) ? (30 << 8) - ymax : 0;
     int32_t ty = 1 << 20;
-    o->tx = FP(84);
-    o->ty = FP(40);
+    o->tx = o->lx = o->bx = o->rx = FP(84);
+    o->ty = o->ly = o->by = FP(40);
     for (int i = 0; i < 40; i++) {
         o->x[i] = FP(84) + (px[i] << 2);
         o->y[i] = FP(70) + ((py[i] + shift) << 2);
@@ -260,6 +272,16 @@ static void mt_object(struct mt_obj *o, const int16_t *k, int32_t ring, uint32_t
             o->tx = o->x[i];
             o->ty = o->y[i];
         }
+        if (i < 24 && (i == 0 || o->x[i] < o->lx)) {
+            o->lx = o->x[i];
+            o->ly = o->y[i];
+        }
+        if (i < 24 && (i == 0 || o->y[i] > o->by)) {
+            o->bx = o->x[i];
+            o->by = o->y[i];
+        }
+        if (i < 24 && (i == 0 || o->x[i] > o->rx))
+            o->rx = o->x[i];
     }
 }
 
@@ -285,12 +307,16 @@ static void mt_striker(void *r, const int16_t *k, const struct mt_obj *o, int hi
     }
     if (z == SZ_RATTLE) {                        /* a chain lying along the top, its end hanging off; shaking while it
                                                  * plays */
-        for (int i = 0; i < 8; i++) {
+        int nl = 4 + mt_level(mt_strike_edge, z, k[MT_STRIKE]);          /* 5 .. 8 links, shaking more */
+        fp32 xe = o->tx + FP(6) * (nl - 2) - FP(15);
+        xe = o->rx + FP(3) > xe ? xe : o->rx + FP(3);
+        for (int i = 0; i < nl; i++) {
             uint32_t h = fd_hash((uint32_t)i * 0x9E3779B1u + (hit ? frame : 0));
-            fp32 j = hit ? (fp32)((int32_t)(h & 7) - 3) << 8 : 0;
-            fp32 x = i < 6 ? o->tx - FP(15) + FP(6) * i : o->tx + FP(17) + (i == 7 ? FP(1) : 0);
-            fp32 y = i < 6 ? o->ty - FP(3) - (lift >> 1) : o->ty + FP(3) + FP(6) * (i - 6);
-            int across = (i & 1) ^ (i >= 6);
+            fp32 j = hit ? (fp32)((int32_t)(h & 7) - 3) << (7 + (nl >> 2)) : 0;
+            int lying = i < nl - 2;
+            fp32 x = lying ? o->tx - FP(15) + FP(6) * i : xe + (i == nl - 1 ? FP(1) : 0);
+            fp32 y = lying ? o->ty - FP(3) - (lift >> 1) : o->ty + FP(3) + FP(6) * (i - nl + 2);
+            int across = (i & 1) ^ !lying;
             fd_ellipse(r, x + j, y + (j >> 1), across ? FP(2) : FP(4), across ? FP(4) : FP(2), 8, 0x20000000u, 0, col);
         }
         return;
@@ -343,17 +369,20 @@ static void mt_comb(void *r, const int16_t *k, const struct mt_voice *live)
             continue;
         fp32 x = x0 + (fp32)(((l < 0 ? 0 : l) * 631) >> 7);              /* 148 px (Q10) for 5 octaves of K0 */
         fp32 h = FP(1) + (fp32)((a * 13) >> 5);                          /* up to 14 px */
+        if (ks < 32 && j < 3 && h < FP(3))                                 /* BOOM: a kick never looks empty */
+            h = FP(3);
         vline_fast(r, x, y0 - h, y0, GREEN);
         if (a > 2000)
             vline_fast(r, x + FP(1), y0 - h, y0, GREEN);
     }
 }
 
-/* a key's mark (its class's family: drums a double line, metals a short tick, noise a zigzag), pink when it screams */
+/* a key's mark (its class's family: drums a double line, metals a short tick, noise a zigzag), a white spike when it
+ * screams */
 static void mt_mark(void *r, fp32 x0, fp32 x1, fp32 y, const int16_t *k)
 {
     int cls = mt_class(k), fam = mt_class_family[cls];
-    int col = MT_DZ(k[MT_DRIVE]) == DZ_SCREAM ? FD_PINK : mt_family_colour[fam];   /* (pink: screaming) */
+    int col = mt_family_colour[fam];
     fp32 xm = (x0 + x1) >> 1;
     if (fam == MF_DRUM) {
         line_fast(r, x0, y, x1, y, col);
@@ -366,12 +395,17 @@ static void mt_mark(void *r, fp32 x0, fp32 x1, fp32 y, const int16_t *k)
             line_fast(r, xm - FP(4) + FP(3) * j, j & 1 ? y + FP(1) : y - FP(1), xm - FP(1) + FP(3) * j,
                       j & 1 ? y - FP(1) : y + FP(1), col);
     }
+    if (MT_DZ(k[MT_DRIVE]) == DZ_SCREAM)    /* screaming: a white spike (DRIVE's colour) above the mark */
+        vline_fast(r, xm, y - FP(5), y - FP(2), WHITE);
 }
 
 /* the OP-1's keys with metal's classes (as fd_keys) */
 static void mt_keys(void *r, const int16_t *kit, int edit, const int32_t *lit)
 {
     const fp32 y0 = FP(121), y1 = FP(140), yb = FP(132);
+    line_fast(r, FP(133), FP(119), FP(187), FP(119), DARKBLUE);     /* keys 10..13: the choke group */
+    vline_fast(r, FP(133), FP(118), FP(120), DARKBLUE);
+    vline_fast(r, FP(187), FP(118), FP(120), DARKBLUE);
     line_fast(r, FP(13), y0, FP(13 + 21 * 14), y0, DARKBLUE);
     line_fast(r, FP(13), y1, FP(13 + 21 * 14), y1, DARKBLUE);
     for (int w = 0, pos = 0; w <= 14; w++, pos = pos == 6 ? 0 : pos + 1) {
@@ -482,9 +516,10 @@ static void draw_metal(int slot)
             n = (n * (amp > 16384 ? 32767 : amp << 1)) >> 15;
         for (int i = 0; i < n; i++) {
             uint32_t h = fd_hash((uint32_t)i * 0x85EBCA6Bu + seed);
-            uint32_t a = 0xA0000000u + ((h & 0xFFFF) << 14);              /* up and to both sides */
+            uint32_t a = (i & 1 ? 0x10000000u : 0x60000000u) + ((h & 0xFFFF) << 14);   /* down and out, left and out */
             int32_t c = cos_t(a), sn = sin_t(a), len = 4 + (int32_t)((h >> 16) & 7);
-            fp32 x0 = o.tx + (fp32)((c * 3) >> 5), y0 = o.ty + (fp32)((sn * 3) >> 5);
+            fp32 sx = i & 1 ? o.bx : o.lx, sy = i & 1 ? o.by : o.ly;          /* (away from the striker) */
+            fp32 x0 = sx + (fp32)((c * 3) >> 5), y0 = sy + (fp32)((sn * 3) >> 5);
             line_fast(r, x0, y0, x0 + (fp32)((c * len) >> 5), y0 + (fp32)((sn * len) >> 5), (h >> 13) & 1 ? WHITE : GREY);
         }
     }
@@ -498,6 +533,12 @@ static void draw_metal(int slot)
     for (int i = 0; i < 3; i++)
         vline_fast(r, FD_GX(tick_q8[i]), FP(FD_GY1 - 2 - i), FP(FD_GY1), GREY);
     fd_curve(r, -(6 << 16), mt_db_blk[1][mt_pos(k[MT_NDECAY]) >> 7], LIGHTORANGE);
+    {                                           /* BOOM's drop (STRIKE's, dim): from its depth (+36 st = the top) */
+        int32_t ksp = mt_strike_pos(k[MT_STRIKE]) >> 8, bend = mt_strike[ksp * MT_STRIKE_W];
+        if (bend > 256)
+            fd_curve(r, (fd_log2_q8((uint32_t)bend) - fd_log2_q8(18432)) * 1541,
+                     (mt_strike[ksp * MT_STRIKE_W + 12] * 6165) >> 10, PURPLEGREY);
+    }
     fd_curve(r, 0, mt_db_blk[0][mt_pos(k[MT_DECAY]) >> 7], ORANGE);
     if (live)
         vline_fast(r, FD_GX(fd_log2_q8(age) << 2), FP(FD_GY0), FP(FD_GY1), GREY);
