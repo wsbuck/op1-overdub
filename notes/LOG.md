@@ -1683,3 +1683,50 @@
   9. **metal.** The metal agent's own checklist, plus all three kits load.
   10. Quick repeat of NIGHT2's passing steps: learn, pin, chip, voices, HOLD, octave extremes.
 - Result: _pending user flash_.
+
+## 2026-10-17 — Test image 87: METAL1.OP1 (metal after two sound and UX review rounds) + METAL1SAFE.OP1
+- What it is: NIGHT3 (CHORD v2 phase 2, the va sub shape: unchanged) with metal after its second review round (commit
+  2f32eb1; notes/drum-engine.md "metal"). NIGHT3 had metal after round 1 only. metal: a third drum engine (fmdrum
+  unchanged), a struck object of 8 inharmonic modes with its own exciter and an extreme layer. Per key:
+  - blue PITCH (14 Hz .. 3.5 kHz) / SHIFT STRIKE: BOOM 0-7 (a kick beater, a pitch drop on its own envelope), MALLET
+    8-15, HAMMER 16-23, SCRAPE 24-28, RATTLE 29-32;
+  - green MATERIAL: BAR 0, PLATE 8, BELL 16, PIPE 24, SHEET 32, morphing between / SHIFT SPREAD: TIGHT 0-15 (a beating
+    cluster), NATURAL 16, WIDE 17-32;
+  - white DRIVE: CLEAN 0, FOLD 1-10, CLIP 11-20 (the 808 square cluster), SCREAM 21-32 (ring mod, feedback FM to chaos)
+    / SHIFT GRIT: OFF 0, CRUSH 1-12, ALIAS 13-32;
+  - orange DECAY (the ring, 30 ms .. 16 s) / SHIFT NDECAY (the exciter's own decay, 1.5 ms .. 4 s).
+  Zoned knobs play one detent ahead (a zone's first detent is already in it). Keys 10..13 choke each other. Three kits
+  in the browser column `metal`: metal foundry, metal scrap, metal extreme.
+- `firmware/images/METAL1.OP1`:
+  - Command: `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum,metal --db-trim
+    va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1 --db-trim
+    harmonic=6 --db-trim fm4=6 --svg-cost --name METAL1` (NIGHT3's command).
+  - Built from commit 2f32eb1 in a clean `git archive`; loopcc scan clean; te-boot identical to stock (f6233b974bdb6c92).
+  - sha256 d2d11487968960d3736d6a531daab61674ecd8f5e0a4aa1fae251955e459feea.
+- `firmware/images/METAL1SAFE.OP1`: that build's bundle, `apply.py op1_246.op1 METAL1SAFE.OP1 --without chord2` (CHORD1;
+  metal and everything else as METAL1), te-boot identical to stock.
+  sha256 9ad5f4122f0a48c192defa4e55baa17865987ba8c21c2bb095f589cbb8e69586.
+- Host checks on that tree: metal_check (all, 12 voices: kits 231 .. 257 k sim cycles per block, all heavy features
+  at once 277 k; ~0.59 .. 0.64 M at the device's ~2.3 x), drumhooks, knobhook, fx_lfo, chord2, drum_browser (32
+  factory drum sounds), apply_check.
+- **Before flashing:** keep **26 or fewer saved drum sounds** (32 factory drum presets with metal's kits; more and the
+  OP-1 asserts at boot). The chord file as NIGHT3.
+- Retest (metal; CHORD v2 as NIGHT3's checklist):
+  1. **Boot and load.** Drum mode, the browser: column `metal` with the three kits. Load each; play all 24 keys. Any
+     crash, freeze, hung voice or loud click: report the kit and key.
+  2. **CPU.** metal extreme, play the 12 heaviest keys at once and fast rolls across the keyboard, the sequencer
+     running, an FX on. Any dropout or stutter? (The sim says ~2/3 of the limit; the device ratio is unverified.)
+  3. **How does it feel?** Is it extreme enough, beyond fm industrial? Which kit, which keys would you keep? Kicks:
+     do BOOM's drops hit, do they click? Do the snares sit above the toms?
+  4. **Knobs.** On one key, turn each knob through its range, with and without SHIFT: does every detent do something,
+     do the zones land where the screen says (STRIKE, DRIVE, GRIT titles)? Turning while a note rings: zipper or clicks?
+     DRIVE through SCREAM 22-32: distinct stages, the pitch still there?
+  5. **NDECAY vs DECAY.** A long DECAY with a short NDECAY (a clean ring after a short thud) and the reverse (a long
+     noise wash over a short ring).
+  6. **Choke.** Keys 10..13 (the hats) cut each other; an open hat cut by the closed hat.
+  7. **LFO.** TE's LFO on a metal key reaches PITCH, MATERIAL, DRIVE, DECAY only; smooth sweeps.
+  8. **Save.** Edit a key, save the kit as a user drum sound, power cycle, load it: the edit is kept.
+  9. **The screen.** Readable? Do the object, the striker, the comb and the curves say what the key is? Anything
+     confusing or ugly?
+  10. If metal misbehaves but CHORD v2 is the suspect, flash METAL1SAFE.
+- Result: _pending user flash_.
