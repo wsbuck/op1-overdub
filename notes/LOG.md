@@ -1730,3 +1730,58 @@
      confusing or ugly?
   10. If metal misbehaves but CHORD v2 is the suspect, flash METAL1SAFE.
 - Result: _pending user flash_.
+
+## 2026-10-18 — Test image 88: REPEAT1.OP1 (the repeat FX: a beat repeat, the Wheel of Fortune screen, the bar-clock probe)
+- What it is (notes/fx-beatrepeat.md §7 "As built"): a 13th FX, `repeat` (firmware id 12, DB fx_types 15), on synth,
+  drum and master (stereo there). blue GRID 1/64 .. 1/2 with triplets; green FORTUNE: ALWAYS (hard left, the latch),
+  OFF, EVERY 8 / 4 / 2 BARS, CHANCE 10 .. 90 %, EVERY BAR, VARY 1 .. 4; white GATE 1/16 .. 4 BARS ending on the bar line
+  (CHANCE / VARY with GATE <= 4/16: on every beat line); orange PITCH SPIN UP .. +12 .. FLAT .. -12 .. TAPE STOP.
+  Default 1/16, EVERY 4 BARS, GATE 4/16, FLAT: a one-beat 16th stutter into every 4th downbeat. Bars come from the tape
+  playhead while it rolls, else from repeat's own count locked to the metronome's clicks. It shares pingpong's delay
+  lines: switching between the two loses pingpong's echo tail. No SPLIT key yet (phase 2).
+- **The probe (phase 0) is on the repeat screen: hold SHIFT.** Lines: `TAPE <state> POS <samples>`, `TAPE BAR n BEAT
+  b.cc`, `SPB .. BPM`, `METRO <countdown> TICK <seq tick>`, `SPEED <ratio> = HEX <word>`, `OURS BAR n BEAT b CLOCK
+  TAPE|METRO`, `FIRES n LOST n DRY|GATE|LATCH REP k`. (SHIFT + knob is TE's fine adjust: it seems dead on these
+  stepped knobs.)
+- `firmware/images/REPEAT1.OP1`:
+  - Command: `build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum,metal --db-trim
+    va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1 --db-trim
+    harmonic=6 --db-trim fm4=6 --svg-cost --name REPEAT1` (METAL1's command), all FX.
+  - Built from commit 0173683 in a clean `git archive`; loopcc scan clean; all SVGs pass check_svg and svg_cells
+    (wheel.svg 35 %); te-boot identical to stock (f6233b974bdb6c92).
+  - sha256 16c724b98528170fe8de661d71e320c5d87ea4cbf2e87315b9c4432dfa79222f.
+- The FX id count grows to 13: name loops 15 entries, factory / ScreenId bounds 13, range table 13 rows, the five LFO
+  flag-table copies 13 bytes (id 12 reads 0). Risks: the FX browser with 13 rows (untested); the playhead read one
+  block late (the tape engine's order before the FX is a Hypothesis).
+- Host / sim checks on that tree: repeat_check (all, 312 runs), repeat_screen_check, fx_abi_check, fx_lfo_check,
+  pingpong_check, crush_screen_check, loopcc_check. CYCLES (sim, stereo): idle 1.4 k, repeating 10 .. 13.4 k mean,
+  peaks <= 16.7 k (pingpong 16.2 k).
+- **Before flashing:** keep **26 or fewer saved drum sounds** (32 factory drum presets). The chord file as NIGHT3.
+- Checklist. Put `repeat` on a synth sound's FX (T3) first. **The probe readings first** (hold SHIFT on the repeat
+  screen; photos of the page are ideal):
+  1. **Tape stopped**: `TAPE 0 STOP`, POS still. METRO counts down from the samples per beat (22050 at 120 BPM) and
+     reloads on every click; `OURS ... CLOCK METRO`, its BEAT advances with the clicks (metronome on, so you hear
+     them). Does BEAT 1 fall on the click you'd call 1?
+  2. **Play** (tape): `TAPE 2 PLAY`, POS rising ~44100 per second; `TAPE BAR / BEAT` agree with TE's tape counter
+     (bars of 4 beats from the tape's start); `OURS` the same bar and beat with `CLOCK TAPE`. **Record**: `TAPE 1`.
+     **FF / REW**: `TAPE 3`, OURS falls back to METRO. Report any other value.
+  3. **Tempo**: change the BPM (also tenths) while stopped and while playing: SPB / BPM follow, METRO rescales, the
+     bar count carries on.
+  4. **Varispeed** (tape speed): SPEED moves from 1.00 (HEX 08000000 expected at normal speed), POS rises at the new
+     rate.
+  5. **Stop with snap**: POS lands on a beat (TAPE BEAT n.00).
+  6. **Sequencer**: start a pattern / MIDI start: TICK resets to 0 and counts.
+  7. **The FX list** shows `repeat` after crush (13 FX); it loads on synth, drum and master; save and reload a sound
+     with it.
+  8. **Default** with the tape playing: a 16th stutter in the last beat of every 4th bar, back to dry on the
+     downbeat; the sword rises, the wheel steps one spoke per repeat, the playhead tick orbits once per bar.
+  9. **Tape stopped**: the same, on the metronome's bars.
+  10. Each knob through its range while it plays (readout top left): GRID 1/64 (a buzz) .. 1/2 (the grid wins: a
+      longer gate); FORTUNE: ALWAYS engages on the next 16th and releases at once; OFF never fires; CHANCE / VARY fills
+      scattered (books open for VARY); GATE up to 4 BARS (merges); PITCH steps in key, TAPE STOP powers down, SPIN UP
+      rises. Clicks, level jumps, hung repeats: report the setting.
+  11. **Master FX**: on the whole mix with the tape playing: fills on the tape's bars; `OFF NO KEY` at OFF.
+  12. **LFO** (T4, element, target FX) on each knob: the sound and the wheel follow; no readout from the LFO alone.
+  13. **pingpong after repeat** on the same sound (and back): no garbage, the echo starts clean.
+  14. `--svg-cost` on the repeat screen at rest and while it fires; FX off: dim gate, lots and sword down.
+- Result: _pending user flash_.
