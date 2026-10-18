@@ -1831,3 +1831,13 @@
      while TAPE STOP turns the wheel (~126 elements now).
   5. Quick repeat of REPEAT1's 7..13.
 - Result: _pending user flash_.
+
+## 2026-10-18 — Test image 90: REPEAT3.OP1 (REPEAT2 + the repeat screen as TE line art)
+- REPEAT2 (test 89) plus db6181f: the figures redrawn as 1.5 outlines in TE's style (notes/fx-beatrepeat.md round 4).
+  212 elements, about 120 drawn and 31k cells per frame; heaviest element 1331 cells (35 %).
+- `firmware/images/REPEAT3.OP1` = REPEAT2's command with `--name REPEAT3`, from db6181f in a clean `git archive`.
+  Loopcc scan and SVG checks clean; te-boot identical to stock; 32 factory drum presets (26 or fewer saved drum
+  sounds). sha256 a063f587ed3a4c7f8f765a3a9cf6b96dca3eb4373c28090591e2fae7836f7a86.
+- Retest: test 89's script, plus the outlined figures on the device (legibility on the OLED) and --svg-cost at rest,
+  firing and during TAPE STOP.
+- Result: _pending user flash_.
