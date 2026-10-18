@@ -141,6 +141,9 @@ def main():
             svg = ENGINE_SVGS[e["source"]]
             cmd += ["--add", f"content/display/{svg}={os.path.join(ROOT, 'design', 'synth', svg)}"]
     run(*cmd)
+    if fxs:     # TE's LFO targets the knob its screen shows on every FX (notes/fx-slot.md "LFO target flag")
+        run(sys.executable, os.path.join(ROOT, "src", "slot", "test", "fx_lfo_target_check.py"), image,
+            "--stock", a.stock, "--fx", fj)
 
     # The shareable bundle: apply.py and the two modules it uses, plus the patch (no TE firmware).
     dist = os.path.join(ROOT, "dist", f"overdub-{a.version}" + ("" if a.name == "OVERDUB" else f"-{a.name.lower()}"))

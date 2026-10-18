@@ -42,7 +42,7 @@ Built by `tools/build_slot.py` (code: `src/slot/slot.S`) and `tools/add_engine_d
 Every reader of the per-slot id array `0xFF8016E4` and every caller of the name lookup, factory and
 ScreenId was followed (decompiled). Beyond the four patched structures:
 - **Comparisons only** (`== 6` sampler, `== 8/9` drum, mailbox `==`): global_controller, synth_controller, patch.cpp:1018 validation, Core.cpp mailbox (L1 `FUN_ffa009a0`). Id 15 takes the ordinary path. Confirmed.
-- **Per-engine byte flags** (1 for ids 6, 8, 9, 12; read-only, plaintext): LFO modules at `0x018E142C`, `0x018E151C`, `0x018E1710`, `0x018E182C`, `0x018E19FC`, and `FUN_01a27eb4`'s `0x018F5ECC`. Each is 16 bytes; entry 15 already exists and is 0 (next table starts at +0x10). Confirmed. Setting it to 1 would give id 15 the sampler-like LFO knob scaling (meaning: Hypothesis).
+- **Per-engine byte flags** (1 for ids 6, 8, 9, 12; read-only, plaintext): LFO modules at `0x018E142C`, `0x018E151C`, `0x018E1710`, `0x018E182C`, `0x018E19FC`, and `FUN_01a27eb4`'s `0x018F5ECC`. Each is 16 bytes; entry 15 already exists and is 0 (next table starts at +0x10). Confirmed. Setting it to 1 gives id 15 8 LFO targets (selector detent d -> knob d, DSP `>>> 11`) instead of 4 (d / 2, `>>> 12`); the FX tables work the same way (fx-slot.md "LFO target flag", Verified 2026-10-18).
 - **Passed on** to the factory, ScreenId or the range functions (all patched): Core.cpp, patch.cpp:131 (`FUN_01a010f8` → `FUN_01a85db4` → `FUN_01967960` → factory), LfoRnd, synth_controller.
 - Unresolved:
   - a *drum* patch naming `va` would put 15 into the drum id array `0xFF801704`; it fails validation first (patch.cpp:1018, error 13), which asserts in drum context. Drum engines: notes/drum-engine.md.

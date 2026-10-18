@@ -240,15 +240,49 @@ Tags as above; **Verified** = read at the call site in the disassembly (`firmwar
   the LFO never writes.
   - Exception: the crush pyramid drew from `crush_state.k`, crush's smoothed copy of the params it got, so it already
     followed the LFO. But it also drew those stale values while crush wasn't running.
-- **Distortion (FX id 10) was also modulated on the wrong knob.**
-  - Each of the five LFO modules with an FX target reads an 8-byte per-FX flag table as `B[table + id]`:
-    `0x018E143C` (`0x019CA612`), `0x018E152C` (`0x019CB5AE`), `0x018E1720` (`0x019CD276`),
-    `0x018E183C` (`0x019CDF92`), `0x018E1A0C` (`0x019D0112`).
-  - Each table is followed by another (referenced at table + 10: `0x018E1446`, ...).
-  - Ids 8, 9 and 11 read 0, but **id 10 read 5**. So for distortion the LFO's knob was `lfo_params[0] >> 11`
-    (0..7, about twice the intended index) instead of `>> 12`: it moved another knob, or unused knobs 4..7.
-  - The sixth module (range read `0x019CF0E4`) modulates all 8 knobs and has no such table.
-  - The other three FX got the right knob. Their sound followed the LFO; only the screen didn't.
+- **Distortion (FX id 10)**: LFOFX1 said its LFO moved the wrong knob and "fixed" the DSP flag tables. That was wrong:
+  stock, distortion was right (in 8-target mode). See "LFO target flag" below; LFOFX1 broke it.
+
+### LFO target flag (corrected 2026-10-18; **Verified**, device 2026-10-18)
+- Device (LFOFX1 and later, value LFO on distortion as synth FX): targets blue, green, white, orange moved blue, blue,
+  green, green.
+- **The flag means "8 targets" and is read in two places that must agree.** Each is `B[table + FX id]`, an 8-byte
+  table per FX id followed by other data (id 10 reads 5, ids 8, 9, 11, 12 read 0). **Verified** in the disassembly:
+  - **UI**, the five LFO screens (`FUN_01968c10` and four like it, e.g. `0x0193E336`, `0x019E5174`, `0x01A2DB3E`,
+    `0x01A49782`). The target selector is a continuous LFO param, normalised `p = (v - min) / (max - min)` by the LFO
+    ReadInterface `FUN_01a293bc`, shown with 8 detents `d = round(7 * p)`.
+    - flag 0: knob colour = `d >> 1` (`0x01968CFA`: `CC = R0 == 0` -> `0x01968EF2`, then `R0 = (R0 + (R0 >> 31)) >>> 1`
+      at `0x01968F0C`), so blue, green, white and orange take two detents each;
+    - nonzero: knob = `d`, 8 targets.
+    - The flag is `FUN_01a27e98` (synth FX, id `[0xFF801734 + slot*4]`) or `FUN_01a27e70` (drum FX,
+      `[0xFF801754 + dslot*4]`), both `B[0x018F5EDC + id]`.
+  - **DSP**, the five LFO modules (tables `0x018E143C`, `0x018E152C`, `0x018E1720`, `0x018E183C`, `0x018E1A0C`):
+    knob = `v >>> 12` when the flag is 0, else `v >>> 11` (`CC = Rn == 0; IF CC Rk = R(v >>> 12)`, e.g. `0x019CA624`).
+    Then `FUN_01a1de68` on `0xFF801724 + 2*knob`.
+  - The selector's range R is about 0x3FFF (v at detent d is about `d * R / 7`). Both readings agree at every detent
+    when they get the same flag. Derived: the device report and TE's own FX agreeing fix R in 14336..16383. The LFO
+    range table `0x01DE5740` is filled at run time, not read.
+- **TE's values**: all eight TE FX (delay 0, grid 1, punch 2, phone 3, spring 4, filter 5, nitro 6, cwo 7) have 0 in
+  all six tables, so every TE FX is a 4-knob target. The engine tables are the same idea (`0x018E142C` .., UI
+  `0x018F5ECC`): 1 for sampler, drum, dbox and dsynth (ids 6, 8, 9, 12), 8 targets.
+- **What went wrong**:
+  - Stock with our ids: UI and DSP both read the overrun (distortion 5 and 5, the others 0 and 0). They agreed, so
+    every FX got the knob its screen showed. Distortion was in 8-target mode.
+  - LFOFX1 (11545ea) gave the five DSP tables zeroed copies but missed the UI table `0x018F5EDC`. For distortion, the
+    screen stayed at 8 targets (colour k at detent k) while the DSP used `>>> 12`, so knob = k / 2: the device report.
+  - ensemble, pingpong, crush and repeat read 0 in both and were right throughout.
+- **Fix** (build_slot.py `FX_FLAG_TABLES`): a sixth grown copy for the UI table, repointing `0x01A27E7A` and
+  `0x01A27EA2` (the P2.L/.H pairs of both getters). All six copies give our ids TE's FX value (`FX_LFO_REF` = delay:
+  0, 4 knobs).
+- **Check**: `src/slot/test/fx_lfo_target_check.py IMAGE` runs in build.py after every image build. Pure Python on
+  the images:
+  - TE's decode bytes are pinned (14 windows), and the built image differs from them only in the repointed
+    addresses;
+  - the six loads point at grown tables, and ours equal TE's;
+  - for every FX id, module, synth or drum, R in 14336..16383 and detent, the screen's knob = the LFO's knob, and
+    blue / green / white / orange write `0xFF801724 + 0/2/4/6`;
+  - the model reproduces the LFOFX1 report.
+  - REPEAT4.OP1 fails it (distortion: blue, blue, green, green); the fixed build passes.
 
 ### Fix (2026-10-16)
 - `src/slot/fxpub.h`: every FX publishes `struct fx_pub <source>_pub[2]` ([0] mono, [1] master).
@@ -272,7 +306,7 @@ Tags as above; **Verified** = read at the call site in the disassembly (`firmwar
   - While up, the pop-up shows the live value, i.e. what is heard.
   - pingpong's time readout is always shown and is the DSP's, so it moves with an LFO on blue.
 - build_slot.py `FX_FLAG_TABLES`: copies of the five tables with 0 for every id we add, and the five `.L/.H` pairs
-  repointed. Now the LFO targets knob `>> 12` for all our FX, as for TE's.
+  repointed. This missed the UI's table and broke distortion. Corrected 2026-10-18 ("LFO target flag" above).
 - Modulation range and smoothing are unchanged:
   - range: full (TE's row clamp, 0..32767);
   - steps: the LFO writes a new value once per 64-frame block;
