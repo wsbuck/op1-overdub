@@ -1872,3 +1872,39 @@
   7. **`--svg-cost`** (bottom right) at rest, firing at 1/64 (ticks64 drawn), and in TAPE STOP; it can touch the lap
      pips with a 2 / 4 BARS gate (development only).
 - Result: _pending user flash_.
+
+## 2026-10-18 — Test image 92: LFOFX2.OP1 (TE's LFO targets the knob its screen shows on every FX)
+- Device report (2026-10-18, value LFO on distortion as synth FX): targets blue, green, white, orange moved blue,
+  blue, green, green.
+- Cause (notes/fx-slot.md "LFO target flag"):
+  - TE's per-FX "8 targets" flag is read in two places: by the five LFO screens (selector detent d -> knob d, else
+    d / 2) and by the five LFO modules (target >>> 11, else >>> 12).
+  - LFOFX1 (test 81) grew only the five DSP tables and missed the UI's table `0x018F5EDC`. Distortion (id 10) still
+    read TE's overrun 5 there, so its screen offered 8 targets while the DSP decoded 4: knob = k / 2.
+  - Stock, distortion was right. ensemble, pingpong, crush and repeat read 0 in both places and were right throughout.
+- Fix: the UI table is grown and repointed as well (both getters, synth and drum FX). Our ids take TE's FX value in all
+  six tables: 0, as every TE FX (4 targets: blue, green, white and orange two detents each).
+- Check: `fx_lfo_target_check.py`, now run by build.py on every image. REPEAT4 fails it with exactly the device report;
+  this image passes. Also run: fx_lfo_check, fx_abi_check, repeat_check, repeat_key_check, repeat_screen_check,
+  loopcc_check (and the scan).
+- `firmware/images/LFOFX2.OP1` = REPEAT4's command with `--name LFOFX2` (engines incl. fmdrum and metal, `--svg-cost`),
+  all FX, from 7627048 in a clean `git archive`. Loopcc scan and SVG checks clean; te-boot identical to stock
+  (f6233b974bdb6c92); keep 26 or fewer saved drum sounds, as for REPEAT4.
+  sha256 ab69438b156d663187a327bcdd05baf8370b46f30cbcebc6392522d78e689255.
+- Checklist. Hold a note (or play the tape for repeat) and turn the LFO's target knob slowly. On our FX the colour
+  changes every two detents, as on TE's FX (e.g. delay; compare one TE FX first). For each target, check that the knob
+  that moves (on the FX screen and in the sound) is the one targeted.
+  - Value LFO (T4) on the synth sound's FX (T3):
+
+    | FX | blue | green | white | orange |
+    |---|---|---|---|---|
+    | ensemble | [ ] | [ ] | [ ] | [ ] |
+    | pingpong | [ ] | [ ] | [ ] | [ ] |
+    | distortion (was broken) | [ ] | [ ] | [ ] | [ ] |
+    | crush | [ ] | [ ] | [ ] | [ ] |
+    | repeat | [ ] | [ ] | [ ] | [ ] |
+
+  - The same table with the element LFO (target FX, medium rate, full amount): [ ] each cell.
+  - Drum sound's FX: distortion and one other FX, value LFO, all four targets: [ ].
+  - A TE FX (delay) still targets as before: [ ].
+- Result: _pending user flash_.
