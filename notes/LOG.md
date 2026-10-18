@@ -1841,3 +1841,34 @@
 - Retest: test 89's script, plus the outlined figures on the device (legibility on the OLED) and --svg-cost at rest,
   firing and during TAPE STOP.
 - Result: _pending user flash_.
+
+## 2026-10-18 — Test image 91: REPEAT4.OP1 (REPEAT3 + William Buck's repeat screen)
+- REPEAT3 (test 90) plus 426fdfb: the repeat screen is the user's design (`design/fx/repeat.svg` from
+  `gen_repeat.py`, published as `content/display/repeat.svg`; wheel.svg and gen_wheel.py removed). ui_repeat.h
+  follows the SVG's header contract (notes/fx-beatrepeat.md §3). 193 elements; heaviest `ticks64` ~2377 cells (62 %).
+  An old wheel.svg left on the device is not loaded (the code loads repeat.svg; marker `stripes_dim`).
+- `firmware/images/REPEAT4.OP1` = REPEAT2's command with `--name REPEAT4` (engines incl. fmdrum and metal,
+  `--svg-cost`), all FX, from 426fdfb in a clean `git archive`. Loopcc scan and SVG checks clean; te-boot identical to
+  stock (f6233b974bdb6c92); 32 factory drum presets (26 or fewer saved drum sounds).
+  sha256 462a986b53670bd84ec5bb6d57f43584dc05e808079bce1bda512757215218fd.
+- Host checks: repeat_screen_check (the C path for the design's 8 preview states vs the header's rules, 0.2-0.7 mean
+  pixel difference), repeat_check, repeat_key_check, fx_abi_check, fx_lfo_check, chord2_check, loopcc_check.
+- Retest (repeat on a synth sound's FX, T3; tape playing unless said):
+  1. **States as in the designer's previews:** idle (eye shut, wheel upright), firing (eye open, `pow` over the
+     crown, the blue slice wedge, the wheel stepping one slice per repeat), PITCH down / up (the snake swings down /
+     up the dial with the repeats), TAPE STOP and SPIN UP (the square / chevron marks, the wheel turning smoothly),
+     waiting (EVERY n off its bar: darkblue gate), FORTUNE OFF (darkblue gate, no stripes).
+  2. **Stripes per FORTUNE mode:** CHANCE 10..90 % = 1..9 green, ALWAYS all 10, VARY every other one, EVERY 2 / 4 / 8
+     climbing by 8 / n per bar and empty at the interval's start, EVERY BAR 8, OFF none.
+  3. **Gate burn-down:** while a fill plays the white segments vanish behind the playhead to the gate's end; 2 BARS /
+     4 BARS show 1 / 3 pips right of the bar line, counting down; CHANCE 30 %: after a lost roll the gate goes
+     darkblue until its line.
+  4. **Snake dial:** the orange dots show the knob (1 2 3 5 7 12 semitones; all 12 plus the mark at the extremes);
+     the snake grey when flat; it moves only while a fill plays and returns after.
+  5. **Readout and BAR text:** turn each knob: the value top left (e.g. `EVERY 4 BARS`), clear of the wheel; at a slow
+     tempo with 1/2, `GRID 1/4` with `1/2 TOO LONG` beside it; EVERY n: `BAR k/n` top right, clear of the `pow` marks.
+  6. **Green encoder:** hold its push on the repeat screen: the latch, the eye open and `pow` steady (no flashing),
+     the whole bar white; let go: dry, eye shut. Elsewhere it does what it did before.
+  7. **`--svg-cost`** (bottom right) at rest, firing at 1/64 (ticks64 drawn), and in TAPE STOP; it can touch the lap
+     pips with a 2 / 4 BARS gate (development only).
+- Result: _pending user flash_.
