@@ -86,6 +86,11 @@ SYNTH_SHIFTKEY_SLOT, TE_SYNTH_SHIFTKEY = 0x019119B0, 0x01A50904
 SYNTH_PRESS_SLOT, TE_SYNTH_PRESS = 0x019119A8, 0x01A51058
 SYNTH_RELEASE_SLOT, TE_SYNTH_RELEASE = 0x019119B8, 0x01A5056C
 SYNTH_KNOB_SLOT, TE_SYNTH_KNOB = 0x019119C0, 0x01A505BC
+# repeat's manual key (the green encoder's push; src/slot/repeat.h): the drum controller (vtable 0x0190FA64, built by
+# FUN_019777xx with id 1) and the mixer controller (0x01910AAC, MasterController ctor 0x019D97A2, id 3): press +0x14,
+# release +0x24, the same layout as the synth controller's
+REPEAT_KEY_SLOTS = ((0x0190FA78, 0x01978008, "_rk_drum_press_entry"), (0x0190FA88, 0x019773E4, "_rk_drum_release_entry"),
+                    (0x01910AC0, 0x019DB7C4, "_rk_master_press_entry"), (0x01910AD0, 0x019DB708, "_rk_master_release_entry"))
 FRAME_RENDER_CALL, TE_FRAME_RENDER = 0x019AB8B2, 0x019B2674
 # CHORD v2 STRUM (notes/chord2.md phase 2): the sequencer thread's loop FUN_01a4318c calls its step FUN_01a0d2c0 here
 SEQ_STEP_CALL, TE_SEQ_STEP = 0x01A431AA, 0x01A0D2C0
@@ -128,7 +133,10 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          # repeat.c's bar clock and ui.c's probe (notes/fx-beatrepeat.md "Sync"): transport, playhead (samples x 64),
          # metronome countdown (Q14), the keyboard's synth slot, the sequencer's 96-PPQN tick (the probe only)
          "_te_tape_state": 0xFF802960, "_te_tape_pos": 0xFF802974, "_te_metro_count": 0x01AADADC,
-         "_te_play_slot": 0xFF8016D4, "_te_ppqn_tick": 0x018C1884,
+         "_te_play_slot": 0xFF8016D4, "_te_ppqn_tick": 0x018C1884, "_te_blocks": 0x01AADAF4,
+         # repeat's manual key (src/slot/repeat.h): TE's drum and mixer controllers' press / release functions
+         "_te_drum_press": 0x01978008, "_te_drum_release": 0x019773E4,
+         "_te_master_press": 0x019DB7C4, "_te_master_release": 0x019DB708,
          # audio-input buffers (src/engine/inprobe.h, notes/input.md; as src/engine/build.sh)
          "_te_audio_in": 0xFF800CB4, "_te_rx_sel": 0xFF800364, "_te_rx": 0xFF800370, "_te_alt_in": 0x01AB2E2C,
          # drum side (notes/drum-engine.md, src/slot/drumprobe.h)
@@ -384,6 +392,8 @@ def main():
             for tag, v in (("mono", vmono), ("stereo", vstereo)):   # copied from vptr - 8; process (+0x14) is ours
                 g += [longs(v[:2]).rstrip("\n"), f"_fx{fid}_vt_{tag}:", longs(v[2:7]).rstrip("\n"),
                       f"    .long _fx{fid}_{tag}_entry    /* process */", longs(v[8:]).rstrip("\n")]
+        if any(f["source"] == "repeat" for f in fxs):
+            g += [f"    C_ENTRY {ours}, {ours[:-6]}" for _, _, ours in REPEAT_KEY_SLOTS]
         n_fx = len(fxs)
         g += ["    .global _fx_names", "_fx_names:", longs(fx_names_blob).rstrip("\n")]
         g += [f"    .long _fx_name{FX_ID + i}, {FX_ID + i}" for i in range(n_fx)]
@@ -504,6 +514,12 @@ def main():
     cmd += ["--pointer", f"0x{ITER_PAGE_UPDATE_SLOT:08x}=0x{ITER_PAGE_UPDATE:08x}:0x{sym['_ui_update']:08x}"]
     if fxs:
         cmd += ["--pointer", f"0x{FILTER_PAGE_UPDATE_SLOT:08x}=0x{FILTER_PAGE_UPDATE:08x}:0x{sym['_fx_ui_update']:08x}"]
+    if any(f["source"] == "repeat" for f in fxs):         # the manual key: every controller's press / release
+        for slot_addr, stock, ours in REPEAT_KEY_SLOTS:
+            cmd += ["--pointer", f"0x{slot_addr:08x}=0x{stock:08x}:0x{sym[ours]:08x}"]
+        if not a.chord:                                   # the synth's: CHORD v2's wrappers (TE's path with it off)
+            cmd += ["--pointer", f"0x{SYNTH_PRESS_SLOT:08x}=0x{TE_SYNTH_PRESS:08x}:0x{sym['_c2_press_entry']:08x}",
+                    "--pointer", f"0x{SYNTH_RELEASE_SLOT:08x}=0x{TE_SYNTH_RELEASE:08x}:0x{sym['_c2_release_entry']:08x}"]
     calls = []                                                    # (pc, stock target, our symbol)
     if a.hold:
         cmd += ["--pointer", f"0x{SYNTH_SHIFTKEY_SLOT:08x}=0x{TE_SYNTH_SHIFTKEY:08x}:0x{sym['_hold_shiftkey_entry']:08x}"]

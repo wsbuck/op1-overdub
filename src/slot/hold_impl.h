@@ -232,10 +232,21 @@ int hold_shiftkey(void *self, int key)
     return te_synth_shiftkey(self, key);
 }
 
+/* The repeat FX's manual key (repeat.c rep_key_event: the green encoder's push), weak: images and host tests without
+ * repeat.c leave it out (REP_KEY_WEAK is set by hold.c, the device build). */
+#ifdef REP_KEY_WEAK
+int rep_key_event(int ctl, int key, int down) __attribute__((weak));
+#define REP_KEY(c, k, d) (rep_key_event && rep_key_event(c, k, d))
+#else
+#define REP_KEY(c, k, d) 0
+#endif
+
 /* CHORD v2 hooks on the synth controller's press, release and encoder slots: with FEAT_CHORD2 off (or FEAT_CHORD),
  * each is TE's own function, called with the same arguments. */
 int c2_press(void *self, int key)
 {
+    if (REP_KEY(0, key, 1))                            /* the repeat FX's manual key (repeat.h), whatever the mask */
+        return 1;
     if (C2_ON() && c2_press_key(key))
         return 1;
     return te_synth_press(self, key);
@@ -243,6 +254,7 @@ int c2_press(void *self, int key)
 
 int c2_release(void *self, int key)
 {
+    (void)REP_KEY(0, key, 0);
     int r = te_synth_release(self, key);
     if (C2_ON())
         c2_release_key_ev(key);

@@ -252,6 +252,12 @@ int16_t pingpong_ram[3 * 65536];
 uint32_t fx_line_owner[2];
 volatile int32_t te_tempo_spb, te_tape_state, te_metro_count, te_play_slot, te_ppqn_tick;
 volatile uint32_t te_tape_pos;
+/* repeat.c's manual key: TE's block counter and the drum / mixer controllers' press and release (stand-ins) */
+volatile uint32_t te_blocks;
+int te_drum_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_drum_release(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_release(void *self, int key) { (void)self; (void)key; return 0; }
 uint8_t host_shift;
 int32_t host_tape_speed = 0x08000000;
 void repeat_mono(void *self, int16_t *buf, const int16_t *p);

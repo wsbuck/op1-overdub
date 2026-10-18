@@ -144,8 +144,10 @@ def main():
     n1, _ = c_render(cdir, "ro_turn", D, 40, REP_TURN="30:2:10240")
     n2, _ = c_render(cdir, "ro_gone", D, 90, REP_TURN="30:2:10240")
     n3, _ = c_render(cdir, "ro_lfo", D, 40, FX_LIVE="30000,0,26000,5000")
-    check(n0 == 0 and n1 > 0 and n2 == 0 and n3 == 0, f"readout: none without a turn ({n0} line segments), drawn 10 "
-          f"frames after a stored-knob turn ({n1}), gone 60 frames later ({n2}), none from TE's LFO alone ({n3})")
+    n4, _ = c_render(cdir, "ro_lfo_base", (30000, 0, 26000, 5000), 40)
+    n5, _ = c_render(cdir, "ro_none90", D, 90)
+    check(n1 > n0 and n2 == n5 and n3 == n4, f"readout: drawn 10 frames after a stored-knob turn ({n1} line segments, "
+          f"{n0} without: BAR k/n), gone 60 frames later ({n2}), none from TE's LFO alone ({n3} = {n4} as stored)")
     w0, w1 = first_roll([12288, 11264, 9216, 16384], False)
     f_lost = math.ceil(w0 * 30) + 1
     _, a = c_render(cdir, "lost_on", [12288, 11264, 9216, 16384], f_lost)

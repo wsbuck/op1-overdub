@@ -171,7 +171,20 @@ static char *wh_frac2(char *p, uint32_t v100)       /* v / 100 with two decimals
     return p;
 }
 
-static void wh_probe(void *r, const struct rep *st, int running)
+/* "BAR k/n": where the clock's bar stands in the EVERY n interval (n / n: the bar whose last beat fills); 0 otherwise */
+static char *wh_bar_in(char *p, const int16_t *k, const struct rep *st)
+{
+    int pf = rep_pos(knob_pos(k[1]));
+    if (!st || rep_fmode_at[pf] != RF_EVERY)
+        return 0;
+    uint32_t n = rep_fa_at[pf];
+    p = put_str(p, "BAR ");
+    p = put_dec(p, (st->bar & (n - 1)) + 1);
+    *p++ = '/';
+    return put_dec(p, n);
+}
+
+static void wh_probe(void *r, const int16_t *k, const struct rep *st, int running)
 {
     char buf[48], *p;
     fp32 x = FP(8), step = FP(3) >> 1, dy = FP(13);
@@ -238,7 +251,8 @@ static void wh_probe(void *r, const struct rep *st, int running)
         uint32_t b4 = st->bar8 >> 2;
         uint32_t bt = b4 ? udiv(st->ph8, b4) : 0;
         p = put_dec(p, (bt > 3 ? 3 : bt) + 1);
-        p = put_str(p, st->lock == RL_TAPE ? "  CLOCK TAPE" : st->lock == RL_METRO ? "  CLOCK METRO" : "  CLOCK -");
+        p = put_str(p, st->lock == RL_TAPE ? "  CLOCK TAPE" : st->lock == RL_METRO ?
+                    (st->metro_run ? "  CLOCK METRO" : "  CLOCK FREE") : "  CLOCK -");
         if (!running)
             p = put_str(p, " IDLE");
     } else
@@ -253,7 +267,26 @@ static void wh_probe(void *r, const struct rep *st, int running)
         p = put_dec(p, st->lost);
         p = put_str(p, st->active ? (st->hold ? " LATCH" : " GATE") : " DRY");
         p = put_str(p, " REP ");
-        put_dec(p, (uint32_t)(st->rep < 0 ? 0 : st->rep));
+        p = put_dec(p, (uint32_t)(st->rep < 0 ? 0 : st->rep));
+        char *q = wh_bar_in(put_str(p, "  "), k, st);
+        if (!q)
+            *p = 0;
+        y += dy;
+        text_fast(r, buf, x, y, step, GREEN);
+    }
+    /* 8: the encoder pushes that reached a controller (any screen), the last code and controller, green taken / held */
+    if (&rep_key) {
+        p = put_str(buf, "KEYS P ");
+        p = put_dec(p, rep_key.presses);
+        p = put_str(p, " R ");
+        p = put_dec(p, rep_key.releases);
+        p = put_str(p, " LAST ");
+        p = put_hex(p, rep_key.last, 2);
+        p = put_str(p, rep_key.last_ctl == RK_MASTER ? " M" : rep_key.last_ctl == RK_DRUM ? " D" : " S");
+        p = put_str(p, " TAKEN ");
+        p = put_dec(p, rep_key.taken);
+        if (rep_key.held[0] | rep_key.held[1] | rep_key.held[2])
+            put_str(p, " HELD");
         y += dy;
         text_fast(r, buf, x, y, step, GREEN);
     }
@@ -272,6 +305,9 @@ static void draw_repeat_lines(void *r, const int16_t *k, const struct rep *st, i
     if (st && rep_fmode_at[rep_pos(knob_pos(k[1]))] != RF_OFF)   /* the roll: playing or waiting */
         text(r, st->active ? (st->hold ? "LATCHED" : "FIRING") : "WAITING", FP(200), FP(30), FP(3) >> 1,
              st->active ? GREEN : DARKGREEN);
+    char bb[12];
+    if (wh_bar_in(bb, k, st))
+        text_fast(r, bb, FP(200), FP(50), FP(3) >> 1, WHITE);
     fp32 x0 = FP(16), x1 = FP(304), yb = FP(120);
     line_fast(r, x0, yb, x1, yb, DARKBLUE);
     int g = rep_eff_gate(st ? st->blue : rep_grid_at[rep_pos(knob_pos(k[0]))], rep_gate_at[rep_pos(knob_pos(k[2]))]);
@@ -284,7 +320,8 @@ static void draw_repeat_lines(void *r, const int16_t *k, const struct rep *st, i
     }
 }
 
-static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int running, int stereo, int ctx, int nokey)
+static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int running, int stereo, int ctx, int nokey,
+                       int mode)
 {
     const struct rep *st = repeat_state ? &repeat_state[stereo] : 0;
     uint32_t f = ++wh.frame;
@@ -303,8 +340,12 @@ static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int run
             wh.until = f + WH_SHOW;
         }
     }
+    if (&rep_key) {                                                 /* the manual key's heartbeat (repeat.h) */
+        rep_key.screen_ctl = (uint8_t)(mode == 3 ? RK_MASTER : mode == 1 ? RK_DRUM : RK_SYNTH);
+        rep_key.screen_seen = &te_blocks ? te_blocks : 0;
+    }
     if (WH_SHIFT) {
-        wh_probe(r, st, running);
+        wh_probe(r, k, st, running);
         return;
     }
     if (!wheel_ready()) {
@@ -341,7 +382,8 @@ static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int run
     set_rotation(wh_node[W_WHEEL], st ? st->turn : 0, WH_X, WH_Y);
 
     /* white: the gate on the bar clock (its sixteenths ending at 12), the grid-wins stretch, the laps; the playhead */
-    int gate = rep_gate_at[pt], ge = rep_eff_gate(blue, gate), nogate = latch || bypass || fm == RF_OFF;
+    int manual = active && st->key;
+    int gate = rep_gate_at[pt], ge = rep_eff_gate(blue, gate), nogate = latch || manual || bypass || fm == RF_OFF;
     for (int i = 1; i <= 16; i++) {
         show(wh_gate[i - 1], !nogate && i > 16 - gate);
         show(wh_gatex[i - 1], !nogate && 16 - ge < i && i <= 16 - gate);
@@ -376,7 +418,7 @@ static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int run
                      WH_SWORD_X, WH_SWORD_Y);
     else
         set_rotation(wh_node[W_SWUP], 0, WH_SWORD_X, WH_SWORD_Y);
-    show(wh_node[W_HUBMAN], 0);                                     /* the manual key (SPLIT): phase 2 */
+    show(wh_node[W_HUBMAN], manual);                                /* the manual key (green's push) held */
 
     /* orange: the snake carried down / Anubis climbing with the current repeat's depth; the setting's dots */
     int s = rep_pitch_at[pp];
@@ -408,6 +450,11 @@ static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int run
     int ro = f < wh.until && wh.shown >= 0;
     show(wh_node[W_ANGEL], !ro);
     svg_render(wheel_doc.doc);
+    if (!bypass) {                                                  /* white: the bar within the EVERY n interval */
+        char bb[12];
+        if (wh_bar_in(bb, k, st))
+            text_fast(r, bb, FP(62), FP(127), FP(1), WHITE);
+    }
     if (ro) {
         static const int colours[4] = { BLUE, GREEN, WHITE, ORANGE };
         char buf[24];

@@ -44,6 +44,7 @@ int hold_shiftkey(void *self, int key);
 int c2_press(void *self, int key);
 int c2_release(void *self, int key);
 int c2_knob(void *self, int knob, int16_t *delta);
+#define REP_KEY_WEAK                        /* the repeat FX's manual key (repeat.c), when it is linked in */
 void c2_gui_tick(void);
 void c2_seq_tick(void);
 

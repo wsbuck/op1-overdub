@@ -17,6 +17,12 @@
 
 volatile int32_t te_tempo_spb, te_tape_state, te_metro_count, te_play_slot;
 volatile uint32_t te_tape_pos;
+/* repeat.c's manual key: TE's block counter and the drum / mixer controllers' press and release (stand-ins) */
+volatile uint32_t te_blocks;
+int te_drum_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_drum_release(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_release(void *self, int key) { (void)self; (void)key; return 0; }
 void repeat_mono(void *self, int16_t *buf, const int16_t *p);
 void repeat_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
 void pingpong_mono(void *self, int16_t *buf, const int16_t *p);

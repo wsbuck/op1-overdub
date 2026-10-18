@@ -6,7 +6,8 @@ A case is a Case: per 64-frame block the FX ("r" repeat, "p" pingpong), the mode
 four params and TE's words (tempo, transport, playhead, metronome countdown, slot), and the input frames (N x 2).
 Tape() models TE's transport and metronome for the words: the playhead (samples x 64) advances 64 samples a block
 while it rolls; the metronome counts down 64 samples a block and reloads with the samples per beat, keeping the
-residue (its click), and clicks at once on the first block of play (notes/fx-beatrepeat.md "Sync").
+residue (its click), and clicks at once on the first block of play (notes/fx-beatrepeat.md "Sync"); with follow=True
+(TE's tape-follow flag) it holds while the tape is stopped (REPEAT1's device result).
 """
 import os
 import shutil
@@ -31,13 +32,15 @@ def raw(p):
 
 
 class Tape:
-    def __init__(self, bpm=120.0, pos=0, rolling=True, state=None):
+    def __init__(self, bpm=120.0, pos=0, rolling=True, state=None, follow=False):
         self.spb = spb_of(bpm)
         self.pos = int(pos) * 64                 # Q6
         self.rolling = rolling
         self.state = state if state is not None else (2 if rolling else 0)
         self.c = 0 if rolling else self.spb // 3  # metronome countdown, Q14
         self.slot = 0
+        self.follow = follow                     # TE's tape-follow metronome (0x01AADAD0): the countdown advances by
+        #                                          the tape's advance, so it holds while the tape is stopped
 
     def set_bpm(self, bpm):
         new = spb_of(bpm)
@@ -57,6 +60,8 @@ class Tape:
         w = (self.spb, self.state, self.pos & 0xFFFFFFFF, self.c, self.slot)
         if self.rolling:
             self.pos += 64 * 64
+        if not self.rolling and self.follow:
+            return w
         self.c -= 64 << 14
         while self.c <= 0:
             self.c += self.spb

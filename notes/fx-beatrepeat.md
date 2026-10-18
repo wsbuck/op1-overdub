@@ -519,3 +519,45 @@ The figures redrawn first (§3 "Figures"); the review on that, all must / should
   default (one fill every 4 bars) 1.6 k / 2.2 k mean, 12.8 k / 16.7 k peak; 1/64 latched at -12 7.3 k / 11.0 k (peak
   15.5 k stereo); VARY 6.6 k / 10.1 k (15.2 k); TAPE STOP 9.2 k / 13.4 k (14.0 k); SPIN UP 7.9 k / 11.9 k (16.4 k).
   Pingpong: 16.2 k / 16.9 k stereo. The design's 4-8 k was optimistic.
+
+## 8. REPEAT1 on the device, and REPEAT2 (2026-10-18)
+REPEAT1 (LOG 88): repeat in the FX list; the probe shows the right clock (TAPE while rolling, METRO stopped); BPM and
+bar count follow tempo changes; the wheel follows the repeats and the LFO. Two bugs:
+- **With the tape stopped no fill ever fired.** Cause (Verified in TE's metronome `FUN_019de548`, `0x019DE614..2E`):
+  with the transport stopped the countdown `0x01AADADC` is advanced by `[0xFF802970] >> 21` (the tape's own advance)
+  instead of 64 samples when the tape-follow byte `0x01AADAD0` is set, so it holds still. Our clock snapped onto the
+  countdown every block, so it stood still too: no gate start was ever crossed. The simulator's metronome always
+  counted down. **Fix:** the countdown counts only while it runs (one block less than the last, or that plus a
+  reload); otherwise our count runs free at the tempo, continuing the tape's bar count (`CLOCK FREE` on the probe). The
+  first click is beat 1 only at boot, and the clock's jump there is not a late trigger. repeatsim.Tape models the held
+  countdown (`follow=True`); `metro_held` failed on REPEAT1's code (no fills) and passes now.
+- **"The fill lands one bar early".** Not reproduced: EVERY 2 / EVERY 4 from tape position 0, after a stop with a held
+  metronome, end on the bar lines after bars 2, 4, 6 / 4, 8 (the interval's last bar's beat 4), and from a start at
+  2.5 bars on tape bar lines 4 and 8 (relative to tape bar 1, as intended); these checks pass on REPEAT1's code too.
+  TE's own playhead getter (`FUN_01a29f58`) also reads the word as samples x 64. Likely: play started from a tape
+  position other than 0 (the tape stays where it stopped), so bar 1 after play was the interval's last bar. **Now
+  shown:** `BAR k/n` (white, under the wheel's left, and on the probe and the line screen): the bar within the EVERY n
+  interval, n/n = the bar whose last beat fills.
+
+### The manual key: the green encoder's push (REPEAT2)
+- Static: encoder pushes would be key events 0x3B..0x3E (GPIO bits 8..11, chord2.md §6; **whether the hardware has
+  push switches is unproven**). TE's KeyHandler `FUN_019b6c74` sends a press without SHIFT to the current controller's
+  +0x14 slot and releases to +0x24. Controllers (base ctor `FUN_01a16eec(this, id)`): synth id 0 vtable `0x01911994`,
+  drum id 1 `0x0190FA64`, mixer id 3 `0x01910AAC` (MasterController, ctor `0x019D97A2`); the same slot layout. Their
+  press functions leave these codes unhandled: synth returns 0 for >= 0x3A, drum's is-note test fails (notes end at
+  0x35), mixer's returns 0 above 0x2F. So today a push does nothing on these screens (Verified statically).
+- Hooks (build_slot.py, with the repeat FX, checked against stock): drum `0x0190FA78` / `0x0190FA88` and mixer
+  `0x01910AC0` / `0x01910AD0` -> `rk_*` (repeat.c); synth: CHORD v2's c2_press / c2_release (installed by `--chord`, or
+  by this FX without it) call `rep_key_event` first (weak: absent without repeat.c).
+- `rep_key_event`: counts every 0x3B..0x3E press / release, the last code and controller; takes green (0x3C,
+  Hypothesis: GPIO order blue, green, white, orange) only while the repeat screen of that controller's context was
+  drawn within the last 100 blocks (TE's block counter `0x01AADAF4`); everything else goes to TE's function with the
+  same arguments. If the code or the hook is wrong, the press just does nothing (and the probe's KEYS line says what
+  arrived).
+- DSP: held = the latch (ALWAYS's path), at the next line of blue's grid (or at once within 30 ms after one), the slice
+  that ended there, the pitch total after a bar; released or the screen gone for 100 blocks: dry within a crossfade.
+  It overrides FORTUNE. Screen: the hub lights green, the gate ring dims.
+- Checks: `repeat_key_check.py` (simulator: the entries keep every register and pass 4 x 70 keys through with the same
+  this, key and return value; green taken only on its own context's fresh screen; release clears and still reaches
+  TE; stale screen; counters; the DSP's latch on blue's line, dry on release and on a stale screen); chord2_check (the
+  synth wrappers' pass-through, rep_key_event allowed as the one weak symbol).

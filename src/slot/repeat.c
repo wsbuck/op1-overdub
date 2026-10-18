@@ -54,6 +54,66 @@ extern volatile int32_t te_play_slot;       /* 0xFF8016D4 the synth slot the key
 
 struct rep repeat_state[2] RAM = { { .vpos = 0 }, { .vpos = 0 } };
 struct fx_pub repeat_pub[2] RAM = { { { 0 }, 0 }, { { 0 }, 0 } };
+volatile struct rep_key rep_key RAM = { .presses = 0 };
+
+/* The manual key (repeat.h): from the KeyHandler thread, on the controllers' press / release slots. Returns 1 when the
+ * press is taken (TE's function is then not called). */
+int rep_key_event(int ctl, int key, int down)
+{
+    if (key < 0x3B || key > 0x3E || ctl < 0 || ctl > 2)
+        return 0;
+    if (down)
+        rep_key.presses++;
+    else
+        rep_key.releases++;
+    rep_key.last = (uint8_t)key;
+    rep_key.last_ctl = (uint8_t)ctl;
+    if (key != REP_KEY_GREEN)
+        return 0;
+    if (!down) {
+        rep_key.held[ctl] = 0;
+        return 0;
+    }
+    if (rep_key.screen_ctl != ctl || te_blocks - rep_key.screen_seen > REP_KEY_STALE)
+        return 0;                                       /* not on the repeat screen of this context: TE's */
+    rep_key.held[ctl] = 1;
+    rep_key.taken++;
+    return 1;
+}
+
+/* The drum and mixer controllers' press / release slots (build_slot.py installs them with this FX: drum vtable
+ * 0x0190FA64, mixer 0x01910AAC, +0x14 / +0x24, checked against stock); the synth's are CHORD v2's c2_press /
+ * c2_release (hold.c), which call rep_key_event too. */
+extern int te_drum_press(void *self, int key);      /* FUN_01978008 */
+extern int te_drum_release(void *self, int key);    /* FUN_019773e4 */
+extern int te_master_press(void *self, int key);    /* FUN_019db7c4 */
+extern int te_master_release(void *self, int key);  /* FUN_019db708 */
+int rk_drum_press(void *self, int key);
+int rk_drum_release(void *self, int key);
+int rk_master_press(void *self, int key);
+int rk_master_release(void *self, int key);
+
+int rk_drum_press(void *self, int key)
+{
+    return rep_key_event(RK_DRUM, key, 1) ? 1 : te_drum_press(self, key);
+}
+
+int rk_drum_release(void *self, int key)
+{
+    rep_key_event(RK_DRUM, key, 0);
+    return te_drum_release(self, key);
+}
+
+int rk_master_press(void *self, int key)
+{
+    return rep_key_event(RK_MASTER, key, 1) ? 1 : te_master_press(self, key);
+}
+
+int rk_master_release(void *self, int key)
+{
+    rep_key_event(RK_MASTER, key, 0);
+    return te_master_release(self, key);
+}
 
 static inline int32_t knob(int16_t k)
 {
@@ -142,6 +202,7 @@ static void clock(struct rep *s, int32_t spb)
 {
     uint32_t bar8 = ((uint32_t)spb + 8) >> 4, v;
     int32_t st = te_tape_state;
+    s->jumped = 0;
     uint32_t pos = te_tape_pos;
     if ((st == 1 || st == 2) && pos < 1u << 30) {
         v = pos << 2;                                   /* the tape's bars */
@@ -150,17 +211,25 @@ static void clock(struct rep *s, int32_t spb)
     } else {
         v = s->vnext;                                   /* our own count, on from the last block (or the tape) */
         int32_t c = te_metro_count;
-        uint32_t beat8 = ((uint32_t)spb + 32) >> 6;
-        if (c >= 0 && c <= spb + (spb >> 4)) {          /* a valid countdown: the next click is a beat line */
+        uint32_t beat8 = ((uint32_t)spb + 32) >> 6, d = (uint32_t)c - ((uint32_t)s->last_c - (BLOCK << 14));
+        /* the countdown is the beat only while it runs: one block less than the last, or that plus a reload (a
+         * click). With the tape stopped TE's metronome may hold it (tape-follow, 0x01AADAD0: it advances by the
+         * tape's own advance): then our count runs free at the tempo (REPEAT1: no fill ever fired) */
+        int run = c >= 0 && c <= spb + (spb >> 4) && s->last_ok                     /* d: c less the expected */
+                  && (d + (1u << 14) < 2u << 14 || d - (uint32_t)spb + (1u << 14) < 2u << 14);
+        if (run) {
             uint32_t m, c8 = (uint32_t)c >> 6;
-            if (!s->clocked)                            /* no clock before (boot): the next click is beat 1 */
+            if (!s->clocked) {                          /* no clock before (boot): the next click is beat 1 */
                 v = bar8 - c8;
+                s->jumped = 1;                          /* (a line it skips is not a late trigger) */
+            }
             else {
                 udivmod(v + c8, beat8, &m);
                 v += m < beat8 >> 1 && m <= v ? -m : beat8 - m;
             }
             s->clocked = 1;
         }
+        s->metro_run = (uint8_t)run;
         if (v >= 0xF0000000u) {                         /* stopped for minutes: whole 8-bar groups off */
             uint32_t r;
             udivmod(v, bar8 << 3, &r);
@@ -168,6 +237,8 @@ static void clock(struct rep *s, int32_t spb)
         }
         s->lock = RL_METRO;
     }
+    s->last_c = te_metro_count;                         /* (also while the tape rolls: a stop then continues it) */
+    s->last_ok = s->last_c >= 0 && s->last_c <= spb + (spb >> 4);
     uint32_t ph;
     s->bar = udivmod(v, bar8, &ph);
     s->vpos = v;
@@ -549,9 +620,15 @@ static inline __attribute__((always_inline)) void run(struct rep *s, int set, in
 
     int i0 = -1, ih = -1;
     uint32_t d0 = 0, eh = 0;
-    if (b.fm == RF_ALWAYS) {
-        if (!s->active || !s->hold) {                   /* the latch: at the next 1/16 line, or now just after one */
-            uint32_t six = s->bar8 >> 4, e;
+    /* the manual key: green held on this context's repeat screen (repeat.h rep_key), the screen still drawn */
+    int ctl = stereo ? RK_MASTER : rep_key.screen_ctl > RK_DRUM ? RK_SYNTH : rep_key.screen_ctl;
+    int key = rep_key.held[ctl] && rep_key.screen_ctl == ctl && (stereo || ctl != RK_MASTER)
+          && te_blocks - rep_key.screen_seen <= REP_KEY_STALE;
+    s->key = (uint8_t)key;
+    if (b.fm == RF_ALWAYS || key) {
+        if (!s->active || !s->hold) {                   /* the latch: at the next 1/16 line (the key: blue's grid line),
+                                                         * or now just after one */
+            uint32_t six = key && b.fm != RF_ALWAYS ? b.len8 : s->bar8 >> 4, e;
             udivmod(s->ph8, six, &e);
             if (e <= REP_HOLD_LAG << 8 && !s->armed) {
                 ih = 0;
@@ -592,7 +669,7 @@ static inline __attribute__((always_inline)) void run(struct rep *s, int set, in
             q -= per;
             L++;
         }
-        if (q < CATCH8 && !(L == s->line && s->since < 4)) {
+        if (q < CATCH8 && !(L == s->line && s->since < 4) && !s->jumped) {
             i0 = 0;                                     /* passed in the last 128 samples (varispeed, a locate) */
             line = L;
         } else {

@@ -109,9 +109,14 @@ struct rep {
     int32_t spb;                            /* the tempo in use (pingpong.h pp_tempo), Q14 samples per beat */
     uint8_t lock;                           /* RL_*: tape playhead or metronome */
     uint8_t clocked;                        /* the clock has had the tape or a click (else the next click is beat 1) */
+    uint8_t jumped;                         /* this block's clock jumped (the first click): no late trigger */
+    uint8_t metro_run;                      /* stopped: the metronome's countdown runs (else our count runs free) */
+    uint8_t last_ok;                        /* last_c was in range */
+    int32_t last_c;                         /* the countdown at the last block */
     /* ---- the repeats ---- */
     uint8_t active;                         /* a gate (or the latch) is playing */
-    uint8_t hold;                           /* it is the latch (ALWAYS): no gate */
+    uint8_t hold;                           /* it is the latch (ALWAYS, or the manual key): no gate */
+    uint8_t key;                            /* the manual key holds it (the screen's lit hub) */
     uint8_t kind;                           /* RR_* of the current slice */
     uint8_t grid;                           /* the grid played (VARY's pick; after the fold) */
     uint8_t blue;                           /* blue's grid (after the fold) */
@@ -159,5 +164,27 @@ struct rep {
 };
 
 extern struct rep repeat_state[2];          /* [0] mono (synth / drum FX), [1] stereo (master FX) */
+
+/* The manual key (REPEAT2): the green encoder's push. TE's KeyHandler (FUN_019b6c74) sends a press without SHIFT to the
+ * current controller's +0x14 slot and every release to +0x24; encoder pushes would be key events 0x3B..0x3E (GPIO bits
+ * 8..11; whether the hardware has push switches is unproven), which TE's synth, drum and mixer controllers leave
+ * unhandled (they return 0). Our wrappers on those slots (synth: CHORD v2's c2_press / c2_release; drum and mixer:
+ * repeat.c rk_*) call rep_key_event first: it counts every encoder key, and takes green's press only while the repeat
+ * screen of that controller's context was drawn within the last REP_KEY_STALE blocks; everything else goes on to TE's
+ * function with the same arguments. The DSP holds the latch while the key is held and the screen still shows. */
+enum { RK_SYNTH, RK_DRUM, RK_MASTER };
+#define REP_KEY_GREEN 0x3C                  /* blue 0x3B, green 0x3C, white 0x3D, orange 0x3E (Hypothesis: GPIO order) */
+#define REP_KEY_STALE 100                   /* blocks (~145 ms, ~4 frames) without the screen: the key lets go */
+struct rep_key {
+    uint32_t presses, releases;             /* encoder key events 0x3B..0x3E seen (any context) */
+    uint32_t taken;                         /* green presses taken as the manual key */
+    uint32_t screen_seen;                   /* TE's block counter when the repeat screen was last drawn */
+    uint8_t last, last_ctl;                 /* the last encoder key and its controller (RK_*) */
+    uint8_t screen_ctl;                     /* the controller of the context the repeat screen showed */
+    uint8_t held[3];                        /* green held, per controller */
+};
+extern volatile struct rep_key rep_key;
+extern volatile uint32_t te_blocks;         /* 0x01AADAF4: TE's audio block counter (+1 per callback) */
+int rep_key_event(int ctl, int key, int down);
 
 #endif

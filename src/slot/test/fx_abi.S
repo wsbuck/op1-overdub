@@ -2,7 +2,8 @@
  * int fx_abi_call(void (*entry)(), void *this, void *a1, void *a2, void *a3)
  * Loads sentinels into every register a TE caller may rely on (R4-R7, P3-P5, FP, SP, LC0/LT0/LB0,
  * LC1/LT1/LB1, L0-L3), calls `entry` with R0 = this, R1 = a1, R2 = a2 and a3 at [SP + 12] (the stereo FX
- * call's 4th argument, as at 0xFFA017E6), and returns a bitmask of the registers that changed. The loop
+ * call's 4th argument, as at 0xFFA017E6), and returns a bitmask of the registers that changed (the entry's own R0 is
+ * left in fx_abi_ret). The loop
  * registers point at _never, so armed counters can't fire. Assembled with --defsym NO_FX=1, only fx_abi_call
  * (drumprobe_check.py uses it for the drum probe's entries). */
     .include "entry.inc"
@@ -70,6 +71,8 @@ _fx_abi_call:
     P5.H = 0x5555; P5.L = 0x5555;
     CALL (P2);
     SP += 16;
+    P1.H = _fx_abi_ret; P1.L = _fx_abi_ret;
+    [P1] = R0;                              /* the entry's return value (fx_abi_ret) */
     R0 = 0;
     CHECK R4, 0x4444, 0x4444, 0
     CHECK R5, 0x5555, 0x5555, 1
@@ -110,6 +113,9 @@ _never:
 
     .data
     .align 4
+    .global _fx_abi_ret
+_fx_abi_ret:
+    .long 0
 _saved_sp:
     .long 0
 _args:

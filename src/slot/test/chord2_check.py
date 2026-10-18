@@ -25,7 +25,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SLOT = os.path.dirname(HERE)
 ALLOWED = {"_feature_mask", "_te_make_note", "_te_note_on", "_te_note_off", "_te_synth_shiftkey", "_te_synth_press",
            "_te_synth_release", "_te_synth_knob", "_te_yaffs_open", "_te_yaffs_read", "_te_yaffs_write",
-           "_te_yaffs_close", "_te_yaffs_mkdir", "_te_tempo_spb"}
+           "_te_yaffs_close", "_te_yaffs_mkdir", "_te_tempo_spb",
+           "_rep_key_event"}                      # weak: the repeat FX's manual key (repeat.c), 0 when not linked
 
 
 VOICE_CALLS = {

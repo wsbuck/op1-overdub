@@ -95,6 +95,8 @@ extern struct ens ensemble_state[2] __attribute__((weak));
 extern struct pp pingpong_state[2] __attribute__((weak));
 extern struct crush crush_state[2] __attribute__((weak));   /* crush.c: gain reduction and smoothed knobs */
 extern struct rep repeat_state[2] __attribute__((weak));    /* repeat.c: the bar clock and the repeats (repeat.h) */
+extern volatile struct rep_key rep_key __attribute__((weak));      /* repeat.c: the manual key */
+extern volatile uint32_t te_blocks __attribute__((weak));           /* 0x01AADAF4 */
 /* The knobs each FX used last (fxpub.h): after TE's LFO, which the stored knobs never show */
 extern struct fx_pub ensemble_pub[2] __attribute__((weak)), pingpong_pub[2] __attribute__((weak)),
     distortion_pub[2] __attribute__((weak)), crush_pub[2] __attribute__((weak)), repeat_pub[2] __attribute__((weak));
@@ -2546,7 +2548,7 @@ void fx_ui_draw(int id, int mode, int slot)
             draw_crush(r, k, mode == 3);
     }
     else if (kind == FX_REPEAT)
-        draw_wheel(r, k, stored, k != stored, mode == 3, mode << 4 | slot, mode != 0);
+        draw_wheel(r, k, stored, k != stored, mode == 3, mode << 4 | slot, 0, mode);   /* the key in every context */
 }
 
 /* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the

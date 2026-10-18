@@ -145,6 +145,29 @@ def main():
     c.run_tape(k_long, t, int(3.0 * B / 64))
     cases["stop_midgate"] = c
 
+    # REPEAT1 on the device: with the tape stopped and TE's metronome in tape-follow mode the countdown holds, and no
+    # fill ever fired. From boot, and after the tape played and stopped (bars continue the tape's count)
+    t = Tape(bpm, rolling=False, follow=True)
+    cases["metro_held"] = stereo_case(code(int(4.5 * B)), k_fill, t, int(4.2 * B / 64))
+    t = Tape(bpm, follow=True)
+    c = Case(code(int(5 * B)), "s")
+    c.run_tape([raw(12), raw(7), raw(9), FLAT], t, int(1.5 * B / 64))      # EVERY 2 BARS
+    t.stop()
+    c.run_tape([raw(12), raw(7), raw(9), FLAT], t, int(3.2 * B / 64))
+    cases["metro_held_after_tape"] = c
+    # the interval's phase (REPEAT1 report: "the fill lands one bar early"): EVERY n from tape bar 1 (position 0), after
+    # a stop with a held metronome, and from a non-zero start (relative to tape bar 1, not to where play started)
+    for n, kf in ((2, raw(7)), (4, raw(5))):
+        t = Tape(bpm, rolling=False, follow=True)
+        c = Case(code(int(10 * B)), "s")
+        c.run_tape([raw(12), kf, raw(9), FLAT], t, int(0.7 * B / 64))        # stopped first, as on the device
+        t.play(0)
+        c.run_tape([raw(12), kf, raw(9), FLAT], t, int(9 * B / 64))
+        cases[f"phase_every{n}"] = c
+        notes[f"phase_every{n}"] = int(0.7 * B / 64) * 64
+    t = Tape(bpm, pos=int(2.5 * B))
+    cases["phase_offset"] = stereo_case(code(int(6 * B)), [raw(12), raw(5), raw(9), FLAT], t, int(5.8 * B / 64))
+
     # ---- 3. CHANCE seeded by the bar ----
     k_ch = [raw(12), raw(13), raw(9), FLAT]                         # CHANCE 50 %
     for name, slot, mode in (("seed_a", 0, "m"), ("seed_b", 3, "m"), ("seed_m", 0, "s")):
@@ -396,6 +419,27 @@ def main():
           f"the tape stops mid-gate: the gate keeps its length in samples ({segs[0][1] - segs[0][0] if segs else '-'}, "
           f"expected {G2 - B / 16:.0f} after its live slice)")
 
+    out, st, _ = R["metro_held"]
+    ends = [e for _, e in gate_ends(out, code(len(out)))]
+    check(len(ends) >= 3 and all(abs(g - B) <= 1 for g in np.diff(ends)) and ends[0] <= B + 1,
+          f"tape stopped, TE's metronome held (tape-follow): our count runs free at the tempo and fills fire every bar "
+          f"({ends})")
+    out, st, _ = R["metro_held_after_tape"]
+    ends = [e for _, e in gate_ends(out, code(len(out)))]
+    check(ends == [math.ceil(2 * B), math.ceil(4 * B)], f"EVERY 2 BARS, the tape stopped at 1.5 bars (metronome held): "
+          f"the bar count carries on from the tape's, fills end on bar lines 2 and 4 ({ends})")
+    for n in (2, 4):
+        out, st, _ = R[f"phase_every{n}"]
+        t0 = notes[f"phase_every{n}"]
+        ends = [e for _, e in gate_ends(out, code(len(out)))]
+        rel = [round((e - t0) / B, 3) for e in ends if e > t0]
+        check(rel[:2] == [n, 2 * n], f"EVERY {n} BARS, play from tape position 0 after a stop: the fills end on the bar "
+              f"lines after bars {n} and {2 * n} (the last beat of bar {n}, {2 * n}: {rel[:3]} bars after play)")
+    out, st, _ = R["phase_offset"]
+    ends = [round(e / B + 2.5, 3) for _, e in gate_ends(out, code(len(out)))]
+    check(ends[:2] == [4.0, 8.0], f"EVERY 4 BARS, play from tape position 2.5 bars: the fills end on tape bar lines 4 and "
+          f"8, relative to tape bar 1, not to where play started ({ends[:2]})")
+
     # ======== 3 ========
     def fire_bars(st, nblocks_half):
         f = np.diff(st["fires"], prepend=0)
@@ -636,7 +680,7 @@ def main():
                        ("bad_metro", "a dead metronome (stopped, countdown -5)"),
                        ("bad_metro_huge", "a countdown out of range")):
         out, st, _ = R[name]
-        ends = ends_of(name)
+        ends = [e for e in ends_of(name) if e < len(out)]          # (a gate cut by the run's end left out)
         gaps = np.diff(ends)
         check(len(ends) >= 1 and all(abs(g - B) <= 1 for g in gaps) and np.abs(out).max() <= 32767 and
               set(st["lock"]) == {2}, f"{what}: our own clock (lock {sorted(set(st['lock']))}), gates one bar apart "

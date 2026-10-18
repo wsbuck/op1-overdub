@@ -15,6 +15,12 @@
 volatile int32_t te_tempo_spb = 22050 << 14;    /* pingpong.c: TE's tempo word, 120 BPM */
 volatile int32_t te_tape_state = 2, te_metro_count = 22050 << 14, te_play_slot = 0;   /* repeat.c: the tape plays */
 volatile uint32_t te_tape_pos = 0;
+/* repeat.c's manual key: TE's block counter and the drum / mixer controllers' press and release (stand-ins) */
+volatile uint32_t te_blocks;
+int te_drum_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_drum_release(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_release(void *self, int key) { (void)self; (void)key; return 0; }
 
 #define DECL(f) void f##_mono(void *, int16_t *, const int16_t *); \
     void f##_stereo(void *, int16_t *, int16_t *, const int16_t *); extern struct fx_pub f##_pub[2];

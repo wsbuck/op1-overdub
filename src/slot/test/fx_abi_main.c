@@ -12,6 +12,12 @@ volatile int32_t te_tempo_spb = 22050 << 14;    /* pingpong.c: TE's tempo word (
 /* repeat.c's bar clock: the tape playing (the playhead advances a block per call), the metronome, the slot */
 volatile int32_t te_tape_state = 2, te_metro_count = 22050 << 14, te_play_slot = 0;
 volatile uint32_t te_tape_pos = 0;
+/* repeat.c's manual key: TE's block counter and the drum / mixer controllers' press and release (stand-ins) */
+volatile uint32_t te_blocks;
+int te_drum_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_drum_release(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_press(void *self, int key) { (void)self; (void)key; return 0; }
+int te_master_release(void *self, int key) { (void)self; (void)key; return 0; }
 
 typedef void (*entry_t)(void);
 int fx_abi_call(entry_t entry, void *self, void *a1, void *a2, void *a3);
