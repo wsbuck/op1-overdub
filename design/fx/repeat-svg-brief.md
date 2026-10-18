@@ -1,7 +1,9 @@
 # Brief: the `repeat` FX screen SVG (Wheel of Fortune)
 
-Paste this to a designer or an agent. The rules are in `design/SVG-GUIDE.md`; the current file is
-`design/fx/wheel.svg`, made by `design/fx/gen_wheel.py`.
+Paste this to a designer or an agent. The rules are in `design/SVG-GUIDE.md`. When written, the file was
+`design/fx/wheel.svg`, made by `design/fx/gen_wheel.py` (both removed since). **Delivered:** William Buck's
+`design/fx/repeat.svg` from `design/fx/gen_repeat.py`, with its own contract in the SVG's header (it supersedes the id
+table below; notes/fx-beatrepeat.md §3).
 
 ---
 

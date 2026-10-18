@@ -1,6 +1,6 @@
 /* repeat FX (src/slot/repeat.c; notes/fx-beatrepeat.md): the knob maps, shared by the DSP, the screen (ui.c,
  * ui_repeat.h) and the host checks, and the state the DSP publishes for the screen (repeat_state[0] mono, [1] the
- * master). The maps follow design/fx/gen_wheel.py (grid_of, fortune_of, gate_of, eff_gate, pitch_of, vary_pick). */
+ * master). The knob maps are defined here (first written in the old design/fx/gen_wheel.py, removed at REPEAT4). */
 #ifndef REPEAT_H
 #define REPEAT_H
 #include <stdint.h>

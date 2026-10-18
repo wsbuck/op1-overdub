@@ -1,11 +1,11 @@
-/* repeat FX screen: the Wheel of Fortune (design/fx/wheel.svg, published as content/display/wheel.svg; its header
- * lists every id; design/fx/gen_wheel.py runtime_state() is the reference, followed here). Included by ui.c after its
- * SVG helpers. Inputs: the knobs the FX used (fx_live: TE's LFO moves them), the DSP's state (repeat_state: the grid
- * played, the repeat, the depth, the wheel's turn, the bar clock, won and lost rolls) and the frame counter (30 fps).
- * Knob turns (stored knobs, >= 512 raw) show the value ~1.5 s at the title position in the knob's colour; the angel
- * steps aside meanwhile. While SHIFT is held: the bar-clock probe page instead (TE's transport, playhead, tempo,
- * metronome and sequencer words, and repeat's own clock; notes/fx-beatrepeat.md "Probe"). Without wheel.svg (or an
- * older one): a line screen. */
+/* repeat FX screen: the Wheel of Fortune, the sphinx and the snake (design/fx/repeat.svg by William Buck, from
+ * design/fx/gen_repeat.py, published as content/display/repeat.svg; its header comment is the runtime contract,
+ * followed here). Included by ui.c after its SVG helpers. Inputs: the knobs the FX used (fx_live: TE's LFO moves them),
+ * the DSP's state (repeat_state: the grid played, the repeat, the depth, the wheel's turn, the bar clock, the gate
+ * left, won and lost rolls) and the frame counter (30 fps). Knob turns (stored knobs, >= 512 raw) show the value
+ * ~1.5 s in the design's top-left box in the knob's colour. While SHIFT is held: the bar-clock probe page instead
+ * (TE's transport, playhead, tempo, metronome and sequencer words, and repeat's own clock; notes/fx-beatrepeat.md
+ * "Probe"). Without repeat.svg (or one without the marker `stripes_dim`): a line screen. */
 #include "repeat.h"
 
 extern volatile int32_t te_tape_state __attribute__((weak));     /* 0xFF802960 (build_slot.py TE_UI) */
@@ -19,45 +19,36 @@ extern volatile int32_t te_tempo_spb __attribute__((weak));      /* 0x01AADAD8 s
 #endif
 
 #define LPG 17                                      /* TE's lpg (palette order, notes/screen.md) */
-#define WH_X 160                                    /* the wheel's centre (wheel.svg) */
-#define WH_Y 82
-#define WH_SWORD_X 168                              /* the sword's pivot and its resting angle */
-#define WH_SWORD_Y 30
-#define WH_SWORD_REST 109
-#define WH_SNAKE_TRAVEL 75                          /* degrees the wheel carries the snake at the full drop */
-#define WH_ANUB_R 75                                /* Anubis's feet on r 75 from 125 deg to 70 deg */
-#define WH_ANUB_A0 125
-#define WH_ANUB_TRAVEL 55
-#define WH_RAISE 6                                  /* frames the sword takes to rise (0.2 s) */
-#define WH_BLINK 8                                  /* frames the lots blink out on a lost roll (0.27 s) */
+#define WH_X 100                                    /* the wheel's centre (repeat.svg) */
+#define WH_Y 80
+#define WH_POW 4                                    /* frames `pow` flashes on each repeat (0.13 s) */
 #define WH_SHOW 45                                  /* frames a readout stays (~1.5 s) */
 
-enum { W_WHEEL, W_BLUR1, W_BLUR2, W_LAP1, W_LAP2, W_PLAYHEAD, W_SWUP, W_SWREST, W_HUBMAN, W_SNAKEORG, W_SNAKEGREY,
-       W_ANUBORG, W_ANUBGREY, W_SNAKE, W_ANUBIS, W_ANGEL, W_SINKEND, W_RISEEND, W_SINGLE };
-static const char *const wh_single[W_SINGLE] = { "wheel", "blur1", "blur2", "lap1", "lap2", "playhead", "swordup",
-    "swordrest", "hubman", "snakeorg", "snakegrey", "anuborg", "anubgrey", "snake", "anubis", "angel", "sinkend",
-    "riseend" };
-static const uint8_t wh_spokes[9] = { 2, 3, 4, 6, 8, 12, 16, 24, 32 };
-/* FORTUNE's lots per position (gen_wheel.py: ALWAYS 12, OFF 0, EVERY n 12 / n, CHANCE / VARY round(12 p)) */
-static const uint8_t wh_lots[33] = { 12, 0, 0, 2, 2, 3, 3, 6, 6, 1, 2, 4, 5, 6, 7, 8, 10, 11, 12, 12, 12,
-                                     6, 6, 6, 8, 8, 8, 10, 10, 10, 12, 12, 12 };
+enum { W_WHEEL, W_PLAYHEAD, W_EYESHUT, W_EYEOPEN, W_POW, W_TAPESTOP, W_SPINUP, W_SNAKE, W_SNAKEGREY, W_SNAKEUP,
+       W_SNAKEDOWN, W_SINGLE };
+static const char *const wh_single[W_SINGLE] = { "wheel", "playhead", "eye_shut", "eye_open", "pow", "tapestop",
+    "spinup", "snake", "snake_grey", "snake_up", "snake_down" };
+static const uint8_t wh_grids[11] = { 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64 };
 
 static struct svgdoc wheel_doc RAM = { 0, 0 };
 static void *wh_node[W_SINGLE] RAM = { 0 };
-static void *wh_spk[9] RAM = { 0 };
-static void *wh_gate[16] RAM = { 0 }, *wh_gatex[16] RAM = { 0 }, *wh_ch[12] RAM = { 0 };
-static void *wh_book[4][3] RAM = { { 0 } };          /* book1..4: closed, open, page */
-static void *wh_sink[6] RAM = { 0 }, *wh_rise[6] RAM = { 0 };
+static void *wh_ticks[11] RAM = { 0 }, *wh_slice[11] RAM = { 0 }, *wh_stripe[10] RAM = { 0 };
+static void *wh_gate[16] RAM = { 0 }, *wh_gdim[16] RAM = { 0 }, *wh_lap[3] RAM = { 0 };
+static void *wh_up[12] RAM = { 0 }, *wh_down[12] RAM = { 0 };
 struct wh_view {
     uint32_t frame;
-    uint32_t fires, lost;                           /* the DSP's counts at the last frame */
-    uint32_t fire_f, lost_f, rep_f;                 /* frames of the last won roll, lost roll, new repeat */
-    int32_t rep;
+    uint32_t lost;                                  /* the DSP's lost count at the last frame */
+    uint32_t rep_f;                                 /* frame of the last new repeat (or fill) */
+    uint32_t lost_line;                             /* a lost roll's line (repeat.c s->line: the bar, or beat, its
+                                                     * gate would have ended on; 0: none) */
+    int32_t lost_beats;                             /* that line counts beats (CHANCE / VARY gates of a beat or less) */
+    uint32_t turn0;                                 /* the wheel's turn at the fill's start */
+    int32_t rep, was;                               /* the repeat and `active` at the last frame */
     int32_t ctx, shown;                             /* the readout: screen context, knob shown, until frame */
     uint32_t until;
     int16_t ref[4];
 };
-static struct wh_view wh RAM = { 0, 0, 0, 0, 0, 0, -1, -1, -1, 0, { 0, 0, 0, 0 } };
+static struct wh_view wh RAM = { 0, 0, 0, 0, 0, 0, 0, 0, -1, -1, 0, { 0, 0, 0, 0 } };
 
 /* "pre" + n (1 .. 99) into buf, no libc */
 static const char *wh_id(char *buf, const char *pre, int n)
@@ -65,45 +56,46 @@ static const char *wh_id(char *buf, const char *pre, int n)
     char *p = buf;
     while (*pre)
         *p++ = *pre++;
-    if (n >= 10)
-        *p++ = (char)('0' + (n >= 20 ? n >= 30 ? 3 : 2 : 1)), n -= n >= 30 ? 30 : n >= 20 ? 20 : 10;
+    int t = 0;
+    while (n >= 10)
+        n -= 10, t++;
+    if (t)
+        *p++ = (char)('0' + t);
     *p++ = (char)('0' + n);
     *p = 0;
     return buf;
+}
+
+static void wh_find(void **dst, const char *pre, int n)
+{
+    char id[16];
+    for (int i = 0; i < n; i++)
+        dst[i] = te_node_find(wheel_doc.doc, wh_id(id, pre, i + 1), 0);
 }
 
 static int wheel_ready(void)
 {
     if (wheel_doc.state)
         return wheel_doc.state > 0;
-    if (!svg_open(&wheel_doc, "/yaffs2/content/display/wheel.svg", "wheel.svg"))
+    if (!svg_open(&wheel_doc, "/yaffs2/content/display/repeat.svg", "repeat.svg"))
         return 0;
-    if (!te_node_find(wheel_doc.doc, "wheel1", 0)) {                /* not this generation's file: the line screen */
+    if (!te_node_find(wheel_doc.doc, "stripes_dim", 0)) {          /* not this design's file: the line screen */
         wheel_doc.state = -1;
         return 0;
     }
     char id[16];
     for (int i = 0; i < W_SINGLE; i++)
         wh_node[i] = te_node_find(wheel_doc.doc, wh_single[i], 0);
-    for (int i = 0; i < 9; i++)
-        wh_spk[i] = te_node_find(wheel_doc.doc, wh_id(id, "spk", wh_spokes[i]), 0);
-    for (int i = 0; i < 16; i++) {
-        wh_gate[i] = te_node_find(wheel_doc.doc, wh_id(id, "gate", i + 1), 0);
-        wh_gatex[i] = te_node_find(wheel_doc.doc, wh_id(id, "gatex", i + 1), 0);
+    for (int i = 0; i < 11; i++) {
+        wh_ticks[i] = te_node_find(wheel_doc.doc, wh_id(id, "ticks", wh_grids[i]), 0);
+        wh_slice[i] = te_node_find(wheel_doc.doc, wh_id(id, "slice", wh_grids[i]), 0);
     }
-    for (int i = 0; i < 12; i++)
-        wh_ch[i] = te_node_find(wheel_doc.doc, wh_id(id, "ch", i + 1), 0);
-    for (int b = 0; b < 4; b++)
-        for (int j = 0; j < 3; j++) {
-            wh_id(id, "book", b + 1);
-            id[5] = "cof"[j];
-            id[6] = 0;
-            wh_book[b][j] = te_node_find(wheel_doc.doc, id, 0);
-        }
-    for (int i = 0; i < 6; i++) {
-        wh_sink[i] = te_node_find(wheel_doc.doc, wh_id(id, "sinkdot", i + 1), 0);
-        wh_rise[i] = te_node_find(wheel_doc.doc, wh_id(id, "risedot", i + 1), 0);
-    }
+    wh_find(wh_stripe, "stripe", 10);
+    wh_find(wh_gate, "gate", 16);
+    wh_find(wh_gdim, "gate_dim", 16);
+    wh_find(wh_lap, "lap", 3);
+    wh_find(wh_up, "up", 12);
+    wh_find(wh_down, "down", 12);
     return 1;
 }
 
@@ -292,7 +284,7 @@ static void wh_probe(void *r, const int16_t *k, const struct rep *st, int runnin
     }
 }
 
-/* The line screen (no wheel.svg): the values, the bar as a line with the gate lit, the playhead. */
+/* The line screen (no repeat.svg): the values, the bar as a line with the gate lit, the playhead. */
 static void draw_repeat_lines(void *r, const int16_t *k, const struct rep *st, int nokey)
 {
     char buf[24];
@@ -320,6 +312,12 @@ static void draw_repeat_lines(void *r, const int16_t *k, const struct rep *st, i
     }
 }
 
+/* The wheel's turn per slice of grid g (repeat.c boundary(): one slice per repeat) */
+static uint32_t wh_slice_turn(int g)
+{
+    return g & REP_T ? 0x55555555u >> (g & 7) : (g & 7) ? 1u << (32 - (g & 7)) : 0;
+}
+
 static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int running, int stereo, int ctx, int nokey,
                        int mode)
 {
@@ -331,6 +329,8 @@ static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int run
         wh.until = f;
         for (int i = 0; i < 4; i++)
             wh.ref[i] = stored[i];
+        if (st)
+            wh.lost = st->lost;                                     /* rolls lost before the screen showed */
     }
     for (int i = 0; i < 4; i++) {
         int32_t d = stored[i] - wh.ref[i];
@@ -357,112 +357,127 @@ static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int run
     int pp = rep_pos(knob_pos(k[3]));
     int blue = bypass ? rep_grid_at[pg] : st->blue;
     int active = !bypass && st->active;
+    int hold = active && st->hold, manual = active && st->key;
     int fm = rep_fmode_at[pf], fa = rep_fa_at[pf];
-    int latch = !bypass && fm == RF_ALWAYS;
-    /* the DSP's events since the last frame */
+    int ge = rep_eff_gate(blue, rep_gate_at[pt]);                   /* the gate played (the grid wins) */
+    /* the bar clock: phase in 1/1024 bar, the beat */
+    uint32_t ph10 = 0, b10 = !bypass && st->bar8 >= 1u << 12 ? st->bar8 >> 10 : 0, bar = bypass ? 0 : st->bar;
+    if (b10) {
+        ph10 = udiv(st->ph8 > st->bar8 ? st->bar8 : st->ph8, b10);
+        ph10 = ph10 > 1023 ? 1023 : ph10;
+    }
+    /* the DSP's events since the last frame: a new fill or repeat (the wheel's start, pow), a lost roll */
+    if (active && (!wh.was || st->rep < wh.rep)) {
+        wh.turn0 = st->turn - (st->kind == RR_STEP ? (uint32_t)st->rep * wh_slice_turn(st->grid) : 0);
+        wh.rep_f = f;
+    } else if (active && st->rep != wh.rep)
+        wh.rep_f = f;
+    if (st && st->lost != wh.lost && !active) {                     /* repeat.c: such gates roll on every beat */
+        wh.lost_line = st->line;
+        wh.lost_beats = (fm == RF_CHANCE || fm == RF_VARY) && ge <= 4;
+    }
+    uint32_t at = wh.lost_beats ? bar << 2 | (ph10 >> 8) : bar;     /* the bar (beat) the playhead is in */
+    int lost = wh.lost_line && wh.lost_line - at - 1 < 4;           /* the lost gate's end line still to come */
     if (st) {
-        if (st->fires != wh.fires && active)
-            wh.fire_f = f;
-        if (st->lost != wh.lost)
-            wh.lost_f = f;
-        if (st->rep != wh.rep && active)
-            wh.rep_f = f;
-        wh.fires = st->fires;
         wh.lost = st->lost;
         wh.rep = st->rep;
     }
+    wh.was = active;
 
-    /* blue: the spokes of the grid played (VARY's pick while it plays), blur rings for 1/32T and 1/64 */
-    int g = active ? st->grid : blue, n = rep_slices(g);
-    for (int i = 0; i < 9; i++)
-        show(wh_spk[i], wh_spokes[i] == n);
-    show(wh_node[W_BLUR1], n >= 48);
-    show(wh_node[W_BLUR2], n >= 64);
-    /* the repeats turn the wheel */
-    set_rotation(wh_node[W_WHEEL], st ? st->turn : 0, WH_X, WH_Y);
-
-    /* white: the gate on the bar clock (its sixteenths ending at 12), the grid-wins stretch, the laps; the playhead */
-    int manual = active && st->key;
-    int gate = rep_gate_at[pt], ge = rep_eff_gate(blue, gate), nogate = latch || manual || bypass || fm == RF_OFF;
-    for (int i = 1; i <= 16; i++) {
-        show(wh_gate[i - 1], !nogate && i > 16 - gate);
-        show(wh_gatex[i - 1], !nogate && 16 - ge < i && i <= 16 - gate);
+    /* blue: the grid's ticks (VARY's pick while it plays), the captured slice while firing; the wheel turns one slice
+     * per repeat from the fill's start (TAPE STOP / SPIN UP: with the read), upright otherwise */
+    int n = rep_slices(active ? st->grid : blue);
+    for (int i = 0; i < 11; i++) {
+        show(wh_ticks[i], wh_grids[i] == n);
+        show(wh_slice[i], active && wh_grids[i] == n);
     }
-    show(wh_node[W_LAP1], !nogate && gate >= 32);
-    show(wh_node[W_LAP2], !nogate && gate >= 64);
-    uint32_t ph = 0;
-    if (st && st->bar8 >= 4096)
-        ph = udiv(st->ph8 > st->bar8 ? st->bar8 : st->ph8, st->bar8 >> 12) << 20;    /* turns, 12 bits */
-    set_rotation(wh_node[W_PLAYHEAD], ph, WH_X, WH_Y);
+    set_rotation(wh_node[W_WHEEL], active ? st->turn - wh.turn0 : 0, WH_X, WH_Y);
+
+    /* green: the headdress stripes. CHANCE 10..90 % the first 1..9, ALWAYS all, VARY 2 4 6 8 10, EVERY n the bars
+     * elapsed of the interval x 8 / n (EVERY BAR: 8, every bar is due), OFF none */
+    uint32_t lit = 0;                                               /* bit i: stripe i + 1 */
+    if (fm == RF_ALWAYS)
+        lit = 0x3FF;
+    else if (fm == RF_VARY)
+        lit = 0x2AA;
+    else if (fm == RF_CHANCE)
+        lit = (1u << (((uint32_t)rep_chance_at[pf] * 10 + 32768) >> 16)) - 1;
+    else if (fm == RF_EVERY)
+        lit = (1u << (fa == 1 ? 8 : udiv((bar & (uint32_t)(fa - 1)) * 8, (uint32_t)fa))) - 1;
+    for (int i = 0; i < 10; i++)
+        show(wh_stripe[i], lit >> i & 1);
+
+    /* white: the gate on the ground (one bar, ending at the bar line). Waiting: the last ge sixteenths, white when
+     * this bar will fire, darkblue when not (OFF, a lost roll, EVERY n off the interval, the FX off). Firing: from
+     * the playhead to the gate's end (it burns down), the laps the bars still to come; the latch (ALWAYS, the manual
+     * key): the whole bar from the playhead. */
+    int first = 17 - (ge > 16 ? 16 : ge), last = 16, laps = ge > 16 ? (ge > 48 ? 3 : (ge + 15) / 16 - 1) : 0;
+    int lit_gate;
+    if (active) {
+        lit_gate = 1;
+        first = (int)(ph10 >> 6) + 1;
+        if (hold || !b10)
+            laps = 0;
+        else {
+            uint32_t e10 = ph10 + udiv((uint32_t)(st->grem < 0 ? 0 : st->grem), b10);
+            last = e10 > 1024 ? 16 : (int)((e10 + 63) >> 6);
+            laps = e10 > 1024 ? (int)((e10 - 1) >> 10) : 0;
+            laps = laps > 3 ? 3 : laps;
+        }
+    } else {
+        uint32_t m = fa > 0 ? (uint32_t)(fa - 1) : 0;
+        int due = fm != RF_EVERY || (ge < 16 && !((bar + 1) & m)) || fa == 1;
+        lit_gate = !bypass && fm != RF_OFF && due && !lost;
+    }
+    for (int i = 1; i <= 16; i++) {
+        int on = first <= i && i <= last;
+        show(wh_gate[i - 1], on && lit_gate);
+        show(wh_gdim[i - 1], on && !lit_gate);
+    }
+    for (int i = 0; i < 3; i++)
+        show(wh_lap[i], i < laps);
+    translate(wh_node[W_PLAYHEAD], (fp32)(280 * ph10), 0);          /* translate(280 x bar phase, 0) */
     show(wh_node[W_PLAYHEAD], !bypass);
 
-    /* green: the lots (a lost roll blinks them out), the books (VARY), the sword (a won roll to the gate's end) */
-    int lots = bypass || f - wh.lost_f < WH_BLINK ? 0 : wh_lots[pf];
-    for (int i = 0; i < 12; i++)
-        show(wh_ch[i], i < lots);
-    static const uint8_t order[4] = { 2, 3, 1, 0 };                 /* bull, lion, eagle, angel */
-    int nbk = bypass ? 0 : fm == RF_ALWAYS ? 4 : fm == RF_VARY ? fa : 0;
-    int flip = active && fm == RF_VARY && st->rep >= 1 && f - wh.rep_f < WH_BLINK && st->grid != st->blue;
-    for (int j = 0; j < 4; j++) {
-        int b = order[j];
-        show(wh_book[b][1], j < nbk);
-        show(wh_book[b][0], j >= nbk);
-        uint32_t rep = flip ? (uint32_t)st->rep : 0;
-        show(wh_book[b][2], flip && j < nbk && (int)(rep - (uint32_t)nbk * udiv(rep, (uint32_t)nbk)) == j);
-    }
-    int up = active;
-    show(wh_node[W_SWUP], up);
-    show(wh_node[W_SWREST], !up);
-    if (up && f - wh.fire_f < WH_RAISE - 1)                         /* rotate(109 (1 - u)), u = 1 / 6 .. 1 */
-        set_rotation(wh_node[W_SWUP], udiv(WH_SWORD_REST * DEG, WH_RAISE) * (WH_RAISE - 1 - (f - wh.fire_f)),
-                     WH_SWORD_X, WH_SWORD_Y);
-    else
-        set_rotation(wh_node[W_SWUP], 0, WH_SWORD_X, WH_SWORD_Y);
-    show(wh_node[W_HUBMAN], manual);                                /* the manual key (green's push) held */
+    /* firing: the sphinx's eye opens, pow flashes on each repeat (held steady while the manual key holds the latch:
+     * the old screen's lit hub) */
+    show(wh_node[W_EYEOPEN], active);
+    show(wh_node[W_EYESHUT], !active);
+    show(wh_node[W_POW], active && (manual || f - wh.rep_f < WH_POW));
 
-    /* orange: the snake carried down / Anubis climbing with the current repeat's depth; the setting's dots */
-    int s = rep_pitch_at[pp];
-    int down = s == REP_STOP || (s < 0), upw = s == REP_SPIN || (s > 0 && s != REP_SPIN);
-    static const int8_t dots_of[13] = { 0, 1, 2, 3, 0, 4, 0, 5, 0, 0, 0, 0, 6 };
-    int dots = s == REP_STOP || s == REP_SPIN ? 6 : dots_of[s < 0 ? -s : s];
-    show(wh_node[W_SNAKEORG], down);
-    show(wh_node[W_SNAKEGREY], !down);
-    show(wh_node[W_ANUBORG], upw);
-    show(wh_node[W_ANUBGREY], !upw);
-    for (int i = 0; i < 6; i++) {
-        show(wh_sink[i], down && i < dots);
-        show(wh_rise[i], upw && i < dots);
+    /* orange: the knob's dots on its side of the dial, the extremes' marks; the snake (grey flat, climbing up, diving
+     * down) rides rot(3.5 st) about the wheel's centre, st = the semitones reached so far (+-12.5 at the extremes) */
+    int s = rep_pitch_at[pp], ext = s == REP_SPIN || s == REP_STOP;
+    int nd = ext ? 12 : s < 0 ? -s : s;
+    for (int i = 0; i < 12; i++) {
+        show(wh_up[i], s > 0 && i < nd);
+        show(wh_down[i], s < 0 && i < nd);
     }
-    show(wh_node[W_SINKEND], s == REP_STOP);                       /* the mode marks past the 6th dot */
-    show(wh_node[W_RISEEND], s == REP_SPIN);
-    int32_t d = active ? clamp_i(st->depth, 0, 32767) : 0;          /* Q15 */
-    if (down)                                                       /* rotate(-75 d): 75 deg / 32768 = 27307 turns */
-        set_rotation(wh_node[W_SNAKE], (uint32_t)-(int32_t)(27307 * d), WH_X, WH_Y);
-    else
-        set_matrix(wh_node[W_SNAKE], 1024, 0, 0, 1024, 0, 0);
-    if (upw) {
-        uint32_t a0 = WH_ANUB_A0 * DEG, a1 = a0 - 20025u * (uint32_t)d;   /* 55 deg / 32768 */
-        fp32 dx = (WH_ANUB_R * (sin_t(a1) - sin_t(a0))) >> 5, dy = -((WH_ANUB_R * (cos_t(a1) - cos_t(a0))) >> 5);
-        translate(wh_node[W_ANUBIS], dx, dy);
-    } else
-        set_matrix(wh_node[W_ANUBIS], 1024, 0, 0, 1024, 0, 0);
+    show(wh_node[W_TAPESTOP], s == REP_STOP);
+    show(wh_node[W_SPINUP], s == REP_SPIN);
+    show(wh_node[W_SNAKEGREY], !s);
+    show(wh_node[W_SNAKEUP], s > 0);
+    show(wh_node[W_SNAKEDOWN], s < 0);
+    int32_t d = active && s ? clamp_i(st->depth, 0, 32767) : 0;    /* Q15 of the full 12 (12.5) */
+    uint32_t a = (uint32_t)d * (ext ? 15929u : 15292u);             /* 43.75 / 42 deg per 32768, in turns */
+    set_rotation(wh_node[W_SNAKE], s < 0 ? (uint32_t)-a : a, WH_X, WH_Y);
 
     int ro = f < wh.until && wh.shown >= 0;
-    show(wh_node[W_ANGEL], !ro);
     svg_render(wheel_doc.doc);
-    if (!bypass) {                                                  /* white: the bar within the EVERY n interval */
+    if (!bypass) {                          /* the bar within the EVERY n interval, top right over the headdress */
         char bb[12];
-        if (wh_bar_in(bb, k, st))
-            text_fast(r, bb, FP(62), FP(127), FP(1), WHITE);
+        char *e = wh_bar_in(bb, k, st);
+        if (e)
+            text_fast(r, bb, FP(316) - FP(6) * (fp32)(e - bb), FP(5), FP(1), WHITE);
     }
-    if (ro) {
+    if (ro) {                               /* the readout in the design's top-left box */
         static const int colours[4] = { BLUE, GREEN, WHITE, ORANGE };
         char buf[24];
         wh_readout(buf, wh.shown, k, bypass ? 0 : st, nokey);
         text(r, buf, FP(8), FP(7), FP(2), colours[wh.shown]);
         if (wh.shown == 0 && !bypass && st->fold) {                 /* the grid that doesn't fit plays its half */
             put_str(put_str(buf, wh_grid_name(st->blue - st->fold)), " TOO LONG");
-            text_fast(r, buf, FP(8), FP(23), FP(1), GREY);
+            text_fast(r, buf, FP(136), FP(13), FP(1), GREY);
         }
     }
     svg_cost(r);

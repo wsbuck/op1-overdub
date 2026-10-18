@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from PIL import Image, ImageDraw
 
 DESIGN = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "design")
-SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "crush3d.svg": "fx", "wheel.svg": "fx",
+SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "crush3d.svg": "fx", "repeat.svg": "fx",
              "fm4.svg": "synth"}   # name -> design/ subfolder
 if os.environ.get("CRUSH_CARD"):        # build.py --test-card: the crush screen's boot test card (ui.c draw_card)
     SVG_PATHS["crushcard.svg"] = "fx"

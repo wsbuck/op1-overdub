@@ -1,11 +1,10 @@
-# Beat repeat FX (`repeat`, firmware id 12, DB fx_types 15; screen: the Wheel of Fortune)
+# Beat repeat FX (`repeat`, firmware id 12, DB fx_types 15; screen: the Wheel of Fortune, William Buck's design)
 
 **Status (2026-10-18): phase 0 (the probe), 1 (the MVP) and 1b (the screen) built and sim-checked, with VARY's
 per-repeat grids, the real TAPE STOP and the coupled tone from phase 2b; on the device as test image REPEAT1 (LOG.md
 88), not yet tested there. Not built: the manual SPLIT key (phase 2), the sequencer-start hook, drum / master keys
 (phase 3). "As built" (§7) supersedes the design where they differ.** Source: `src/slot/repeat.c`, `repeat.h`,
-`ui_repeat.h`; the screen `design/fx/wheel.svg` from `design/fx/gen_wheel.py` (run it with a directory to get the
-mockup gallery). FX contract: fx-slot.md; tempo: fx-pingpong.md
+`ui_repeat.h`; the screen `design/fx/repeat.svg` from `design/fx/gen_repeat.py` (the user's design, §3). FX contract: fx-slot.md; tempo: fx-pingpong.md
 "Tempo". Tags: **Verified** = read at the call site in the disassembly, **Confirmed** = read in code or decompile,
 **Hypothesis** = inferred, **Memory** = from memory of Live, not checked against a source.
 
@@ -84,8 +83,8 @@ Sources:
 ## 2. Mapping to the OP-1
 
 ### Knobs (33 detent positions per knob, 1024 raw each; after UX round 1)
-The maps are coded in `design/fx/gen_wheel.py` (`grid_of`, `fortune_of`, `gate_of`, `eff_gate`, `pitch_of`,
-`vary_pick`), the reference for the C.
+The maps are coded in `src/slot/repeat.h` (they were first written in gen_wheel.py, removed with the old screen at
+REPEAT4; git history has it).
 
 | knob | role | detent positions |
 |---|---|---|
@@ -259,70 +258,51 @@ The maps are coded in `design/fx/gen_wheel.py` (`grid_of`, `fortune_of`, `gate_o
   385 Q15 entries over ±12 st); the ramps (TAPE STOP, SPIN UP) step the rate once per 8 samples.
   No division in the sample loop.
 
-## 3. Screen: the Wheel of Fortune
-### The card
-- **Rider–Waite–Smith** (Pamela Colman Smith for A. E. Waite, Rider 1909/1910; public domain): the great wheel.
-  - The rim carries T-A-R-O clockwise (also ROTA, TORA) and, between them, the Hebrew YHVH.
-  - The inner wheel has the alchemical signs of mercury, sulphur, salt and water (Aquarius), with eight spokes.
-  - A blue **sphinx** with a sword sits on top; a yellow **snake** (Typhon) descends on the left; a red
-    **Anubis / Hermanubis** rises on the right.
-  - Four winged creatures read books in the corners on clouds: angel, eagle, bull, lion (the evangelists, the fixed
-    signs). The sky is blue.
-  - Sources: [Wikipedia, "Wheel of Fortune (tarot card)"](https://en.wikipedia.org/wiki/Wheel_of_Fortune_(tarot_card));
-    Waite's *Pictorial Key to the Tarot* (1910).
-- **Tarot de Marseille:** a wooden wheel on a stand with a crank and no letters, three animal figures (one
-  climbing, one falling, a crowned one with a sword and wings on top), and no corner creatures.
-- **Ours:** the RWS layout as flat TE-style vectors, drawn from scratch. Simplified figures, no lettering style or
-  linework copied from any deck.
-  - Kept: the wheel with T-A-R-O on the rim, the sphinx with its sword on the crown, the snake descending left,
-    Anubis rising right, the four winged creatures with books in the corners.
-  - Dropped: the Hebrew letters (four small diamonds instead), and after UI round 1 the alchemical symbols (clutter
-    at 1×, moiré at 1/64). The clouds went in round 1 (mud) and came back in round 3 as scalloped offblue cushions
-    with a thin grey edge, drawn over the creatures' feet.
-  - Figures (round 3, after the user's "the guys on the outside need work"): built from a few shared shapes (a
-    feathered wing of five primaries with purplegrey coverts, the scalloped cloud, a three-face closed book / an open
-    green one), neutral palette (wings grey, bodies purplegrey, faces lpg, details darkblue / black).
-    - Sphinx: striped lpg nemes (darkblue bands), purplegrey face with eyes, the brow band and the false beard, a grey
-      pectoral collar, a grey lion body edged purplegrey crouched along the crown (low haunch, short tail), the left
-      forepaw on the rim, the right paw a fist over the sword's grip at the pivot; the sword has a pommel.
-    - Angel (robe with folds, hair, arms holding the book), eagle (standing on its book, hooked beak, frown, tail),
-      bull (lying, horns, ears, muzzle, the book before it), lion (lying, a 16-point mane, face, paws, the book in
-      front, a tufted tail); all winged.
-    - Snake: three waves, tapering 5.9 -> 0.4, a head wider than the neck, an eye and a forked tongue.
-    - Anubis: in profile toward the wheel, jackal head with two tall ears and a long snout, lpg collar, purplegrey
-      kilt, striding legs, an arm reaching for the rim; the body, head and arm turn orange.
+## 3. Screen: the Wheel of Fortune, the sphinx and the snake (William Buck's design, REPEAT4)
+`design/fx/repeat.svg`, generated by `design/fx/gen_repeat.py`, both the user's (drawn in his own op1-svgs folder from
+`design/fx/repeat-svg-brief.md`; in the repo unchanged but for the output path and a credit line). Published as
+`content/display/repeat.svg` (build.py `FX_SVGS`); ui_repeat.h `draw_wheel` follows the SVG's header comment (the
+runtime contract). The earlier screen (wheel.svg / gen_wheel.py: sword, books, four creatures, Anubis; review rounds
+1-4 in §4) is in git history before REPEAT4; an old wheel.svg left on the device is never loaded.
 
-### Mapping (after UI round 1; each knob's effect in its knob's colour; structure in darkblue / offblue / grey / purplegrey)
-| state | image | colour |
+### Layout
+The wheel centred at (100, 80) (tyre r 59), the snake's dial round its left rim, the sphinx's head on the right
+(its headdress stripes the FORTUNE ladder), the ground at y 140 (one bar, x 30..310, the bar line under the sphinx),
+the readout box top left (0..130 x 0..20).
+
+### Mapping (as built)
+| knob / state | ids | rule |
 |---|---|---|
-| GRID | the spokes: slices per bar of the grid played (1/2 = 2 .. 1/32 = 32); 1/32T and 1/64 show no spokes, one / two blur rings (the buzz) | blue |
-| the repeats | the wheel (rim, TARO, diamonds, spokes) steps 360 / slices per repeat; a **lightblue lead spoke** makes the steps countable on symmetric spokes; TAPE STOP / SPIN UP turn it continuously at the read rate (a dying / speeding turntable) | lightblue |
-| GATE | the static ring inside the rim is the bar as a clock face (12 o'clock = the bar line, ticks on the beats); the gate's sixteenths lit white, ending at 12; the grid-wins stretch in lpg (thinner); 2 BARS / 4 BARS add one / two inner white laps; ALWAYS and the key: no gate (dim ring only) | white |
-| bar phase | a radial tick (lpg core on an offblue halo, so it shows on white and on the dim ring) orbits once per bar | |
-| FORTUNE | 12 lots in the hub: chance × 12, EVERY n = 12 / n, ALWAYS all, OFF none; FX off: none | green |
-| the roll | the sphinx raises the sword in its right paw (rotates up from resting on the rim's crown over 3 frames) when the bar fires, and holds it to the gate's end; a lost roll blinks the lots out for ~4 frames | green |
-| VARY | the creatures open their books, in the order bull, lion, eagle, angel (the angel is the one the readout covers); a page turns when a repeat drew another grid | green |
-| ALWAYS | sword up, every lot and book lit | green |
-| PITCH down | the snake (a tapered body along an arc left of the rim) turns orange and the wheel carries it down (rotation about the centre) with the current repeat's drop (the floor at −12 st or TAPE STOP's end); dots outside its arc show the setting (−1 −2 −3 −5 −7 −12 → 1 .. 6 dots) | orange |
-| PITCH up | Anubis (jackal head, tall ears, long muzzle, tapered torso) turns orange and climbs upright along an arc right of the rim | orange |
-| manual REPEAT | the hub fills green while SPLIT is held (the key is FORTUNE's) | green |
-| FX off | lots and books out, the sword rests: fortune is off | |
-| readout | a stored-knob turn shows the value ~1.5 s at (8, 7) in the knob's colour (`GRID 1/16T`, `EVERY 4 BARS`, `CHANCE 30%`, `VARY 2 67%`, `ALWAYS`, `OFF` / `OFF NO KEY`, `GATE 3/16`, `GATE 2 BARS`, `PITCH -7 ST`, `TAPE STOP`, `SPIN UP`, `PITCH FLAT`); the angel steps aside meanwhile (crush's rule: never from the LFO alone). When the grid wins, the GRID readout names the grid played | knob's |
-- Mechanics: no recolours at run time. Changes are visibility flags (prebuilt lit / unlit variants) and group
-  matrices: the wheel's rotation, the playhead, the sword's raise, the snake's rotation, Anubis's translation. The
-  SVG header lists every id; `runtime_state()` in the generator is the reference for ui.c.
-- Renderer rules:
-  - 212 drawable elements (111 in the figures, round 4), each one subpath of absolute M / L / C / Z; check_svg PASS;
-  - the heaviest element is the rim band's stroke, ~1331 cells (35 % of 3840; the heaviest figure element is the
-    lion's cloud, ~1210, 32 %), worst over every gallery state and
-    animation frame;
-  - drawn per frame: ~60–100 elements before round 3, ~126 after (default state; ~21 k cells); round 4's line
-    art ~120 (~31 k cells: a stroke counts both sides).
-  - Per frame the C does matrices and flag writes only (a few thousand cycles). Render cost is like pingpong's /
-    choir's (2–11 M cycles; Hypothesis until `--svg-cost`).
-- Gallery: the session scratchpad `beatrepeat/index.html` (19 states at 1× and 2×, `wheel.gif`, 123 frames).
-- Could (not done): cap the continuous turn's visual speed at 0.4 × the spoke spacing per frame against the
-  wagon-wheel effect at 1/32 (the lead spoke keeps the direction readable meanwhile).
+| GRID (blue) | `ticks2`..`ticks64` | one shown: slices per bar of the grid (VARY's pick while a fill plays) |
+| a fill | `slice<n>`, `wheel` | the slice wedge shown while firing; `wheel` rot(turn since the fill's start) about (100, 80): one slice per repeat (repeat.c `turn`), continuous under TAPE STOP / SPIN UP; upright when not firing |
+| FORTUNE (green) | `stripe1`..`10` over `stripes_dim` | CHANCE 10..90 % the first 1..9; ALWAYS all; VARY 2 4 6 8 10; EVERY n: bars elapsed of the interval (`bar mod n`) x 8 / n, EVERY BAR 8; OFF none |
+| GATE (white) | `gate1`..`16`, `gate_dim1`..`16`, `lap1`..`3` | waiting: the last ge sixteenths (ge = the gate played, `rep_eff_gate`), white when this bar will fire, darkblue when not (OFF, the FX off, EVERY n off the interval's last bar, a lost roll until its gate's end line); laps: 2 bars lap1, 4 bars all. Firing: from the playhead's segment to the gate's end (it burns down; a beat roll's gate ends on its beat), the laps the bars still to come (from `grem`); the latch (ALWAYS, the manual key): the whole bar from the playhead, no laps |
+| bar phase | `playhead` | translate(280 x phase, 0); hidden when the FX is off |
+| firing | `eye_open` / `eye_shut`, `pow` | the eye opens while a fill plays; `pow` flashes 4 frames on each repeat (on throughout at fine grids) |
+| manual key held | `eye_open`, `pow` | the old lit hub: the eye open and `pow` steady (not flashing) while the green push holds the latch |
+| PITCH (orange) | `up1`..`12`, `down1`..`12`, `tapestop`, `spinup` | the knob's semitones as dots on its side (1 2 3 5 7 12); the extremes: all 12 and their mark |
+| | `snake` (`snake_grey` / `snake_up` / `snake_down`) | the variant by the knob's sign; rot(3.5 x st) about (100, 80), st = semitones reached by the current repeat (`depth` x 12, x 12.5 at the extremes), 0 when not firing |
+| readout | (C text) | a stored-knob turn shows the value ~1.5 s at (8, 7), size 2, in the knob's colour, in the design's box (12 characters reach x 152, clear of the wheel); `1/2 TOO LONG` (folded grid) at (136, 13), size 1, grey |
+| BAR k/n | (C text) | EVERY n only, white, size 1, right-aligned at x 316, y 5 (over the headdress, clear of `pow`) |
+| `--svg-cost` | (C text) | bottom right (y 132): it can touch the lap pips (x 314-317) when a gate is over a bar; development builds only |
+
+### Choices where the contract left room
+- "bars elapsed of the interval": whole bars (`bar mod n`, as the designer's previews), so EVERY n shows (n-1) x 8 / n
+  while its fill plays; EVERY BAR would always be 0 by that rule and shows 8 (every bar is due).
+- The gate shown is the gate played (`rep_eff_gate`), not the knob: under 1/2T a 6/16 gate shows 11 segments.
+- "this bar will not fire" for EVERY n: the next bar line isn't the interval's (a gate of a bar or more starts on a
+  bar line, so it's dim until it starts). A lost roll dims until the line its gate would have ended on.
+- The wheel is upright when not firing (the previews), and turns from the fill's start; the snake rests at 0.
+- `pow` "flash on each repeat": shown for 4 frames after each repeat.
+
+### Renderer
+- check_svg PASS (193 drawable elements, 214 ids); the heaviest element `ticks64` ~2377 cells, 62 % of 3840 (under
+  the build's 70 %); the whole tree ~34 k cells with everything shown (a frame hides 10 of 11 tick combs, the slices,
+  two snakes, one of each gate pair).
+- Marker: `stripes_dim` (a file without it gets the line screen).
+- `repeat_screen_check.py`: the C path with `repeat_state` forced (preview_host `REP_FORCE`) to each of the designer's
+  preview states vs the header's rules rendered by rsvg (mean |difference| 0.2-0.7), and beside the designer's own
+  PNGs (`--user DIR`, 1.6-2.5: the scale, and four states drawn in ways the device can't reach, listed in the check).
 
 ## 4. Review log
 ### Round 1, UX (a fresh subagent as a Beat Repeat producer who plays the OP-1), all must / should applied
@@ -453,10 +433,10 @@ and girdle, the eagle's breast, the haunches, the nemes bands). The rim: two pur
 
 ## 7. As built (2026-10-18: phases 0, 1, 1b, with VARY, the real TAPE STOP and the coupled tone of 2b)
 ### Files
-- `src/slot/repeat.c` (DSP), `repeat.h` (the knob maps = gen_wheel.py's, and `struct rep`, the state the screen
-  reads), `src/slot/ui_repeat.h` (the screen and the probe page, included by ui.c), `design/fx/wheel.svg` from
-  `gen_wheel.py` (now the shipped file: marker id `wheel1`, published as `content/display/wheel.svg`, build.py
-  `FX_SVGS`).
+- `src/slot/repeat.c` (DSP), `repeat.h` (the knob maps, and `struct rep`, the state the screen reads),
+  `src/slot/ui_repeat.h` (the screen and the probe page, included by ui.c), `design/fx/repeat.svg` from
+  `gen_repeat.py` (since REPEAT4; marker id `stripes_dim`, published as `content/display/repeat.svg`, build.py
+  `FX_SVGS`; before: wheel.svg, marker `wheel1`).
 - `fx.json`: `repeat`, id 12 (DB fx_types 15), default `[12288, 5120, 9216, 16384]`. build_slot.py `FX_UI_KINDS`
   repeat 5, and refuses an FX list with repeat but without pingpong (the shared lines). The FX tables grow by
   themselves: name loops 15 entries (with the aliases ens, drive), factory / ScreenId bounds 13, the range table 13
@@ -514,12 +494,11 @@ and girdle, the eagle's breast, the haunches, the nemes bands). The rim: two pur
 - What to look for on the device: LOG.md test image 88's checklist.
 
 ### Screen (phase 1b): ui_repeat.h `draw_wheel`
-- runtime_state's rules, from the DSP state while it runs (fx_live: the published knobs, so TE's LFO moves it) and
-  the stored knobs otherwise; the sword rises over 0.2 s on a won roll, the lots blink out 0.27 s on a lost one, a
-  page turns 0.27 s when a VARY repeat drew another grid. The manual key's lit hub is phase 2 (never shown yet).
-- Readout: a stored-knob turn (>= 512 raw) shows the value 1.5 s at the title position (the angel hides), never TE's
-  LFO alone; `GRID 1/4` and under it `1/2 TOO LONG` when folded.
-- Without wheel.svg (or an older one without `wheel1`): a line screen (the four values, the bar with the gate, the
+- Since REPEAT4 the rules of §3 (the user's repeat.svg). The DSP state while it runs (fx_live: the published knobs,
+  so TE's LFO moves it), the stored knobs otherwise.
+- Readout: a stored-knob turn (>= 512 raw) shows the value 1.5 s in the top-left box, never TE's LFO alone;
+  `GRID 1/4` and beside it `1/2 TOO LONG` when folded.
+- Without repeat.svg (or one without `stripes_dim`): a line screen (the four values, the bar with the gate, the
   playhead, FIRING / WAITING / LATCHED).
 
 ### Checks (all pass, 2026-10-18)
@@ -532,8 +511,8 @@ and girdle, the eagle's breast, the haunches, the nemes bands). The rim: two pur
   knobs included); pingpong hand-over exact zeros both ways, boot garbage never heard; invalid tempo / transport /
   playhead / metronome words; no DC (an input and its negation give opposite outputs: |mean| <= 0.6 LSB);
   the fold; stereo channels; cycles.
-- `fx_abi_check.py`, `fx_lfo_check.py` (repeat added), `repeat_screen_check.py` (the C path vs runtime_state: the
-  deterministic states within 0.8 mean pixel difference; readout, blink, probe, line screen, cells).
+- `fx_abi_check.py`, `fx_lfo_check.py` (repeat added), `repeat_screen_check.py` (since REPEAT4: the C path vs the
+  design's preview states, §3; the DSP running; readout, a lost roll's dim gate, probe, line screen, cells).
 - **CYCLES per call** (simulator, no SDRAM latency), mean / max over 2.5 bars, mono / stereo: idle 1.1 k / 1.4 k;
   default (one fill every 4 bars) 1.6 k / 2.2 k mean, 12.8 k / 16.7 k peak; 1/64 latched at -12 7.3 k / 11.0 k (peak
   15.5 k stereo); VARY 6.6 k / 10.1 k (15.2 k); TAPE STOP 9.2 k / 13.4 k (14.0 k); SPIN UP 7.9 k / 11.9 k (16.4 k).
@@ -555,7 +534,7 @@ bar count follow tempo changes; the wheel follows the repeats and the LFO. Two b
   2.5 bars on tape bar lines 4 and 8 (relative to tape bar 1, as intended); these checks pass on REPEAT1's code too.
   TE's own playhead getter (`FUN_01a29f58`) also reads the word as samples x 64. Likely: play started from a tape
   position other than 0 (the tape stays where it stopped), so bar 1 after play was the interval's last bar. **Now
-  shown:** `BAR k/n` (white, under the wheel's left, and on the probe and the line screen): the bar within the EVERY n
+  shown:** `BAR k/n` (white, under the wheel's left (top right since REPEAT4), and on the probe and the line screen): the bar within the EVERY n
   interval, n/n = the bar whose last beat fills.
 
 ### The manual key: the green encoder's push (REPEAT2)
@@ -575,7 +554,8 @@ bar count follow tempo changes; the wheel follows the repeats and the LFO. Two b
   arrived).
 - DSP: held = the latch (ALWAYS's path), at the next line of blue's grid (or at once within 30 ms after one), the slice
   that ended there, the pitch total after a bar; released or the screen gone for 100 blocks: dry within a crossfade.
-  It overrides FORTUNE. Screen: the hub lights green, the gate ring dims.
+  It overrides FORTUNE. Screen: the hub lights green, the gate ring dims (since REPEAT4: the sphinx's eye open and
+  `pow` steady, the whole bar white from the playhead).
 - Checks: `repeat_key_check.py` (simulator: the entries keep every register and pass 4 x 70 keys through with the same
   this, key and return value; green taken only on its own context's fresh screen; release clears and still reaches
   TE; stale screen; counters; the DSP's latch on blue's line, dry on release and on a stale screen); chord2_check (the

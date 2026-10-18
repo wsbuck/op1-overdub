@@ -1,5 +1,5 @@
 /* "repeat" FX (src/slot/fx.json): a beat repeat in the manner of Ableton Live's, on the OP-1's tempo and the tape's
- * bars. Design, maps and the screen: notes/fx-beatrepeat.md; knob maps: repeat.h (= design/fx/gen_wheel.py); FX
+ * bars. Design, maps and the screen: notes/fx-beatrepeat.md; knob maps: repeat.h; FX
  * contract: notes/fx-slot.md.
  *   blue   GRID: the slice, 1/64 .. 1/2 with triplets (repeat.h rep_grid_at)
  *   green  FORTUNE: when it fires: ALWAYS (the latch, hard left), OFF, EVERY 8 / 4 / 2 BARS, CHANCE 10 .. 90 % per

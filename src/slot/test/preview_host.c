@@ -8,6 +8,7 @@
 #include "pingpong.h"
 #include "crush.h"
 #include "fxpub.h"
+#include "repeat.h"
 #include "drumprobe.h"
 #include "fmdrum.h"
 #include "fmdrum_tables.h"
@@ -247,7 +248,9 @@ struct pp pingpong_state[2];
  * of a 441 Hz sine before each frame, on TE's words as the device has them: the tape playing from position 0 at REP_BPM
  * (default 120) or, REP_TAPE=0, stopped (the metronome's countdown); REP_SHIFT=1 holds SHIFT (the probe page);
  * REP_TURN=frame:knob:value turns a stored knob before that frame (the readout). With
- * FX_OFF=n the FX stops running for the last n frames (the screen's FX-off look; the clock stays where it was). */
+ * FX_OFF=n the FX stops running for the last n frames (the screen's FX-off look; the clock stays where it was).
+ * REP_FORCE="active=1,rep=3,ph=690,..." skips the DSP and sets repeat_state directly every frame (the clock at REP_BPM;
+ * ph and grem in 1/1000 bar; the other fields as in struct rep): the design's preview states, exactly. */
 int16_t pingpong_ram[3 * 65536];
 uint32_t fx_line_owner[2];
 volatile int32_t te_tempo_spb, te_tape_state, te_metro_count, te_play_slot, te_ppqn_tick;
@@ -260,6 +263,7 @@ int te_master_press(void *self, int key) { (void)self; (void)key; return 0; }
 int te_master_release(void *self, int key) { (void)self; (void)key; return 0; }
 uint8_t host_shift;
 int32_t host_tape_speed = 0x08000000;
+extern struct fx_pub repeat_pub[2];
 void repeat_mono(void *self, int16_t *buf, const int16_t *p);
 void repeat_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
 static uint64_t rep_t;                      /* samples run */
@@ -276,6 +280,39 @@ static void repeat_frame(int i, int frames, int stereo)
     if (off && i >= frames - off)
         return;
     int32_t spb = (int32_t)(2646000.0f / bpm * 16384.0f);
+    const char *force = getenv("REP_FORCE");
+    if (force) {
+        struct rep *q = &repeat_state[stereo];
+        char buf[256], *t;
+        q->spb = spb;
+        q->bar8 = (uint32_t)(((int64_t)spb * 4) >> 6);
+        q->lock = RL_TAPE;
+        q->clocked = 1;
+        snprintf(buf, sizeof buf, "%s", force);
+        for (t = strtok(buf, ","); t; t = strtok(0, ",")) {
+            char *e = strchr(t, '=');
+            if (!e)
+                continue;
+            *e++ = 0;
+            long v = strtol(e, 0, 0);
+            if (!strcmp(t, "active")) q->active = (uint8_t)v;
+            else if (!strcmp(t, "hold")) q->hold = (uint8_t)v;
+            else if (!strcmp(t, "key")) q->key = (uint8_t)v;
+            else if (!strcmp(t, "kind")) q->kind = (uint8_t)v;
+            else if (!strcmp(t, "grid")) q->grid = (uint8_t)v;
+            else if (!strcmp(t, "blue")) q->blue = (uint8_t)v;
+            else if (!strcmp(t, "rep")) q->rep = (int16_t)v;
+            else if (!strcmp(t, "depth")) q->depth = (int16_t)v;
+            else if (!strcmp(t, "bar")) q->bar = (uint32_t)v;
+            else if (!strcmp(t, "lost")) q->lost = (uint32_t)v;
+            else if (!strcmp(t, "turn")) q->turn = (uint32_t)v;
+            else if (!strcmp(t, "ph")) q->ph8 = (uint32_t)((uint64_t)q->bar8 * (uint64_t)v / 1000);
+            else if (!strcmp(t, "grem")) q->grem = (int32_t)((uint64_t)q->bar8 * (uint64_t)v / 1000);
+        }
+        q->vpos = q->bar * q->bar8 + q->ph8;
+        fx_publish(&repeat_pub[stereo], fx_params());
+        return;
+    }
     while (rep_t < (uint64_t)(i + 1) * 1470) {
         int16_t l[64], r[64];
         for (int j = 0; j < 64; j++, rep_ph += 42949673u) {          /* 441 Hz */
