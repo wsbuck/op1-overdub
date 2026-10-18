@@ -1784,4 +1784,50 @@
   12. **LFO** (T4, element, target FX) on each knob: the sound and the wheel follow; no readout from the LFO alone.
   13. **pingpong after repeat** on the same sound (and back): no garbage, the echo starts clean.
   14. `--svg-cost` on the repeat screen at rest and while it fires; FX off: dim gate, lots and sword down.
+- Result (2026-10-18, user): repeat is in the FX list; the probe shows the right clock (TAPE while rolling, METRO
+  stopped); BPM and bar count follow tempo changes; the wheel follows the repeats and the LFO. **With the tape stopped
+  no fill ever fired** (TE's tape-follow metronome holds its countdown; fixed in REPEAT2). **"The fill lands one bar
+  early"** (EVERY 4 and EVERY 2 both on beat 4 of the first bar after play): not reproduced in the simulator from tape
+  position 0; most likely play started where the tape had stopped; REPEAT2 shows `BAR k/n`. notes/fx-beatrepeat.md §8.
+
+## 2026-10-18 — Test image 89: REPEAT2.OP1 (repeat: the stopped clock fixed, BAR k/n, the green encoder push as the manual key, the new figures)
+- Changes since REPEAT1 (notes/fx-beatrepeat.md §8):
+  - the stopped clock runs free at the tempo when TE's metronome holds its countdown (tape-follow): fills fire with
+    the tape stopped (probe `CLOCK FREE`; `CLOCK METRO` when the countdown runs);
+  - `BAR k/n` (white, under the wheel's left; also on the probe): the bar within the EVERY n interval, n/n = the bar
+    whose last beat fills, counted from tape position 0;
+  - **the manual key: hold the green encoder's push** on the repeat FX screen (synth, drum or master): the repeat
+    latches on blue's next grid line (the slice just heard), the hub lights green; let go: dry. New hooks on the drum
+    and mixer controllers' press / release slots (and the synth's through CHORD v2's); every other key goes to TE.
+    Whether the OP-1's encoders have push switches is unproven: the probe's KEYS line counts what arrives;
+  - the screen's figures redrawn by the art agent (79c2247): ~126 elements drawn per frame (~21 k cells, ~12 k
+    before).
+- `firmware/images/REPEAT2.OP1`:
+  - Command: REPEAT1's (`build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum,metal
+    --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+    --db-trim harmonic=6 --db-trim fm4=6 --svg-cost --name REPEAT2`), all FX.
+  - Built from commit fbb406f in a clean `git archive`; loopcc scan clean; SVGs pass check_svg and svg_cells;
+    te-boot identical to stock (f6233b974bdb6c92).
+  - sha256 c2e7d3cef5b7376b491771759d34a0fc0d81cdb7d83d80f7d169ceef2e148456.
+- Host / sim checks: repeat_check (317 runs, the held-metronome cases fail on REPEAT1's code), repeat_key_check,
+  repeat_screen_check, fx_abi_check, fx_lfo_check, chord2_check, hold_check, loopcc_check.
+- **Before flashing:** keep **26 or fewer saved drum sounds**.
+- Retest (put repeat on a synth sound's FX, T3):
+  1. **Green encoder push first.** Hold SHIFT on the repeat screen and read the last line, `KEYS P n R n LAST xx S|D|M
+     TAKEN n`. Let go of SHIFT, press and hold each encoder once (blue, green, white, orange), then SHIFT again:
+     - P / R count up: the encoders push and reach the controller. LAST is the last one pressed (green expected 3C;
+       report the four codes if not). If P stays 0: no push switches (or they don't reach this path): the key can't
+       work, report it.
+     - With the tape playing, hold green: the repeat starts on blue's next grid line, the hub lights green, the gate ring
+       dims; let go: dry at once. TAKEN counts. Try 1/16 and 1/4, and with PITCH -7.
+     - The same on a drum sound's FX and on the master FX (mixer, T3). Anywhere else (other screens, other FX), green's
+       push must do whatever it did before (nothing, as far as we know).
+  2. **Tape stopped**: fills now fire (EVERY BAR is quickest); the probe says `CLOCK FREE` or `CLOCK METRO`.
+     Report which, and whether the metronome clicks while stopped.
+  3. **Bar phase**: rewind the tape to the start, EVERY 4 BARS, play: `BAR 1/4` .. `BAR 4/4` under the wheel, the fill
+     in bar 4's last beat. Then play from the middle of the tape: the fill comes where `BAR 4/4` is, which can be the
+     first bar heard. Report what the probe's TAPE BAR / BEAT says at the tape's start.
+  4. **The new figures**: readable? Report `--svg-cost` (bottom right) on the repeat screen at rest, while it fires and
+     while TAPE STOP turns the wheel (~126 elements now).
+  5. Quick repeat of REPEAT1's 7..13.
 - Result: _pending user flash_.
