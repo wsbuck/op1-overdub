@@ -184,7 +184,8 @@ notes/seq-chord.md "CHORD1 as built" and notes/hold.md. Feature bit `FEAT_CHORD`
     - Labels are white on the edited or sounding key, grey otherwise.
     - Sounding keys are filled dark blue in their visible shape. The edited key has a 2-px white outline that follows
       its notched shape.
-  - SHIFT held: the name and ruler area shows the map's four settings in knob colours (label grey, value step 1.5).
+  - SHIFT held: the name and ruler area shows the map's four settings in knob colours (label grey, value step 1.5);
+    the diagnostic lines under them only in `--debug-ui` builds (below).
 - **Colours:** blue / green / white / orange = the four knobs only. Red = HOLD, LEARN, overwrite. White = edited and
   confirmations. Dark / light blue = sounding. TE's "orange" renders coral, so it is never used for warnings (UI review).
 - **Learn:** the name, ruler marks and a boxed LEARN tag in red, followed by the target key.
@@ -469,6 +470,10 @@ three knobs stay for precision.
 - Re-voicing a sounding key (knob audition) goes through the same budget.
 
 ### Diagnostics (page, SHIFT held): what the morning test reads
+- Compiled only into `--debug-ui` builds (build.py, `UI_DEBUG` in ui_chord2.h `c2u_diag_lines`, since 2026-10-20):
+  normal and test images draw just the settings with SHIFT held; build a probe with `--debug-ui` to read these. The
+  engine keeps its counters (`c2.dg`) either way. Host: `chord2_screens.py` renders the SHIFT scenes from both builds
+  (`*_debug` cards) and checks the lines appear only with `UI_DEBUG`.
 - Line 1: `HOOK F:<frames> K:<knob turns> D:<last raw delta> SP:<SPLIT> LI:<LIFT> DR:<DROP> UP:<SHIFT releases>
   DN:<SHIFT presses> CT|CT0`.
 - Line 2: `FILE <-|NONE|A|B|BAD> L:<load tries> <seq> SAVE <count> <-|OK|OPEN|WRITE|CLOSE|TORN> MK:<mkdir> VOX <voices>
@@ -526,7 +531,7 @@ three knobs stay for precision.
   - TOP / VOICING bigger when turned;
   - the scan strip replaces the green underline (grey ticks, family starts taller);
   - labels shrink to fit black keys;
-  - the diagnostic lines in a 96-byte buffer, grey, shrink to fit;
+  - the diagnostic lines (`--debug-ui` only) in a 96-byte buffer, grey, shrink to fit;
   - long messages shrink so they stay clear of the ruler;
   - SHAPE header blue, its chord tones as ruler-style marks instead of the "sounding" fill;
   - red outside a learn is always boxed; BASS OFF grey; no underline on the B;

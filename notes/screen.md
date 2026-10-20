@@ -27,6 +27,16 @@ Spot-checked items are marked **Verified**; the rest is Confirmed/Hypothesis as 
 - Retained alternatives (phase 2): find node `FUN_01a3b580`, set transform `FUN_019ead58`, text nodes `FUN_01a3b5d0` + `FUN_01a61aac`, render `FUN_01a3b4c8`; an own `.svg` would need a new tar member in `content/display/`.
 - GCC's call layout matches (args 4+ at `[SP+12]`, `[SP+16]`) — **Verified** by compiling a 5-argument call.
 
+## Diagnostic builds (build.py flags; ui.c only)
+- `--debug-ui` (`UI_DEBUG`): every on-device diagnostic overlay and page: the PROF1 profiler lines on our engine
+  screens (ui.c `diagnostics`), the knob hook's raw delta on harm / fm4 (ui_hookdiag.h), CHORD's SHIFT diagnostic lines
+  (chord2.md "Diagnostics"), repeat's SHIFT probe page (fx-beatrepeat.md "Probe"), space's SHIFT CPU page (ui_space.h).
+- `--svg-cost` (`SVG_COST`): only the SVG render cost in kilocycles, bottom right (ui.c `svg_cost`).
+- Without them (since 2026-10-20) none of this is compiled: SHIFT on those screens does what the normal UI does, no
+  stray text, ui.o ~5.6 KB smaller. Test images are built without `--svg-cost` / `--debug-ui` unless a probe needs
+  one. The probe engines' screens (drum probe, inprobe, sprobe: test engines) are their own and always drawn. The DSP
+  keeps its counters (built without these flags). loopcc_check.py compiles ui.c with each flag.
+
 ## Hook (SCREEN1)
 - `--pointer 0x01910418 = 0x019B9EA4 → _ui_update` (slot.S): for engines < 15 `JUMP.L 0x019B9EA4` with R0/R1 untouched; for ours save loop/L registers and call `ui_draw(engine, slot)` (`src/slot/ui.c`). iter's dials are not drawn for our engines.
 

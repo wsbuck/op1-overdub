@@ -284,7 +284,7 @@ the readout box top left (0..130 x 0..20).
 | | `snake` (`snake_grey` / `snake_up` / `snake_down`) | the variant by the knob's sign; rot(3.5 x st) about (100, 80), st = semitones reached by the current repeat (`depth` x 12, x 12.5 at the extremes), 0 when not firing |
 | readout | (C text) | a stored-knob turn shows the value ~1.5 s at (8, 7), size 2, in the knob's colour, in the design's box (12 characters reach x 152, clear of the wheel); `1/2 TOO LONG` (folded grid) at (136, 13), size 1, grey |
 | BAR k/n | (C text) | EVERY n only, white, size 1, right-aligned at x 316, y 5 (over the headdress, clear of `pow`) |
-| `--svg-cost` | (C text) | bottom right (y 132): it can touch the lap pips (x 314-317) when a gate is over a bar; development builds only |
+| `--svg-cost` | (C text) | bottom right (y 132): it can touch the lap pips (x 314-317) when a gate is over a bar; `--svg-cost` builds only (not test images unless a probe needs it) |
 
 ### Choices where the contract left room
 - "bars elapsed of the interval": whole bars (`bar mod n`, as the designer's previews), so EVERY n shows (n-1) x 8 / n
@@ -434,7 +434,7 @@ and girdle, the eagle's breast, the haunches, the nemes bands). The rim: two pur
 ## 7. As built (2026-10-18: phases 0, 1, 1b, with VARY, the real TAPE STOP and the coupled tone of 2b)
 ### Files
 - `src/slot/repeat.c` (DSP), `repeat.h` (the knob maps, and `struct rep`, the state the screen reads),
-  `src/slot/ui_repeat.h` (the screen and the probe page, included by ui.c), `design/fx/repeat.svg` from
+  `src/slot/ui_repeat.h` (the screen and the probe page, the page in `--debug-ui` builds only; included by ui.c), `design/fx/repeat.svg` from
   `gen_repeat.py` (since REPEAT4; marker id `stripes_dim`, published as `content/display/repeat.svg`, build.py
   `FX_SVGS`; before: wheel.svg, marker `wheel1`).
 - `fx.json`: `repeat`, id 12 (DB fx_types 15), default `[12288, 5120, 9216, 16384]`. build_slot.py `FX_UI_KINDS`
@@ -487,6 +487,10 @@ and girdle, the eagle's breast, the haunches, the nemes bands). The rim: two pur
   full).
 
 ### Probe (phase 0): SHIFT held on the repeat screen
+- `--debug-ui` builds only (ui_repeat.h `wh_probe` under `UI_DEBUG`, since 2026-10-20): in normal and test images
+  SHIFT changes nothing on the repeat screen. repeat_screen_check.py renders the page from a `-DUI_DEBUG` preview and
+  checks the normal build draws the screen unchanged with SHIFT held. The DSP's counters (`fires`, `lost`, `rep_key`)
+  stay.
 - Lines: `TAPE <state> <name> POS <playhead / 64>`; `TAPE BAR n BEAT b.cc` (from the playhead and the tempo, 4/4
   from 0); `SPB <samples per beat> <BPM>`; `METRO <countdown samples> TICK <0x018C1884>`; `SPEED <word / 0x08000000>
   = HEX <word>` (0xFF802968); `OURS BAR n BEAT b CLOCK TAPE|METRO [IDLE]` (repeat's clock, IDLE = the FX not

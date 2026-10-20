@@ -2,11 +2,15 @@
  * user can report TE's delta per detent and its acceleration (notes/knob-hook.md): "D<last delta> M<smallest |delta|
  * since boot>". Nothing until the first hook call. For inclusion after ui.c's primitives (text_fast, FP).
  * HOOK_DIAG: the hook's record (knobhook.c knobhook_diag; weak in ui.c, so 0 in builds without the hook).
+ * --debug-ui builds (UI_DEBUG) only: otherwise hook_delta_diag draws nothing (compiled out; the hook still records).
  */
 #ifndef UI_HOOKDIAG_H
 #define UI_HOOKDIAG_H
 #include "sprobe.h"
 
+#ifndef UI_DEBUG
+#define hook_delta_diag(r, x, y, right) ((void)0)
+#else
 #ifndef HOOK_DIAG
 #define HOOK_DIAG (&knobhook_diag)
 #endif
@@ -49,5 +53,6 @@ static void hook_delta_diag(void *r, fp32 x, fp32 y, int right)
     p = hd_num(p, d->dmin);
     text_fast(r, buf, right ? x - (fp32)(p - buf) * FP(6) : x, y, FP(1), GREY);
 }
+#endif
 
 #endif

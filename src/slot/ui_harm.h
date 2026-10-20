@@ -254,7 +254,7 @@ static void draw_harm(void *r, const int16_t *k, struct harm_ui *u)
             hu_bar(r, x, x + FP(2), base - FP(HU_STEP * lvl), base, j < 2 ? GREEN : DARKGREEN);
         }
     }
-    hook_delta_diag(r, FP(8), FP(32), 0);   /* TE's raw encoder delta, under the readout */
+    hook_delta_diag(r, FP(8), FP(32), 0);   /* TE's raw encoder delta, under the readout (--debug-ui only) */
 }
 
 #endif

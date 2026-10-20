@@ -1546,14 +1546,18 @@ static void set_vscale(void *node, int32_t sy, int32_t cy10)
     set_matrix(node, 1024, 0, 0, sy, 0, cy10 - ((sy * cy10) >> 10));
 }
 
-/* Render a document; svg_cost() (--svg-cost builds) then shows the kilocycles since the render started (render +
- * whatever overlay was drawn in between), right-aligned in the bottom corner. */
+/* Render a document; svg_cost() (--svg-cost builds only: SVG_COST; nothing otherwise) then shows the kilocycles since
+ * the render started (render + whatever overlay was drawn in between), right-aligned in the bottom corner. */
+#ifdef SVG_COST
 static uint32_t svg_t0 RAM = 0;
+#endif
 
 static void svg_render(void *doc)
 {
     struct { void *doc; } screen = { doc };
+#ifdef SVG_COST
     svg_t0 = cycles();
+#endif
     te_svg_render(&screen);
 }
 

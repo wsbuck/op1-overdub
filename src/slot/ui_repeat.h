@@ -3,9 +3,10 @@
  * followed here). Included by ui.c after its SVG helpers. Inputs: the knobs the FX used (fx_live: TE's LFO moves them),
  * the DSP's state (repeat_state: the grid played, the repeat, the depth, the wheel's turn, the bar clock, the gate
  * left, won and lost rolls) and the frame counter (30 fps). Knob turns (stored knobs, >= 512 raw) show the value
- * ~1.5 s in the design's top-left box in the knob's colour. While SHIFT is held: the bar-clock probe page instead
- * (TE's transport, playhead, tempo, metronome and sequencer words, and repeat's own clock; notes/fx-beatrepeat.md
- * "Probe"). Without repeat.svg (or one without the marker `stripes_dim`): a line screen. */
+ * ~1.5 s in the design's top-left box in the knob's colour. In --debug-ui builds (UI_DEBUG) only, while SHIFT is held:
+ * the bar-clock probe page instead (TE's transport, playhead, tempo, metronome and sequencer words, and repeat's own
+ * clock; notes/fx-beatrepeat.md "Probe"); otherwise SHIFT changes nothing here. Without repeat.svg (or one without
+ * the marker `stripes_dim`): a line screen. */
 #include "repeat.h"
 
 extern volatile int32_t te_tape_state __attribute__((weak));     /* 0xFF802960 (build_slot.py TE_UI) */
@@ -151,18 +152,6 @@ static void wh_readout(char *p, int knob, const int16_t *k, const struct rep *st
     }
 }
 
-/* SHIFT held: the probe page. TE's words as read now, and the DSP's clock. */
-static char *wh_frac2(char *p, uint32_t v100)       /* v / 100 with two decimals */
-{
-    uint32_t w = udiv(v100, 100), f = v100 - 100 * w;
-    p = put_dec(p, w);
-    *p++ = '.';
-    *p++ = (char)('0' + udiv(f, 10));
-    *p++ = (char)('0' + f - 10 * udiv(f, 10));
-    *p = 0;
-    return p;
-}
-
 /* "BAR k/n": where the clock's bar stands in the EVERY n interval (n / n: the bar whose last beat fills); 0 otherwise */
 static char *wh_bar_in(char *p, const int16_t *k, const struct rep *st)
 {
@@ -174,6 +163,19 @@ static char *wh_bar_in(char *p, const int16_t *k, const struct rep *st)
     p = put_dec(p, (st->bar & (n - 1)) + 1);
     *p++ = '/';
     return put_dec(p, n);
+}
+
+#ifdef UI_DEBUG
+/* SHIFT held (--debug-ui builds): the probe page. TE's words as read now, and the DSP's clock. */
+static char *wh_frac2(char *p, uint32_t v100)       /* v / 100 with two decimals */
+{
+    uint32_t w = udiv(v100, 100), f = v100 - 100 * w;
+    p = put_dec(p, w);
+    *p++ = '.';
+    *p++ = (char)('0' + udiv(f, 10));
+    *p++ = (char)('0' + f - 10 * udiv(f, 10));
+    *p = 0;
+    return p;
 }
 
 static void wh_probe(void *r, const int16_t *k, const struct rep *st, int running)
@@ -284,6 +286,8 @@ static void wh_probe(void *r, const int16_t *k, const struct rep *st, int runnin
     }
 }
 
+#endif
+
 /* The line screen (no repeat.svg): the values, the bar as a line with the gate lit, the playhead. */
 static void draw_repeat_lines(void *r, const int16_t *k, const struct rep *st, int nokey)
 {
@@ -344,10 +348,12 @@ static void draw_wheel(void *r, const int16_t *k, const int16_t *stored, int run
         rep_key.screen_ctl = (uint8_t)(mode == 3 ? RK_MASTER : mode == 1 ? RK_DRUM : RK_SYNTH);
         rep_key.screen_seen = &te_blocks ? te_blocks : 0;
     }
+#ifdef UI_DEBUG
     if (WH_SHIFT) {
         wh_probe(r, k, st, running);
         return;
     }
+#endif
     if (!wheel_ready()) {
         draw_repeat_lines(r, k, running ? st : 0, nokey);
         return;

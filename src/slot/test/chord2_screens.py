@@ -7,6 +7,10 @@ Builds test/chord2_screens.c natively (the engine driven through its hooks sets 
 (the frame hook's page rules), then draws every scene at the device's scale: SVG 320 x 160 -> panel x1.175, x3 for
 viewing, black, the unseen bottom (y > 142) shaded; fast (1-px) lines one panel pixel wide. Fails if anything but the
 black backing leaves the safe area (x 4..316, y 2..140) or a scene draws more than 120 AA segments.
+The SHIFT layer's diagnostic lines (HOOK / FILE / LEARN / SEQ) are compiled only into --debug-ui builds (UI_DEBUG):
+the gallery is the normal build, plus the SHIFT scenes again from a -DUI_DEBUG build (<scene>_debug). Checked: every
+other scene draws the same in both builds; a SHIFT scene in the debug build draws the normal one plus the diagnostic
+lines (y 41..64), and in the normal build nothing at all in that band.
 Writes OUTDIR/<scene>.png and OUTDIR/index.html.
 """
 import html
@@ -14,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 
 from PIL import Image, ImageDraw
 
@@ -43,8 +48,9 @@ CAPTIONS = {
     "learned_wide": ("Learned wide C3 G3 E4", "The quality name (C), PLAYED 2 OCT as the VOICING centre."),
     "type_wide": ("TYPE: the WIDE group", "Left of NOTE: P8, M10, m10, m7, M7, P12, M9, M13, TT."),
     "map_wide": ("A map of intervals", "The interval tags on the keys."),
-    "strum_shift": ("SHIFT layer: STRUM, SMOOTH", "STRUM up 30 ms, SMOOTH on; the SEQ diagnostic line (tick rate, gap, "
-                    "who sends the notes, sent, forced, takeovers, SMOOTH resets)."),
+    "strum_shift": ("SHIFT layer: STRUM, SMOOTH", "STRUM up 30 ms, SMOOTH on; in --debug-ui builds (strum_shift_debug) "
+                    "the SEQ diagnostic line (tick rate, gap, who sends the notes, sent, forced, takeovers, SMOOTH "
+                    "resets)."),
     "strum_header": ("Header", "Strum down, SM, B, HOLD."),
     "smooth_anchor": ("SMOOTH anchor", "White turned with SMOOTH on: from the TOP that sounded, the chord anchored "
                       "(padlock): SMOOTH plays this TOP exactly and leads on from it."),
@@ -66,7 +72,11 @@ CAPTIONS = {
     "learned_slash": ("Slash kept", "B D G learned on C4 = G/B; TYPE turned keeps the B in the bass."),
     "map_shift": ("SHIFT layer + diagnostics", "MODE (SHIFT+blue), BASS (SHIFT+orange); the two diagnostic lines the "
                   "morning test reads (frame hook, knobs, keys, file, voices) and the LEARN line (starts, written, "
-                  "cancelled, blocked, the last end reason, the last combo key); SHIFT+] FACTORY in the header."),
+                  "cancelled, blocked, the last end reason, the last combo key), in --debug-ui builds only (map_shift_debug); "
+                  "SHIFT+] FACTORY in the header."),
+    "map_shift_debug": ("SHIFT layer, --debug-ui build", "map_shift with UI_DEBUG: the HOOK, FILE and LEARN lines "
+                        "under the settings (normal builds draw none)."),
+    "strum_shift_debug": ("SHIFT layer, --debug-ui build", "strum_shift with UI_DEBUG: the SEQ line (STRUM's tick)."),
     "cleared": ("Cleared", "SPLIT + A4 cleared it; SHIFT+LIFT undoes."),
     "map_251": ("Factory II-V-I", "ii-V-I in F, Bb, Eb, C on groups of three white keys; D D# E = the minor ii-V-i."),
     "map_neo": ("Factory NEO SOUL", "m9 / maj9 / 13 colours, flat roots on the black keys; BASS and HOLD on."),
@@ -96,18 +106,51 @@ def draw(stdout):
     return img, segs
 
 
+SHIFT_SCENES = ("map_shift", "strum_shift")   # SHIFT held: the settings, and the diagnostics in --debug-ui builds
+DIAG_BAND = (40 * 1024, 65 * 1024)            # the diagnostic lines' rows (y 41..64), between the settings and keys
+
+
+def segments(exe, name):
+    out = subprocess.run([exe, name], check=True, capture_output=True, text=True).stdout
+    return [tuple(int(v) for v in s.split()) for s in out.split("\n") if s]
+
+
+def debug_checks(exe, dbg, names):
+    """The diagnostics only with UI_DEBUG: other scenes identical, SHIFT scenes = normal + the diagnostic band."""
+    bad = []
+    for name in names:
+        n, d = segments(exe, name), segments(dbg, name)
+        if name not in SHIFT_SCENES:
+            if n != d:
+                bad.append(f"{name}: draws differently with -DUI_DEBUG (only the SHIFT layer may)")
+            continue
+        extra = Counter(d) - Counter(n)
+        in_band = all(DIAG_BAND[0] <= min(s[1], s[3]) and max(s[1], s[3]) <= DIAG_BAND[1] for s in extra)
+        if Counter(n) - Counter(d) or len(extra) < 100 or not in_band:
+            bad.append(f"{name}: -DUI_DEBUG should add only the diagnostic lines ({len(extra)} segments, in band "
+                       f"{in_band})")
+        stray = [s for s in n if s[5] != 1 and DIAG_BAND[0] <= min(s[1], s[3]) <= DIAG_BAND[1]]   # (1: the backing)
+        if stray:
+            bad.append(f"{name}: the normal build draws {len(stray)} segments in the diagnostic band")
+        print(f"{name}: normal {len(n)} segments, nothing in y 40..65; --debug-ui adds {len(extra)} (the diagnostics)")
+    return bad
+
+
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "chord2_screens"
     os.makedirs(out, exist_ok=True)
-    exe = os.path.join(tempfile.mkdtemp(), "chord2_screens")
-    subprocess.run(["cc", "-std=gnu99", "-O1", "-Wall", "-Wextra", "-Werror", "-I", SLOT,
-                    os.path.join(HERE, "chord2_screens.c"), "-o", exe], check=True)
+    tmp = tempfile.mkdtemp()
+    exe, dbg = os.path.join(tmp, "chord2_screens"), os.path.join(tmp, "chord2_screens_debug")
+    for path, defs in ((exe, []), (dbg, ["-DUI_DEBUG"])):
+        subprocess.run(["cc", "-std=gnu99", "-O1", "-Wall", "-Wextra", "-Werror", "-I", SLOT] + defs +
+                       [os.path.join(HERE, "chord2_screens.c"), "-o", path], check=True)
     chk = subprocess.run([exe, "check"], capture_output=True, text=True)
     print(chk.stdout.strip())
     names = subprocess.run([exe, "list"], check=True, capture_output=True, text=True).stdout.split()
     cards, bad = [], []
-    for name in names:
-        res = subprocess.run([exe, name], check=True, capture_output=True, text=True)
+    for name in names + [n + "_debug" for n in SHIFT_SCENES]:
+        run = [dbg, name[:-6]] if name.endswith("_debug") else [exe, name]
+        res = subprocess.run(run, check=True, capture_output=True, text=True)
         img, segs = draw(res.stdout)
         img.save(os.path.join(out, name + ".png"))
         cost = res.stderr.strip()
@@ -125,6 +168,7 @@ def main():
         title, text = CAPTIONS.get(name, (name, ""))
         cards.append(f'<figure><img src="{name}.png" alt="{html.escape(title)}"><figcaption><b>{html.escape(title)}</b>'
                      f' <span class="cost">{html.escape(cost)}</span><br>{html.escape(text)}</figcaption></figure>')
+    bad += debug_checks(exe, dbg, names)
     for b in bad[:20]:
         print("BAD", b)
     page = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">

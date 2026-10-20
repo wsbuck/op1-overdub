@@ -59,7 +59,8 @@ an encoder hook that writes packed values into the knob array, which TE then sto
   is no longer the sub level's fine adjust. Device check: SHIFT + orange reaches the hook as knob 7.
 - TE's delta per detent is still unknown: `hook_steps.h` makes every call with a nonzero delta at least one step, and
   more (powers of two, capped per control) when |delta| is a multiple of the smallest |delta| seen since boot. The
-  harm and fm4 screens show `D<last raw delta> M<smallest>` (grey) once the hook has run, for the user to report.
+  harm and fm4 screens show `D<last raw delta> M<smallest>` (grey) once the hook has run, for the user to report
+  (`--debug-ui` builds only since 2026-10-20; the hook still records `knobhook_diag`, and `dmin` drives the steps).
 
 ## The probe (sprobe, test engine)
 - Row: type 3 on all 8 knobs; 0..32767 for 0..5, -32768..32767 for 6..7.

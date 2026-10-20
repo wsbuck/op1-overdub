@@ -59,12 +59,17 @@ def main():
     ap.add_argument("--fx", help="comma-separated FX names from src/slot/fx.json (default: all; '' for none)")
     ap.add_argument("--no-hold", action="store_true", help="leave out HOLD (SHIFT+T2) and CHORD")
     ap.add_argument("--no-chord", action="store_true", help="leave out CHORD")
-    ap.add_argument("--svg-cost", action="store_true", help="show the screen render cost on the FX screens (development)")
+    ap.add_argument("--svg-cost", action="store_true",
+                    help="show the SVG render cost (kilocycles) bottom right on the SVG screens (development; off in "
+                    "test images unless a probe needs it)")
     ap.add_argument("--test-card", action="store_true",
                     help="crush screen: show the SVG test card (crushcard.svg) for ~12 s on its first open (diagnostics)")
     ap.add_argument("--staged-screens", action="store_true",
                     help="bring the crush screen up layer by layer on its first open, labelled (device diagnosis)")
-    ap.add_argument("--debug-ui", action="store_true", help="show profiler lines on the engine screens (development)")
+    ap.add_argument("--debug-ui", action="store_true",
+                    help="compile in the on-device diagnostics (UI_DEBUG): profiler lines on our engine screens, the "
+                    "knob hook's raw delta on harm / fm4, CHORD's SHIFT diagnostic lines, repeat's and space's SHIFT "
+                    "pages (development; off in test images unless a probe needs them)")
     ap.add_argument("--space-tank", type=int, choices=(44, 22), default=44,
                     help="the space FX's master tank rate in kHz: 44 (44.1) or 22 (22.05); synth / drum always 22.05")
     ap.add_argument("--db-trim", action="append", default=[], metavar="FOLDER=N",

@@ -12,7 +12,8 @@
 2. The DSP running (repeat.c from tape position 0 at 120 BPM, the master FX, 30 fps): a fill, SPIN UP, the manual key
    (forced), shown.
 3. The C path only: the readout after a stored-knob turn (and not from the LFO alone), a lost roll dims the gate, the
-   probe page with SHIFT, the line screen without repeat.svg, the stopped tape (the metronome clock), SVG cells.
+   probe page with SHIFT (a -DUI_DEBUG build: the page is compiled only into --debug-ui builds; in a normal build SHIFT
+   draws the screen unchanged), the line screen without repeat.svg, the stopped tape (the metronome clock), SVG cells.
 Writes the C renders, side-by-side PNGs, all.png and index.html to OUTDIR.
 """
 import math
@@ -288,8 +289,14 @@ def main():
     wa = (np.asarray(a, int)[band].min(axis=2) > 245).sum()
     wb = (np.asarray(b, int)[band].min(axis=2) > 245).sum()
     check(wa > 200 and wb < 40, f"a lost roll dims the gate (pure white ground pixels {wa} before the roll, {wb} just after)")
-    n_p, _ = c_render(cdir, "probe", D, 60, REP_SHIFT=1)
-    check(n_p > 300, f"SHIFT held: the probe page ({n_p} line segments, TE's words and repeat's clock)")
+    dbg = (os.environ.get("PREVIEW_DEFS", "") + " -DUI_DEBUG").strip()
+    n_p, _ = c_render(cdir, "probe", D, 60, REP_SHIFT=1, PREVIEW_DEFS=dbg)
+    check(n_p > 300, f"--debug-ui, SHIFT held: the probe page ({n_p} line segments, TE's words and repeat's clock)")
+    n_s, a = c_render(cdir, "shift_normal", D, 60, REP_SHIFT=1)
+    n_q, b = c_render(cdir, "noshift60", D, 60)
+    same = n_s == n_q and not np.abs(np.asarray(a, int) - np.asarray(b, int)).any()
+    check(same, f"normal build, SHIFT held: no probe page, the screen as without SHIFT ({n_s} = {n_q} line segments, "
+          f"same pixels)")
     c_render(cdir, "stopped", (12, 19, 9, 16), 75, REP_TAPE=0)
     check(True, "tape stopped: the metronome clock drives the screen (stopped.png)")
     n_l = subprocess.run([sys.executable, os.path.join(HERE, "preview.py"), cdir, "112"] + [str(v * 1024) for v in D],
@@ -323,7 +330,7 @@ def main():
                       ("lost_before", "CHANCE 30 %, gate 4/16: before a roll"),
                       ("lost_on", "just after a lost roll: the gate dims for the rest of the beat"),
                       ("stopped", "tape stopped, EVERY BAR: the metronome clock"),
-                      ("probe", "SHIFT held: the probe page"), ("lines", "without repeat.svg: the line screen")):
+                      ("probe", "--debug-ui, SHIFT held: the probe page"), ("lines", "without repeat.svg: the line screen")):
         html.append(f"<div class=c><img src=c/{name}.png width=600><p><code>{name}</code> {cap}</p></div>")
     open(os.path.join(out, "index.html"), "w").write("\n".join(html))
     print(f"\ngallery: {out}/index.html, side by side: {out}/all.png")

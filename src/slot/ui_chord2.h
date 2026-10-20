@@ -13,7 +13,8 @@
  *              sounding dark blue. The notes view (a chord knob turning and ~1 s after, a learn, SHAPE): the edited
  *              chord's notes lit and named instead (root blue, top white, others light blue; a learn red), notes off
  *              the keyboard as an arrow at that edge (+ count)
- * SHIFT held: the map's settings on the knobs and the diagnostic lines (the morning test reads them).
+ * SHIFT held: the map's settings on the knobs; in --debug-ui builds (UI_DEBUG) also the diagnostic lines (HOOK,
+ *              FILE, LEARN, SEQ: what a device test reads), compiled out otherwise.
  * Colours: blue / green / white / orange = the four knobs; red = HOLD, LEARN; white = edited / confirmations;
  * dark / light blue = sounding.
  */
@@ -121,7 +122,8 @@ static char *c2u_i(char *p, int32_t v)       /* decimal, no division */
     return p;
 }
 
-static char *c2u_hex(char *p, int32_t v)     /* 0x0..0xFFF as 2 or 3 hex digits */
+#ifdef UI_DEBUG
+static char *c2u_hex(char *p, int32_t v)     /* 0x0..0xFFF as 2 or 3 hex digits (the diagnostics) */
 {
     for (int sh = v > 0xFF ? 8 : 4; sh >= 0; sh -= 4) {
         int d = (v >> sh) & 15;
@@ -130,6 +132,7 @@ static char *c2u_hex(char *p, int32_t v)     /* 0x0..0xFFF as 2 or 3 hex digits 
     *p = 0;
     return p;
 }
+#endif
 
 /* ---- the 24 keys ---- */
 #define KB_X0 6
@@ -475,7 +478,8 @@ static const char *c2u_msg(const struct c2_state *s, int mode, char *b)
     }
 }
 
-/* SHIFT layer: the map's settings in knob colours, and the diagnostics (the device test reads them). */
+#ifdef UI_DEBUG
+/* The SHIFT layer's diagnostic lines (--debug-ui builds only; a device test reads them), under the settings. */
 static void c2u_diag_line(void *r, const char *b, fp32 y)
 {
     fp32 st = FP(3) >> 2;
@@ -486,26 +490,9 @@ static void c2u_diag_line(void *r, const char *b, fp32 y)
 
 static const char *const c2u_load_name[5] = { "-", "NONE", "A", "B", "BAD" };
 static const char *const c2u_save_name[6] = { "-", "OK", "OPEN", "WRITE", "CLOSE", "TORN" };
-static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_view *v)
+static void c2u_diag_lines(void *r, const struct c2_state *s, const struct c2_view *v)
 {
     char b[96], *p;
-    int mode = c2u_mode(s, v), m = c2_mode_map(mode);
-    const char *lab[4] = { "MODE", "STRUM", "SMOOTH", "BASS" };
-    char sb[12], *q = sb;
-    int st = m < 0 ? 0 : s->d.set[m].strum;
-    if (st) {
-        *q++ = st > 0 ? '{' : '}';
-        c2u_s(c2u_i(q, c2_strum_spread(st)), " MS");
-    } else
-        c2u_s(sb, m < 0 ? "-" : "OFF");
-    const char *val[4] = { c2u_mode_name(mode, b), sb, m < 0 ? "-" : s->d.set[m].smooth ? "ON" : "OFF",
-                           m < 0 ? "-" : s->d.set[m].bass ? "ON" : "OFF" };
-    for (int i = 0; i < 4; i++) {
-        fp32 x = FP(8 + 78 * i);
-        ctext(r, lab[i], x, FP(23), FP(1), GREY, 1);
-        int off = m < 0 ? i > 0 : (i == 1 && !st) || (i == 2 && !s->d.set[m].smooth) || (i == 3 && !s->d.set[m].bass);
-        ctext(r, val[i], x, FP(31), FP(1) + (FP(1) >> 2), off ? GREY : c2u_knob_col[i], 1);
-    }
     const struct c2_diag *g = &s->dg;
     p = c2u_s(b, "HOOK F:");
     p = c2u_i(p, (int32_t)(g->frames & 0xFFFF));
@@ -565,6 +552,33 @@ static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_v
     p = c2u_i(c2u_s(p, " TO:"), (int32_t)g->takeovers);
     c2u_i(c2u_s(p, " SR:"), (int32_t)g->smooth_resets);
     c2u_diag_line(r, b, FP(59));
+}
+#endif
+
+/* SHIFT layer: the map's settings in knob colours (and the diagnostic lines in --debug-ui builds). */
+static void c2u_shift_layer(void *r, const struct c2_state *s, const struct c2_view *v)
+{
+    char b[96];
+    int mode = c2u_mode(s, v), m = c2_mode_map(mode);
+    const char *lab[4] = { "MODE", "STRUM", "SMOOTH", "BASS" };
+    char sb[12], *q = sb;
+    int st = m < 0 ? 0 : s->d.set[m].strum;
+    if (st) {
+        *q++ = st > 0 ? '{' : '}';
+        c2u_s(c2u_i(q, c2_strum_spread(st)), " MS");
+    } else
+        c2u_s(sb, m < 0 ? "-" : "OFF");
+    const char *val[4] = { c2u_mode_name(mode, b), sb, m < 0 ? "-" : s->d.set[m].smooth ? "ON" : "OFF",
+                           m < 0 ? "-" : s->d.set[m].bass ? "ON" : "OFF" };
+    for (int i = 0; i < 4; i++) {
+        fp32 x = FP(8 + 78 * i);
+        ctext(r, lab[i], x, FP(23), FP(1), GREY, 1);
+        int off = m < 0 ? i > 0 : (i == 1 && !st) || (i == 2 && !s->d.set[m].smooth) || (i == 3 && !s->d.set[m].bass);
+        ctext(r, val[i], x, FP(31), FP(1) + (FP(1) >> 2), off ? GREY : c2u_knob_col[i], 1);
+    }
+#ifdef UI_DEBUG
+    c2u_diag_lines(r, s, v);
+#endif
 }
 
 /* The TYPE scan strip, in place of the green underline while green turns: every quality a tick, family starts taller,

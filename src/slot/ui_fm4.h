@@ -560,7 +560,7 @@ static void draw_fm4(void *r, const int16_t *k, struct fm4_ui *u)
         fu_str(q, " C");
         text(r, buf, FP(8), FP(8), FP(3) >> 1, ORANGE);
     }
-    hook_delta_diag(r, FP(316), FP(131), 1);   /* TE's raw encoder delta, bottom right */
+    hook_delta_diag(r, FP(316), FP(131), 1);   /* TE's raw encoder delta, bottom right (--debug-ui only) */
 }
 
 #endif

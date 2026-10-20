@@ -234,10 +234,12 @@ def main():
     ap.add_argument("--db-trim", action="append", default=[], metavar="FOLDER=N")
     ap.add_argument("--hold", action="store_true", help="install the HOLD hooks (SHIFT+T2 on the synth screen)")
     ap.add_argument("--chord", action="store_true", help="install the CHORD hooks, CHORD1 and v2 (needs --hold)")
-    ap.add_argument("--svg-cost", action="store_true", help="show the SVG render cost (kilocycles) on SVG FX screens")
+    ap.add_argument("--svg-cost", action="store_true", help="show the SVG render cost (kilocycles) on SVG screens (SVG_COST)")
     ap.add_argument("--staged-screens", action="store_true", help="crush screen: layer-by-layer bring-up (CRUSH_STAGED)")
     ap.add_argument("--test-card", action="store_true", help="crush screen: the SVG test card first (CRUSH_TEST_CARD)")
-    ap.add_argument("--debug-ui", action="store_true", help="show the profiler/diagnostic lines on our screens")
+    ap.add_argument("--debug-ui", action="store_true",
+                    help="compile the on-device diagnostics into ui.c (UI_DEBUG): profiler lines, the hook's raw delta, "
+                    "CHORD's SHIFT diagnostic lines, repeat's and space's SHIFT pages")
     ap.add_argument("--space-tank", type=int, choices=(44, 22), default=44,
                     help="the space FX's master tank rate: 44.1 kHz, or 22.05 kHz (SPACE_MASTER_HALF; synth / drum always "
                     "run at 22.05 kHz)")

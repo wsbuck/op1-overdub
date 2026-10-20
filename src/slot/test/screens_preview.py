@@ -7,7 +7,9 @@ Builds screens_main.c natively (stand-ins for ui.c's primitives; harm's table is
 draws each segment at the device's scale like preview.py: SVG 320 x 160 -> 376 x 188 panel (x1.175), x3 for viewing,
 on black, the unseen bottom (y > 142) shaded. Fast (1-px) lines are drawn one panel pixel wide, as on the device.
 Writes one PNG per named setting below and prints the AA / fast line counts (AA lines cost ~20k cycles each on device).
-Then checks harm_tick's rate limit (a table build at most every HARM_BUILD_GAP frames while a knob turns).
+Then checks harm_tick's rate limit (a table build at most every HARM_BUILD_GAP frames while a knob turns), and that the
+knob hook's raw-delta corner (ui_hookdiag.h) is drawn only in --debug-ui builds (UI_DEBUG): the *_delta settings are
+rendered from a -DUI_DEBUG build and must add segments there, and draw exactly as without a delta in the normal build.
 """
 import os
 import subprocess
@@ -83,11 +85,22 @@ def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "screens"
     os.makedirs(out, exist_ok=True)
     tmp = tempfile.mkdtemp()
-    exe = os.path.join(tmp, "screens")
-    subprocess.run(["cc", "-std=gnu99", "-O1", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-I", SLOT,
-                    "-I", ENGINE, os.path.join(HERE, "screens_main.c"), "-o", exe], check=True)
+    exe, dbg = os.path.join(tmp, "screens"), os.path.join(tmp, "screens_debug")
+    for path, defs in ((exe, []), (dbg, ["-DUI_DEBUG"])):
+        subprocess.run(["cc", "-std=gnu99", "-O1", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-I", SLOT,
+                        "-I", ENGINE] + defs + [os.path.join(HERE, "screens_main.c"), "-o", path], check=True)
+    fails = 0
     for name, kind, k, extra in SETTINGS:
-        res = subprocess.run([exe, kind] + [str(v) for v in k] + extra, check=True, capture_output=True, text=True)
+        args = [kind] + [str(v) for v in k]
+        if name.endswith("_delta"):             # the raw-delta corner: --debug-ui builds only
+            plain = [a for a in extra if not a.startswith("delta=")]
+            got = {(e, i): subprocess.run([e] + args + x, check=True, capture_output=True, text=True).stdout
+                   for e in (exe, dbg) for i, x in enumerate((extra, plain))}
+            ok = got[exe, 0] == got[exe, 1] and len(got[dbg, 0]) > len(got[dbg, 1])
+            fails += not ok
+            print(("PASS" if ok else "FAIL") + f" {name}: the delta corner only with -DUI_DEBUG")
+        res = subprocess.run([dbg if name.endswith("_delta") else exe] + args + extra, check=True, capture_output=True,
+                             text=True)
         size = (int(320 * SCALE), int(160 * SCALE))
         img = Image.new("RGB", size, (0, 0, 0))
         d = ImageDraw.Draw(img, "RGBA")
@@ -104,7 +117,7 @@ def main():
         print(f"{path}: {res.stderr.strip()}")
     res = subprocess.run([exe, "ratelimit"], capture_output=True, text=True)   # harm_tick's build rate limit
     print(res.stdout.strip(), "ok" if res.returncode == 0 else "FAILED")
-    sys.exit(res.returncode)
+    sys.exit(res.returncode or fails)
 
 
 if __name__ == "__main__":

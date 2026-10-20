@@ -89,7 +89,8 @@ Run: `python3 src/engine/test/harm_check.py`, `python3 src/engine/test/fm4_check
 - **Delta per detent unknown**: `hook_steps.h` (any nonzero delta = at least one step; a multiple of the smallest
   |delta| seen since boot gives 2, 4, ... up to a cap: cursor, PAINT, STAMP, EXTEND, page, FINE, ENVELOPE 1; TILT,
   COARSE, op LEVEL 2; LEVEL, UNISON, WARP 4). `*_DELTA_SHIFT` stay 0 (the edit functions take steps). Diagnostic: grey
-  `D<last raw delta> M<smallest>` under harm's readout and bottom right on fm4, once the hook has run.
+  `D<last raw delta> M<smallest>` under harm's readout and bottom right on fm4, once the hook has run; `--debug-ui`
+  builds only (ui_hookdiag.h, `UI_DEBUG`, since 2026-10-20; screens_preview.py checks it is absent otherwise).
 - **harm table rebuild** (~4.3 ms, UI thread): at most one per `HARM_BUILD_GAP` = 4 screen frames (~0.13 s); edits in
   between coalesce into the next build, the last published table keeps playing (3 frames, crossfade). Host check
   (screens_preview.py `ratelimit`): a knob turned every frame for 61 frames builds 15 tables, the last edit is published
