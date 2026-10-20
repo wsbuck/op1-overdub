@@ -14,8 +14,8 @@ screens used to read never move. Two parts:
      FX publishing modulated knobs M (FX_LIVE) draws exactly what stored knobs M draw (node matrices, visibility,
      colours and every line: the PNGs are identical), and differs from stored S alone; with the FX not running
      (FX_OFF) the ensemble and distortion screens fall back to the stored knobs (identical to S; pingpong's time and
-     crush's rate / bits come from the DSP's own state, which stays as it last ran). repeat's screen runs the real
-     repeat.c on the host (on the params, as the device does), so its state follows them too. crush: knobs moved only by the LFO never
+     crush's rate / bits come from the DSP's own state, which stays as it last ran). repeat's and space's screens run the
+     real repeat.c / space.c on the host (on the params, as the device does), so its state follows them too. crush: knobs moved only by the LFO never
      bring up the value readout (it fires on stored-knob turns: crush_screen_check.py).
 """
 import os
@@ -28,12 +28,13 @@ from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SLOT = os.path.dirname(HERE)
-FX = ["ensemble", "pingpong", "distortion", "crush", "repeat"]
+FX = ["ensemble", "pingpong", "distortion", "crush", "repeat", "space"]
 BLOCKS = 600
 STORED = {8: (15360, 21504, 0, 16384), 9: (28672, 14000, 12000, 10000), 10: (16000, 16384, 7475, 32767),
-          11: (10240, 12288, 10240, 0), 12: (12288, 5120, 9216, 16384)}   # fx.json defaults
+          11: (10240, 12288, 10240, 0), 12: (12288, 5120, 9216, 16384), 13: (8192, 16384, 5120, 8192)}   # fx.json
 LIVE = {8: (6000, 30000, 26000, 9000), 9: (12000, 30000, 30000, 26000), 10: (30000, 4000, 26000, 20000),
-        11: (26000, 28000, 2000, 12000), 12: (30000, 0, 26000, 5000)}     # what an LFO might make of them
+        11: (26000, 28000, 2000, 12000), 12: (30000, 0, 26000, 5000),
+        13: (20000, 9000, 2000, 20000)}   # what an LFO might make of them (space: white kept in TONE, its zone)
 
 
 def main():
@@ -89,7 +90,7 @@ def main():
         segs = int(r.stdout.strip().rsplit(":", 1)[1].split()[0])
         return segs, np.asarray(Image.open(os.path.join(out, name + ".png")).convert("RGB"), int)
 
-    for fid, name in zip(range(8, 13), FX):
+    for fid, name in zip(range(8, 14), FX):
         S, M = STORED[fid], LIVE[fid]
         live = ",".join(map(str, M))
         for base, tag in ((200, "synth"), (100, "master")):

@@ -3,7 +3,7 @@
 
   python3 src/slot/test/fx_abi_check.py
 
-For each FX (ensemble, pingpong, distortion, crush, repeat), on bfin-elf-run:
+For each FX (ensemble, pingpong, distortion, crush, repeat, space), on bfin-elf-run:
   - every call through FX_MONO_ENTRY / FX_STEREO_ENTRY preserves R4-R7, P3-P5, FP, SP, both hardware loops and
     L0-L3 (sentinel check in fx_abi.S), with knobs changing every block;
   - the stereo entry's 4th argument (params at [SP + 12]) arrives: mix 0 (crush: every knob 0; repeat: FORTUNE OFF)
@@ -18,7 +18,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SLOT = os.path.dirname(HERE)
-FX = ["ensemble", "pingpong", "distortion", "crush", "repeat"]
+FX = ["ensemble", "pingpong", "distortion", "crush", "repeat", "space"]
 BLOCKS = 300
 
 

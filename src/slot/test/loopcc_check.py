@@ -8,7 +8,8 @@
 1. test/loopcc_main.c at -O2 under bfin-elf-run: the trigger (CHORD v2's first factory restore) still comes out
    wrong, and loopcc.py flags it and only it; the forms we use instead (a flat copy, a mask select) come out right.
 2. Every C file in src/engine and src/slot, built as the firmware builds them (build_slot.py, src/engine/build.sh:
-   -mcpu=bf524 -O2 -ffreestanding -fno-builtin; ui.c also with each of its -D options), compiled to assembly:
+   -mcpu=bf524 -O2 -ffreestanding -fno-builtin; ui.c and space.c also with each of their -D options), compiled to
+   assembly:
    loopcc.py finds no CC read reached from a rewritten loop counter test.
 """
 import glob
@@ -24,6 +25,7 @@ import loopcc  # noqa: E402
 
 FLAGS = "-std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror"
 UI_DEFS = ["UI_DEBUG", "SVG_COST", "CRUSH_STAGED", "CRUSH_TEST_CARD"]   # build_slot.py's ui.c options
+SPACE_DEFS = ["SPACE_MASTER_HALF=1"]                                 # build_slot.py --space-tank 22
 
 
 def main():
@@ -41,6 +43,8 @@ def main():
                for f in slot]
     script += [f"bfin-elf-gcc {FLAGS} -I /src/engine -D{d} -S -o /out/slot_ui_{d}.s /src/slot/ui.c || echo FAILED ui {d}"
                for d in UI_DEFS]
+    script += [f"bfin-elf-gcc {FLAGS} -D{d} -S -o /out/slot_space_{d.split('=')[0]}.s /src/slot/space.c || echo FAILED space {d}"
+               for d in SPACE_DEFS]
     r = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", "-v", f"{SRC}:/src:ro", "-v",
                         f"{out}:/out", "op1-bfin", "sh", "-c", "\n".join(script)], capture_output=True, text=True)
     print(r.stdout + r.stderr[-2000:])
@@ -61,7 +65,7 @@ def main():
         check([h[0] for h in repro] == ["_restore_bad"], f"loopcc.py flags the repro's restore_bad and nothing else: {repro}")
     check("FAILED" not in r.stdout, "every device source compiles")
     files = sorted(glob.glob(os.path.join(out, "*_*.s")))
-    check(len(files) == len(engine) + len(slot) + len(UI_DEFS), f"{len(files)} device objects scanned")
+    check(len(files) == len(engine) + len(slot) + len(UI_DEFS) + len(SPACE_DEFS), f"{len(files)} device objects scanned")
     for f in files:
         hits = loopcc.find(open(f).read())
         check(not hits, f"{os.path.basename(f)[:-2]}: no CC read after a rewritten loop counter test"

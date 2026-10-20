@@ -21,6 +21,8 @@
     FX_STEREO_ENTRY _crush_stereo_entry, _crush_stereo
     FX_MONO_ENTRY _repeat_mono_entry, _repeat_mono
     FX_STEREO_ENTRY _repeat_stereo_entry, _repeat_stereo
+    FX_MONO_ENTRY _space_mono_entry, _space_mono
+    FX_STEREO_ENTRY _space_stereo_entry, _space_stereo
     .endif
 
     .macro CHECK reg, hi, lo, bit

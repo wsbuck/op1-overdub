@@ -1,5 +1,5 @@
 /* Simulator driver for fx_abi_check.py: runs our FX through their firmware entry wrappers (fx_abi.S).
- *   fx_abi FX MODE BLOCKS     FX 0 ensemble, 1 pingpong, 2 distortion, 3 crush, 4 repeat
+ *   fx_abi FX MODE BLOCKS     FX 0 ensemble, 1 pingpong, 2 distortion, 3 crush, 4 repeat, 5 space
  *   MODE m: mono only; s: stereo only; i: mono and stereo interleaved (as when a synth FX and the master FX run
  *   in one audio callback); d: stereo with mix 0 (must be the dry input: proves the 4th argument arrives; crush has
  *   no mix knob: every knob 0 is its bit-exact clean setting; repeat: FORTUNE OFF never fires: dry, bit exact).
@@ -18,16 +18,20 @@ int te_drum_press(void *self, int key) { (void)self; (void)key; return 0; }
 int te_drum_release(void *self, int key) { (void)self; (void)key; return 0; }
 int te_master_press(void *self, int key) { (void)self; (void)key; return 0; }
 int te_master_release(void *self, int key) { (void)self; (void)key; return 0; }
+/* space.c: the slots and stored FX knobs TE keeps (its TAIL zone on synth / drum) */
+volatile int32_t te_fx_slot[2];
+volatile int16_t te_fx_knobs_synth[64], te_fx_knobs_drum[64];
 
 typedef void (*entry_t)(void);
 int fx_abi_call(entry_t entry, void *self, void *a1, void *a2, void *a3);
 extern void ensemble_mono_entry(void), ensemble_stereo_entry(void), pingpong_mono_entry(void),
     pingpong_stereo_entry(void), distortion_mono_entry(void), distortion_stereo_entry(void), crush_mono_entry(void),
-    crush_stereo_entry(void), repeat_mono_entry(void), repeat_stereo_entry(void);
-static const entry_t mono[5] = { ensemble_mono_entry, pingpong_mono_entry, distortion_mono_entry, crush_mono_entry,
-                                 repeat_mono_entry };
-static const entry_t stereo[5] = { ensemble_stereo_entry, pingpong_stereo_entry, distortion_stereo_entry,
-                                   crush_stereo_entry, repeat_stereo_entry };
+    crush_stereo_entry(void), repeat_mono_entry(void), repeat_stereo_entry(void), space_mono_entry(void),
+    space_stereo_entry(void);
+static const entry_t mono[6] = { ensemble_mono_entry, pingpong_mono_entry, distortion_mono_entry, crush_mono_entry,
+                                 repeat_mono_entry, space_mono_entry };
+static const entry_t stereo[6] = { ensemble_stereo_entry, pingpong_stereo_entry, distortion_stereo_entry,
+                                   crush_stereo_entry, repeat_stereo_entry, space_stereo_entry };
 
 static int16_t sine(uint32_t ph)
 {
@@ -64,6 +68,7 @@ int main(int argc, char **argv)
     for (int b = 0; b < blocks; b++) {
         knobs(b, k, mode == 'd', fx);
         te_tape_pos += 64 * 64;
+        te_blocks++;
         te_metro_count -= 64 << 14;
         if (te_metro_count <= 0)
             te_metro_count += te_tempo_spb;

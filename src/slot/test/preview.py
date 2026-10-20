@@ -4,7 +4,7 @@
   python3 src/slot/test/preview.py OUTDIR [ENGINE K0 K1 K2 K3 ...]
 
 ENGINE >= 100 previews our FX screens: 100 + FX id for the master (stereo) screen, 200 + FX id for synth (mono)
-(repeat, 112 / 212: the real repeat.c runs on the host, see preview_host.c);
+(repeat, 112 / 212, and space, 113 / 213: the real repeat.c / space.c run on the host, see preview_host.c);
 300 the drum probe's screen (drum_ui_draw, sample values); 301 fmdrum's (FD_PARAMS, FD_KEY, FD_PLAY, FD_LIT: see
 preview_host.c; NAME = the PNG's file name); 302 metal's (MT_PARAMS, MT_KEY, MT_PLAY, MT_LIT, MT_TURN).
 
@@ -102,6 +102,7 @@ def main():
                     "-include", os.path.join(HERE, "preview_decl.h"),
                     os.path.join(SLOT, "ui.c"), os.path.join(HERE, "preview_host.c"),
                     os.path.join(SLOT, "crush.c"), os.path.join(SLOT, "metal.c"), os.path.join(SLOT, "repeat.c"),
+                    os.path.join(SLOT, "space.c"), "-Wno-shift-negative-value",
                     "-DDISTORTION_CURVE_ONLY", os.path.join(SLOT, "distortion.c"), "-o", exe,
                     ] + (["-DCRUSH_TEST_CARD"] if os.environ.get("CRUSH_CARD") else []), check=True)
     ids = os.path.join(tmp, "ids.txt")

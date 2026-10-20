@@ -185,9 +185,9 @@ void te_line(void *raster, const int32_t *a, const int32_t *b, int32_t width, co
     printf("%d %d %d %d %d %d\n", a[0], a[1], b[0], b[1], width, (int)((rgba - host_palette) / 4));
 }
 
-/* Our FX for previews: ids 8 ensemble, 9 pingpong, 10 distortion, 11 crush, 12 repeat (fx.json order). */
-const uint8_t fx_kind[5] = { 1, 2, 3, 4, 5 };
-const int32_t fx_count = 5;
+/* Our FX for previews: ids 8 ensemble, 9 pingpong, 10 distortion, 11 crush, 12 repeat, 13 space (fx.json order). */
+const uint8_t fx_kind[6] = { 1, 2, 3, 4, 5, 6 };
+const int32_t fx_count = 6;
 /* crush: the real crush.c (linked by preview.py) runs on silence until its knob smoothing has settled, so crush_state
  * holds what the device would publish; then CRUSH_GR (0 .. 32767) sets the gain reduction and CRUSH_LEVEL the input
  * level (silence gives none of either), CRUSH_FLIPS adds that many bit flips per frame, CRUSH_TURN=frame:knob:value
@@ -331,6 +331,40 @@ static void repeat_frame(int i, int frames, int stereo)
         rep_t += 64;
     }
 }
+/* space (engines 113 / 213): the real space.c (linked by preview.py, its C reference kernels) runs on the host, one
+ * 30 fps frame of audio per frame: a 220 Hz saw at -12 dBFS for the first SPACE_PLAY frames (default 6), then silence,
+ * so the level meter shows a tail; on TE's words as the device has them (the stored white knob = K2). The first
+ * frames clear the line set (a clean start), as on the device; SPACE_KEY=1 holds the green push. */
+volatile int32_t te_fx_slot[2];
+volatile int16_t te_fx_knobs_synth[64], te_fx_knobs_drum[64];
+void space_mono(void *self, int16_t *buf, const int16_t *p);
+void space_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
+static uint64_t sp_t;
+static void space_frame(int i, int frames, int stereo)
+{
+    int off = getenv("FX_OFF") ? atoi(getenv("FX_OFF")) : 0, play = getenv("SPACE_PLAY") ? atoi(getenv("SPACE_PLAY")) : 6;
+    if (off && i >= frames - off)
+        return;
+    te_fx_knobs_synth[2] = te_fx_knobs_drum[2] = host_knobs[2];
+    if (getenv("SPACE_KEY") && atoi(getenv("SPACE_KEY"))) {
+        rep_key.held[stereo ? RK_MASTER : RK_SYNTH] = 1;
+        rep_key.screen_seen = te_blocks;
+    }
+    while (sp_t < (uint64_t)(i + 1) * 1470) {
+        int16_t l[64], r[64];
+        for (int j = 0; j < 64; j++) {
+            uint64_t t = sp_t + (uint64_t)j;
+            int on = t < (uint64_t)play * 1470 && t >= 64 * 40;
+            l[j] = r[j] = on ? (int16_t)((int32_t)((t * 220 * 65536 / 44100) & 0xFFFF) / 8 - 4096) : 0;
+        }
+        te_blocks++;
+        if (stereo)
+            space_stereo(0, l, r, fx_params());
+        else
+            space_mono(0, l, fx_params());
+        sp_t += 64;
+    }
+}
 static int host_fx;
 /* One display frame of audio time (30 fps): the FX clocks the screens read. */
 static void host_tick(int i)
@@ -338,7 +372,7 @@ static void host_tick(int i)
     (void)i;
     for (int s = 0; s < 2; s++) {
         struct fx_pub *pubs[3] = { &ensemble_pub[s], &pingpong_pub[s], &distortion_pub[s] };
-        if (host_fx == 12)                                  /* repeat runs itself (repeat_frame) */
+        if (host_fx == 12 || host_fx == 13)                 /* repeat and space run themselves (repeat_frame, ..) */
             continue;
         for (int j = 0; j < 3 && !getenv("FX_OFF"); j++) {   /* FX_OFF: the FX not running (switched off) */
             fx_publish(pubs[j], fx_params());
@@ -642,6 +676,8 @@ int main(int argc, char **argv)
             host_tick(i);
             if (e % 100 == 12)
                 repeat_frame(i, frames, e < 200);
+            if (e % 100 == 13)
+                space_frame(i, frames, e < 200);
             if (e % 100 == 11)
                 crush_frame(i);
             fx_ui_draw(e % 100, e >= 200 ? 0 : 3, 0);

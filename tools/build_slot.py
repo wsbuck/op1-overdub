@@ -118,7 +118,7 @@ MAX_FACTORY_DRUM_PRESETS = 32              # stock 24 + 8 kits (fmdrum 5, metal 
 #                                            sounds (stock 34)
 MAX_FOLDER_LABEL = 13                      # the preset browser prints a column label with snprintf(buf, 14, "%s")
 FEATURE_BITS = {"hold": 1, "chord": 2, "chord2": 4}   # slot.S _feature_mask; must match hold_impl.h / chord2_impl.h FEAT_*
-FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4, "repeat": 5}   # by source; = ui.c's FX_* enum
+FX_UI_KINDS = {"ensemble": 1, "pingpong": 2, "distortion": 3, "crush": 4, "repeat": 5, "space": 6}   # by source; = ui.c's FX_*
 TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5BD4,
          "_iter_update": ITER_PAGE_UPDATE, "_filter_page_update": FILTER_PAGE_UPDATE,
          "_te_note_off": 0x01A85840, "_te_note_on": 0x01A85750, "_te_make_note": 0x01A85014, "_te_synth_shiftkey": 0x01A50904,
@@ -134,6 +134,9 @@ TE_UI = {"_te_raster": 0x01A3B490, "_te_line": 0x01A24A4C, "_te_text8": 0x019C5B
          # metronome countdown (Q14), the keyboard's synth slot, the sequencer's 96-PPQN tick (the probe only)
          "_te_tape_state": 0xFF802960, "_te_tape_pos": 0xFF802974, "_te_metro_count": 0x01AADADC,
          "_te_play_slot": 0xFF8016D4, "_te_ppqn_tick": 0x018C1884, "_te_blocks": 0x01AADAF4,
+         # space (src/slot/space.c): the slots the audio callback copies FX knobs from ([0] synth, [1] drum; read at
+         # 0xFFA02986 / 0xFFA02560) and the stored FX knobs (the TAIL zone from the stored knob, not TE's LFO)
+         "_te_fx_slot": 0x01AAAC0C, "_te_fx_knobs_synth": 0xFF801444, "_te_fx_knobs_drum": 0xFF8015C4,
          # repeat's manual key (src/slot/repeat.h): TE's drum and mixer controllers' press / release functions
          "_te_drum_press": 0x01978008, "_te_drum_release": 0x019773E4,
          "_te_master_press": 0x019DB7C4, "_te_master_release": 0x019DB708,
@@ -235,6 +238,9 @@ def main():
     ap.add_argument("--staged-screens", action="store_true", help="crush screen: layer-by-layer bring-up (CRUSH_STAGED)")
     ap.add_argument("--test-card", action="store_true", help="crush screen: the SVG test card first (CRUSH_TEST_CARD)")
     ap.add_argument("--debug-ui", action="store_true", help="show the profiler/diagnostic lines on our screens")
+    ap.add_argument("--space-tank", type=int, choices=(44, 22), default=44,
+                    help="the space FX's master tank rate: 44.1 kHz, or 22.05 kHz (SPACE_MASTER_HALF; synth / drum always "
+                    "run at 22.05 kHz)")
     ap.add_argument("--db-enable-filter", action="store_true",
                     help="add TE's hidden 'filter' FX (fx_types id 2, as op1repacker's 'filter' mod)")
     ap.add_argument("--fx", metavar="FX.json", help="add our FX types (ids 8, 9, ...), e.g. src/slot/fx.json")
@@ -242,8 +248,9 @@ def main():
     ap.add_argument("--build", default=os.path.join(ROOT, "firmware", "build", "slot"))
     a = ap.parse_args()
     fxs = json.load(open(a.fx)) if a.fx else []
-    if any(f["source"] == "repeat" for f in fxs) and not any(f["source"] == "pingpong" for f in fxs):
-        sys.exit("fx repeat plays from pingpong's lines (pingpong_ram, fx_line_owner): build it with pingpong")
+    for src in ("repeat", "space"):
+        if any(f["source"] == src for f in fxs) and not any(f["source"] == "pingpong" for f in fxs):
+            sys.exit(f"fx {src} plays from pingpong's lines (pingpong_ram, fx_line_owner): build it with pingpong")
     if a.chord and not a.hold:
         sys.exit("--chord needs --hold (chord notes are released through the key-up hook)")
     engines = json.load(open(a.engines))
@@ -446,7 +453,8 @@ def main():
          + "".join("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
                    f"-I /engine -c -o /out/drum_{e['source']}.o /src/{e['source']}.c; " for e in drums)
          + "".join("bfin-elf-gcc -std=gnu99 -mcpu=bf524 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror "
-                   f"-c -o /out/fx_{f['source']}.o /src/{f['source']}.c; " for f in fxs) +
+                   + ("-DSPACE_MASTER_HALF=1 " if f["source"] == "space" and a.space_tank == 22 else "")
+                   + f"-c -o /out/fx_{f['source']}.o /src/{f['source']}.c; " for f in fxs) +
          f"bfin-elf-ld -nostdlib -T /out/slot.ld {syms} -o /out/slot.elf /out/slot.o /out/ui.o /out/hold.o "
          + ("/out/knobhook.o " if hooked else "")
          + "".join(f"/out/fx_{f['source']}.o " for f in fxs) + "".join(f"/out/drum_{e['source']}.o " for e in drums) + "; "

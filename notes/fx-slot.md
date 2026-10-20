@@ -165,6 +165,10 @@ Confidence: **Confirmed** = read in code, **Verified** = re-checked in disassemb
 - Renamed `ens` → `ensemble` (alias `ens` keeps saved patches loading).
 - 2026-10-15: four FX: ensemble 8, pingpong 9, distortion 10, crush 11 (notes/fx-crush.md). Screen kinds by source in
   build_slot.py `FX_UI_KINDS` (crush 4); name loops 14, factory/ScreenId bounds 12.
+- 2026-10-19: `space` (the reverb, notes/fx-reverb.md §11) is FX id 13 (screen kind 6): 14 FX ids, name loops 16
+  entries (with the aliases), factory / ScreenId bounds 14, range rows 14, the six LFO flag tables 14 bytes (our ids
+  TE's FX value 0; fx_lfo_target_check passes). It shares pingpong's lines like repeat (build_slot.py refuses it
+  without pingpong); `--space-tank 22` builds its master tank at 22.05 kHz.
 
 ## ensemble (2026-10-16 rework: BBD chorus, CE-2 by default)
 The first version was a Juno/Solina string ensemble (LOG test image 32); the user wanted classic chorus tones

@@ -65,6 +65,8 @@ def main():
     ap.add_argument("--staged-screens", action="store_true",
                     help="bring the crush screen up layer by layer on its first open, labelled (device diagnosis)")
     ap.add_argument("--debug-ui", action="store_true", help="show profiler lines on the engine screens (development)")
+    ap.add_argument("--space-tank", type=int, choices=(44, 22), default=44,
+                    help="the space FX's master tank rate in kHz: 44 (44.1) or 22 (22.05); synth / drum always 22.05")
     ap.add_argument("--db-trim", action="append", default=[], metavar="FOLDER=N",
                     help="keep only the first N presets of a folder (e.g. to stay within MAX_SYNTH_PRESETS in a test image)")
     ap.add_argument("--name", default="OVERDUB", help="image name (default OVERDUB -> firmware/images/OVERDUB.OP1)")
@@ -113,7 +115,7 @@ def main():
     cmd += [] if a.no_hold else ["--hold"] + ([] if a.no_chord else ["--chord"])
     cmd += ["--fx", fj] if fxs else []
     cmd += ["--svg-cost"] * a.svg_cost + ["--debug-ui"] * a.debug_ui + ["--staged-screens"] * a.staged_screens \
-        + ["--test-card"] * a.test_card
+        + ["--test-card"] * a.test_card + ["--space-tank", str(a.space_tank)]
     run(*cmd)
 
     # every SVG screen within AGG's per-path cell budget (notes/screen.md: over it, the OP-1 asserts on the screen)
