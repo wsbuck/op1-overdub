@@ -1985,3 +1985,51 @@
   once; any crackle) on SPACE2, then SPACE2H; compare with SPACE1's if taken. Also switch TAIL into a shimmer zone
   while music plays: no dropout. A quick listen to each space and the shimmer: should sound the same as SPACE1.
 - Result: _pending user flash_.
+
+## 2026-10-19 — Test image 95: SPACE3H.OP1 (SPACE2H + William Buck's space screen)
+- What changed (notes/fx-reverb.md §14): the space FX's line screen is replaced by William Buck's design
+  (`design/fx/space.svg` from `gen_space_moon.py`, version B "RIDGES", published as `content/display/space.svg`): the
+  ridges beyond a radio telescope (blue SPACE), a rover's track with INFINITE's loop and FREEZE's flag (green DECAY),
+  Earth's phase, its halo and a shimmer pillar (white TAIL), the dish's radio waves with the duck (orange MIX), the
+  hut for the dry. DSP unchanged from SPACE2H.
+- **The CPU readings moved: hold SHIFT on the space screen** (this image is a diagnostic build, `--svg-cost`). The page
+  shows `CPU MASTER`, `CPU SYNTH`, `FDN / TE FX`, `CALLBACK` as before, plus T60, level, duck, zone, FRZ / INF. The
+  render cost (kilocycles) stays bottom right on the screen itself.
+- `firmware/images/SPACE3H.OP1`:
+  - Command: SPACE2H's (LFOFX2's plus `--space-tank 22`; engines incl. fmdrum and metal, `--svg-cost`, all FX) with
+    `--name SPACE3H`.
+  - Built from commit adf2d45 in a clean `git archive`; loopcc scan clean; SVG checks clean (space.svg PASS, heaviest
+    ridge0_dim 2271 cells, 59 %); fx_lfo_target_check ALL PASS; te-boot identical to stock (f6233b974bdb6c92).
+  - sha256 d713001dc790f3024dd9cf58f048c38ba3e54ceaa2394e2f1788a607fe8d9378.
+- Host checks: space_screen_check (the 8 preview states vs the header rules, mean |difference| <= 0.13; vs the
+  designer's PNGs 0.6 .. 1.05), space_check --quick (simulator, 92 PASS) and --quick --host, fx_abi_check, fx_lfo_check, loopcc_check,
+  repeat_screen_check.
+- **Before flashing:** keep **26 or fewer saved drum sounds**, as for SPACE2H.
+- Checklist (space as the synth FX, T3, unless noted; compare with the designer's previews
+  `op1-svgs/png/space_<state>_3x.png`):
+  1. Each preview state: [ ] smallroom (ROOM, DECAY 0.3, dark TONE, MIX 0.3), [ ] cathedral, [ ] void_long (VOID,
+     DECAY at INFINITE), [ ] shimmer (between CHURCH and CATHEDRAL, SHIMMER +12+19 at the top), [ ] frozen (CATHEDRAL,
+     SHIMMER +12, the green push held), [ ] ducking (master FX, MIX near the top, music playing), [ ] synth_wet (MIX
+     at the top), [ ] off (the FX switched off: dim ridges).
+  2. Ridges per space: ROOM one near wall, HALL a lower range, CHURCH two, CATHEDRAL two far low ranges, VOID lines to
+     the vanishing point; between stages the ridges sink up to 6 px: [ ].
+  3. The track: 1 stretch at DECAY 0 .. 12 at the top, following the knob (not the seconds): [ ].
+  4. INFINITE (detent 30): the trail's loop at the horizon [ ]; FREEZE (detent 31) and the green push held: the flag
+     [ ]; let go: the flag goes [ ].
+  5. Earth: TONE dark = new Earth (no crescent) .. bright = full [ ]; the halo breathes with the tail (bigger while
+     the tail rings, shrinking as it dies) [ ].
+  6. Shimmer: SHIMMER +12 the diamond column (4 .. 9 with the amount); +12+19 adds the circles either side [ ];
+     reserved zones (detent 19+) draw nothing extra [ ].
+  7. Waves: none at MIX 0, 6 from the middle [ ]; on the master above the middle the duck dots (1 .. 4) and the waves
+     shrink while music plays, grow back in gaps [ ].
+  8. The hut: lit, and on synth / drum it goes dark once MIX passes 3/4 [ ].
+  9. FX off: dim ridges, no track, waves, halo, phase [ ]. Switching on: the track and shimmer appear after the clean
+     start [ ].
+  10. Readouts (turn each knob): blue the space's name; green `3.8S X1.00`, `INFINITE`, `FREEZE`; white `DARK 40%`,
+      `NATURAL`, `BRIGHT 60%`, `SHIM+12 70%`, `SH12+19 70%`, `SUB-12 SOON`; orange `WET 60%`, `DUCK -18DB` (master),
+      `DRY 40%` (synth); gone ~1.5 s later; none when only the LFO moves [ ].
+  11. The LFO (T4, target FX) moves the picture with the sound [ ].
+  12. The `--svg-cost` number bottom right on the space screen, idle and with shimmer: ___ k (other FX screens for
+      comparison: repeat ___ k) [ ].
+  13. SHIFT held: the CPU page; SPACE2H's CPU readings (idle, busy, shimmer, freeze, both at once) [ ].
+- Result: _pending user flash_.
