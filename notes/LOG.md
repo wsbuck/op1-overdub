@@ -2040,3 +2040,53 @@
   - The device runs about 3x the simulator (master shimmer: 31k in the simulator vs ~97k mean on the device), which
     is SDRAM latency. The 22.05 kHz master's peak (162k) stays below TE's own FX peak, with no crackle.
   - The 44.1 kHz master (SPACE2) would be ~1.4x that, above TE's FX, so it stays out unless asked.
+
+## 2026-10-20 — Test image 96: SPACE4H.OP1 (space v1.1: SUB -12, GATE, SWELL; the diagnostic screens out of normal builds)
+- What changed:
+  - **space v1.1** (notes/fx-reverb.md §15): the reserved TAIL zones work. White detents 19–22 **SUB -12** (an
+    octave down in the tail, amount 40–100 %; FREEZE in it = frozen sub), 23–27 **GATE** (the wet held while you
+    play, then a hold of 50–350 ms and a fast cut: the 80s gated snare; frozen: the held tail is heard only while you
+    play), 28–31 **SWELL** (the wet fades in over 0.15–1.5 s after each note; frozen: the held tail ducks under a new
+    note and swells back). The `SOON` labels are gone; readouts `SUB-12 70%`, `GATE 200MS`, `SWELL 0.47S`; the screen
+    shows William Buck's arc / bar / wedge for the zone. Sound review applied (§15 review log).
+  - **Diagnostics compiled out** (notes/screen.md "Diagnostic builds"): the CHORD page's SHIFT diagnostic lines,
+    repeat's SHIFT probe page, the harm / fm4 hook-delta corner and space's SHIFT CPU page / line-screen CPU lines now
+    build only with `--debug-ui`; the render-cost number only with `--svg-cost`. ui.o .text -5752 bytes. **Test images
+    are now built without `--svg-cost` and `--debug-ui` unless a probe is needed**; this one is a normal build.
+- Simulator CYCLES per call (max), SHIMMER +12+19 / SUB / frozen SUB / GATE / SWELL: master 22.05 kHz 31.9k / 31.2k /
+  29.6k / 27.3k / 27.5k; synth / drum 24.2k / 23.5k / 21.9k / 19.7k / 19.8k (every new zone at or below the shimmer,
+  whose SPACE3H device peak was 162k with no crackle).
+- `firmware/images/SPACE4H.OP1`:
+  - Command: SPACE3H's without `--svg-cost` (`build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum,metal
+    --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+    --db-trim harmonic=6 --db-trim fm4=6 --space-tank 22 --name SPACE4H`), no `--debug-ui`, all FX.
+  - Built from commit a54eba1 in a clean `git archive`; loopcc scan clean; SVG checks clean (space.svg heaviest
+    ridge0_dim 2271 cells, 59 %); fx_lfo_target_check ALL PASS; te-boot identical to stock (f6233b974bdb6c92).
+  - sha256 4a1e0dfa212254fd0d68b1e53654a05c0c8e7d128feee615fb4f070ef0041a54.
+- Host / sim checks: space_check all 207 passed (incl. 15, the v1.1 zones, and the asm = C cases with SUB / GATE /
+  SWELL), space_screen_check, chord2_check, chord2_screens, hold_check, repeat_check, repeat_key_check,
+  repeat_screen_check, screens_preview, crush_screen_check, fx_abi_check, fx_lfo_check, loopcc_check (+ --scan).
+- **Before flashing:** keep **26 or fewer saved drum sounds**, as for SPACE3H.
+- Checklist (space as the synth FX, T3, unless noted; MIX near the middle):
+  1. [ ] SUB -12 by ear (white detents 19–22) on a held chord: an octave-down bloom in the tail, clean, no
+     sub-bass drone or mud; more with the knob; on the master (T3 in the mixer) as well. VOID with DECAY high:
+     the low end stays controlled.
+  2. [ ] GATE by ear (detents 23–27) on a drum loop: the classic gated snare (a big tail cut off short), the cut
+     getting longer up the zone (50 → 350 ms), no click at the cut, hats alone don't open it; on a held pad: the tail
+     stays until the pad ends, then cuts.
+  3. [ ] SWELL by ear (detents 28–31) on plucks / guitar-like notes: the reverb fades in behind each note (0.15 s at
+     the zone's start → 1.5 s at the top); the dry notes untouched; a fast arpeggio keeps some reverb (it ducks,
+     not vanishes).
+  4. [ ] Zone joins: turn white slowly from SHIMMER +12+19 through SUB, GATE, SWELL and back to TONE while playing:
+     glides, no clicks or jumps.
+  5. [ ] FREEZE in each (green to the top, or the green push held): SUB = a frozen sub that holds steady; GATE = the
+     frozen tail heard only while you play; SWELL = the frozen tail ducks under new notes and swells back.
+  6. [ ] CPU impression: SUB, GATE, SWELL on the synth FX and on the master at once with busy playing: no crackle,
+     dropout or UI lag (no CPU readout in this image: it's a normal build).
+  7. [ ] No diagnostic text anywhere: the CHORD page (SHIFT held: only MODE / STRUM / SMOOTH / BASS and the normal
+     hints, no HOOK / FILE / LEARN / tick lines), the repeat screen (SHIFT held: the normal wheel, no probe page), the
+     space screen (SHIFT held: nothing changes, no CPU page; no number bottom right), the engine screens (harm / fm4:
+     no grey D / M corner; no render-cost numbers on any FX screen); SHIFT behaves normally everywhere.
+  8. [ ] Readouts: turning white shows `SUB-12 70%`, `GATE 200MS`, `SWELL 0.47S`; the screen shows the arc below
+     Earth (SUB), the bar beside it (GATE), the wedge (SWELL) in their zones.
+- Result: _pending user flash_.
