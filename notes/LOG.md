@@ -2032,4 +2032,11 @@
   12. The `--svg-cost` number bottom right on the space screen, idle and with shimmer: ___ k (other FX screens for
       comparison: repeat ___ k) [ ].
   13. SHIFT held: the CPU page; SPACE2H's CPU readings (idle, busy, shimmer, freeze, both at once) [ ].
-- Result: _pending user flash_.
+- Result (2026-10-20, device): "everything sounds great. no crackles." SHIFT CPU page photos (cycles per call,
+  mean/max(window), the peak since a clean start):
+  - Synth FX: idle 87k/62k, peak 118k; a held chord 89k/71k, peak 101k; SHIMMER +12+19 103k/86k, peak 129k; FREEZE 96k/66k.
+  - Master: idle 104k/79k, peak 121k; busy 106k/81k, peak 119k; SHIMMER +12+19 119k/97k and frozen 122k/97k, peak 162k.
+  - FDN share 34–38k. TE's own FX peak 173k. Audio callback peak 372k.
+  - The device runs about 3x the simulator (master shimmer: 31k in the simulator vs ~97k mean on the device), which
+    is SDRAM latency. The 22.05 kHz master's peak (162k) stays below TE's own FX peak, with no crackle.
+  - The 44.1 kHz master (SPACE2) would be ~1.4x that, above TE's FX, so it stays out unless asked.
