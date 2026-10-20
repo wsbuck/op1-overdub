@@ -1908,3 +1908,59 @@
   - Drum sound's FX: distortion and one other FX, value LFO, all four targets: [ ].
   - A TE FX (delay) still targets as before: [ ].
 - Result: _pending user flash_.
+
+## 2026-10-19 — Test image 93: SPACE1.OP1 + SPACE1H.OP1 (the space reverb FX: phase 0 CPU probe and the MVP)
+- What it is (notes/fx-reverb.md §11): a 14th FX, `space` (firmware id 13, the next fx_types row), on synth, drum and
+  master. blue SPACE ROOM > HALL > CHURCH > CATHEDRAL > VOID (one morph); green DECAY x1/4 .. x4 of the space's own
+  RT60 (noon = its own), detent 30 INFINITE, 31 FREEZE; white TAIL: TONE (0-9, natural at 5), SHIMMER +12 (10-14),
+  SHIMMER +12+19 (15-18), 19-31 reserved (SUB / GATE / SWELL in v1.1: natural tone, `SOON`); orange MIX: wet rises
+  with the dry at unity to the middle, above it the master ducks the wet (-12 dB one detent up .. -24 dB at the top),
+  synth / drum fade the dry. Holding the green encoder's push on its screen = momentary FREEZE (REPEAT2's hook). It
+  shares pingpong's delay lines with pingpong and repeat (switching between them starts the tail clean).
+- **Phase 0, the CPU probe, is the screen's bottom three lines** (grey): `CPU MASTER max/mean PEAK p 44KHZ|22KHZ`,
+  `CPU SYNTH ...` (cycles per 64-frame process call, the last 256 calls; peak since the FX last started clean),
+  `FDN n TE FX last/max CALLBACK last/max` (TE's own CYCLES records 0x01BA26FC / 0x01BA2704 and 0x01BA2620 /
+  0x01BA2628). Simulator for comparison (no SDRAM latency): master 44.1 kHz ~48-50 k, shimmer ~62 k; master
+  22.05 kHz ~34-35 k, shimmer ~43 k; synth / drum ~24-25 k, shimmer ~33 k.
+- The two images differ only in the master's tank rate: `SPACE1` 44.1 kHz, `SPACE1H` 22.05 kHz (build.py
+  `--space-tank 22`; the wet loses its top octave on the master). Synth / drum are 22.05 kHz in both.
+- `firmware/images/SPACE1.OP1` and `SPACE1H.OP1`:
+  - Command: LFOFX2's (`build.py --engines va,wavetable,grain,inprobe,sprobe,amp,harmonic,fm4,dprobe,fmdrum,metal
+    --db-trim va=1 --db-trim wavetable=1 --db-trim grain=1 --db-trim inprobe=0 --db-trim sprobe=0 --db-trim amp=1
+    --db-trim harmonic=6 --db-trim fm4=6 --svg-cost --name SPACE1`) plus `--space-tank 44` / `--space-tank 22
+    --name SPACE1H`, all FX.
+  - Built from commit c7d8522 in a clean `git archive`; loopcc scan clean; SVG checks clean; fx_lfo_target_check ALL
+    PASS (14 FX ids); te-boot identical to stock (f6233b974bdb6c92).
+  - SPACE1 sha256 a6c5d4eae8c0de958cd356903bc455fde295a37db4d7afa772784d525255ab62.
+  - SPACE1H sha256 9c81c27cb862d854e6ec28c3e0948895a51ccd29823a7c55ac3b629f9992eeed.
+- Host / sim checks: space_check (asm = C bit exact, RT60 per band, ERs, 60 s extremes, FREEZE / INFINITE, exact
+  silence, DC, MIX and duck, zipper, the shared lines, re-enable, the key, CYCLES), fx_abi_check, fx_lfo_check,
+  fx_lfo_target_check, pingpong_check, repeat_check, loopcc_check. Sound and UX reviews: notes/fx-reverb.md §12.
+- **Before flashing:** keep **26 or fewer saved drum sounds** (32 factory drum presets), as for LFOFX2.
+- Checklist. Flash SPACE1 first, then SPACE1H, and do 1 on both; the rest on SPACE1 (and on SPACE1H if SPACE1's
+  CPU is too high).
+  1. **CPU readings first** (photos of the bottom lines are ideal; let each settle a few seconds):
+     - master FX (mixer, T3) = space, HALL default, nothing playing: `CPU MASTER` max / mean, `CALLBACK` last / max;
+     - the same with busy music (the tape or several synth voices and drums playing);
+     - TAIL in SHIMMER +12+19 (white detent 16) with music; DECAY to FREEZE (green fully right) with music;
+     - synth FX (T3 on a synth sound) = space: `CPU SYNTH` and `TE FX`, idle, playing chords, shimmer, freeze;
+     - both at once (space on the synth sound and the master), chords and the tape: any crackle, dropout or UI lag?
+     - Report any audio glitch with the setting; note SPACE1 vs SPACE1H.
+  2. **The FX list** shows `space` after repeat (14 FX); it loads on synth, drum and master; save and reload a sound.
+  3. **Each space** (blue at ROOM, HALL, CHURCH, CATHEDRAL, VOID; DECAY at noon, MIX at the middle) on plucks, pads and
+     drums: size, decay, colour, metallic ring or flutter, the early reflections on snares. Turn blue slowly across
+     (a tape-like bend while the lines glide is expected; clicks are not).
+  4. **DECAY**: x1/4 .. x4 (the seconds readout); INFINITE (a held chord layers with the next one); FREEZE (the tail
+     holds, new notes stay dry over it; back to a lower detent: it decays naturally). The green push held on the space
+     screen: `FREEZE HELD`, let go: decays (if the encoders push at all; REPEAT2's KEYS probe).
+  5. **TAIL**: TONE dark .. natural (detent 5) .. bright; SHIMMER +12 (the octaves bloom in the tail; fades in over its
+     first detent); +12+19; frozen shimmer (a shimmer zone + FREEZE: the octaves climb at a steady level); detents
+     19-31: nothing yet (`SOON`).
+  6. **MIX / duck**: 0 = dry; up to the middle the wet rises; above it on the master the wet ducks under playing and
+     blooms in gaps (judge the -12 dB step one detent above the middle, and the recovery ~0.5 s); on synth / drum the
+     dry fades to all-wet at the top. A hot master: no hard clipping with MIX above 0.
+  7. **LFO** (T4, element or value LFO, target FX) on a synth sound with space: blue / green / white / orange each move
+     the screen's values (and the sound); on white the zone never changes, only the amount.
+  8. **Shared lines**: space, then pingpong, then repeat on the same sound (and on the master), and back: no garbage,
+     each starts clean. Space off and on again: a clean start (no old tail).
+- Result: _pending user flash_.

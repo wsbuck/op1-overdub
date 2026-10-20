@@ -728,7 +728,7 @@ the DSP's state while it runs (fx_lfo_check: stored S + live M draws exactly sto
 Every kernel and the whole FX bit exact with the C reference; RT60 per band per space within 10 % of the target and
 of the prototype (125 Hz .. 2 kHz; the 22.05 kHz tanks 15 % at 2 kHz, where they run 10–12 % short on the longest
 spaces); the tail's spectrum within 3 dB of the prototype's; the first reflection on time; 60 s at the extremes
-bounded; FREEZE and frozen shimmer within 2 dB over 58 s (0.6 dB measured); INFINITE layers two chords, line peak
+bounded; FREEZE and frozen shimmer within 2 dB over 58 s (measured 1.3 .. 2.0 dB: plain FREEZE sits at the limit); INFINITE layers two chords, line peak
 < 0.5 FS on a 0 dBFS pad; exact silence after every tail, nothing above -90 dBFS on the way; no DC; MIX 0 bit exact,
 the law and the duck depths (-12.0 / -24.0 dB); no zipper on detent-by-detent turns of every knob (incl. the holds);
 the shared lines (boot garbage, pingpong / repeat either way); a clean start after a gap; the green key; TE's LFO
