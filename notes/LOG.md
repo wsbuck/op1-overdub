@@ -1964,3 +1964,24 @@
   8. **Shared lines**: space, then pingpong, then repeat on the same sound (and on the master), and back: no garbage,
      each starts clean. Space off and on again: a clean start (no old tail).
 - Result: _pending user flash_.
+
+## 2026-10-19 — Test image 94: SPACE2.OP1 + SPACE2H.OP1 (space: the CPU pass)
+- What changed (notes/fx-reverb.md §13): the same FX as SPACE1 / SPACE1H with its kernels tightened. Sound
+  unchanged but for sub-LSB rounding (the interpolated reads now round to nearest even; checks re-run). Turning on the
+  shimmer no longer spikes the CPU (its ring clears 1 KB a call, the return muted for 4–8 calls).
+- Simulator CYCLES per call, shimmer +12+19 mean / max (SPACE1 in brackets): master 44.1 kHz 42.6k / 44.4k
+  (61.5k / 63.5k); master 22.05 kHz 30.1k / 31.2k (42.9k / 44.9k); synth / drum 22.1k / 23.3k (32.7k / 34.7k).
+  Idle / busy: 38–39k, 26–27k, 18–19k. Knobs turning: up to 49.9k / 27.6k (master 44.1 / mono).
+- `firmware/images/SPACE2.OP1` and `SPACE2H.OP1`:
+  - Command: as SPACE1 / SPACE1H (LFOFX2's plus `--space-tank 44 --name SPACE2` / `--space-tank 22 --name SPACE2H`).
+  - Built from commit 3b4ea54 in a clean `git archive`; loopcc scan clean; SVG checks clean; fx_lfo_target_check ALL
+    PASS; te-boot identical to stock (f6233b974bdb6c92).
+  - SPACE2 sha256 999fbd119d5b5ef9e6c1488796e26af5685b51f26de951f2831acc23f97c3dab.
+  - SPACE2H sha256 7b14db8838118cf9a6a2e30bbcbbc118893fc569529566e16617cb27d4e8a079.
+- Host / sim checks: space_check all passed (asm = C bit exact, RT60, extremes, holds, silence, DC, MIX, zipper,
+  shared lines, CYCLES), fx_abi_check, fx_lfo_check, fx_lfo_target_check, pingpong_check, repeat_check, loopcc_check.
+- **Before flashing:** keep **26 or fewer saved drum sounds**, as for SPACE1.
+- Checklist: SPACE1's item 1 (the CPU readings: `CPU MASTER` / `CPU SYNTH` idle, busy, shimmer, freeze, both at
+  once; any crackle) on SPACE2, then SPACE2H; compare with SPACE1's if taken. Also switch TAIL into a shimmer zone
+  while music plays: no dropout. A quick listen to each space and the shimmer: should sound the same as SPACE1.
+- Result: _pending user flash_.
