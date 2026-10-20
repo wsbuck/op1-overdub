@@ -700,6 +700,8 @@ Checks: `src/slot/test/space_check.py` (simulator), `space_kernels*.c`, renders 
   shimmer window's, unbiased rounding set explicitly (ASTAT RND_MOD cleared and restored).
 
 ### CPU (simulator, CYCLES per 64-frame call, mean / max; no SDRAM latency)
+SPACE1 (the MVP as first built; SPACE2's numbers in §13):
+
 | | idle | busy | VOID x4 | SHIMMER +12+19 | frozen shimmer | INFINITE |
 |---|---|---|---|---|---|---|
 | master, tank 44.1 kHz (SPACE1) | 47.6k / 49.4k | 49.5k / 51.3k | 49.3k / 50.7k | 61.5k / 63.5k | 57.3k / 58.0k | 49.9k / 51.1k |
@@ -759,3 +761,43 @@ Two fresh subagents: a reverb designer / producer on the fixed-point renders (si
 | UX SHOULD: the holds undiscoverable | `> INF` after the multiplier from detent 28 | |
 | UX SHOULD: the meter invisible (dark blue) | grey track and ticks, `0DB` at the end | |
 | UX COULD: the multiplier's decimals | two always (`X1.00`) | |
+
+## 13. The CPU pass (SPACE2, 2026-10-19)
+The simulator numbers were above our tested FX (distortion peaks at 44.5 k) before any SDRAM latency, so the MVP's
+kernels were tightened against these targets: synth / drum peak <= 25 k with shimmer, master at 22.05 kHz <= 35 k,
+master at 44.1 kHz <= 45 k.
+
+| CYCLES per 64-frame call, mean / max (space_check 14) | idle | busy | VOID x4 | SHIMMER +12+19 | frozen shimmer | INFINITE |
+|---|---|---|---|---|---|---|
+| master, tank 44.1 kHz (SPACE2) | 38.0k / 39.3k | 37.0k / 38.2k | 37.1k / 38.6k | 42.6k / **44.4k** | 40.1k / 40.4k | 37.4k / 38.3k |
+| master, tank 22.05 kHz (SPACE2H) | 26.4k / 27.4k | 25.9k / 26.8k | 26.0k / 27.0k | 30.1k / **31.2k** | 28.6k / 28.9k | 26.3k / 26.9k |
+| synth / drum, 22.05 kHz | 18.5k / 19.5k | 18.0k / 18.9k | 18.0k / 19.1k | 22.1k / **23.3k** | 20.6k / 20.9k | 18.4k / 19.0k |
+
+- Against SPACE1: shimmer peaks 63.5 k -> 44.4 k, 44.9 k -> 31.2 k, 34.7 k -> 23.3 k (all three targets met; the
+  44.1 kHz master with the least margin). Turning knobs costs more (the costly parameters recompute): a block-by-block
+  sweep of all four knobs peaks at 49.9 k / 27.6 k (master 44.1 / mono).
+- The shimmer coming on no longer spikes: its ring is cleared 1 KB a call (8 calls at 44.1 kHz, 4 at 22.05) with the
+  return muted meanwhile; hall -> shimmer mid-stream peaks at 43.7 k (44.1 kHz), under the steady shimmer peak.
+- Bit exact (the kernels unchanged in what they compute):
+  - Stage 1: each line's job kept from block to block (the LP's 40-bit state stays in it; `*lo`, saturated, is
+    still written, and the next block restarts from it whenever it saturated); the jobs filled by one asm loop, four
+    calls by variant; the z and v terms of the LP and of F one dual multiply-accumulate each; F's rounding preset in
+    the accumulator (`(F + 4096) >> 13`; |F| < 2^31 - 4096 by the gains' bounds); the in-line allpass's half one
+    vector add with shift (toward zero) or one fractional multiply (to nearest); segment splits by a 6-step binary
+    search, not the 32-step division.
+  - The line writes: two calls (by the input's sign); to nearest even through the accumulator's rounded read-out,
+    toward zero as `x + (x >> 29 logical)` (|x| < 2^23).
+  - The Hadamard: the loads and stores issued with the butterflies.
+  - The half-band decimator and interpolator: two outputs per pass, a dual multiply-accumulate on neighbouring samples
+    read as one word (each keeps a copy shifted by one sample for the odd pairs): ~2x.
+  - The allpass chains (4 input, 2 ER) one call each; the ER DC blocker + low-pass and the two low-cut high-passes as
+    two-pole kernels; the predelay write, the shimmer's input, ring write, return add and the duck's peak follower
+    input in asm; the shimmer's four heads one call; its return (gain, cubic limit, up to the tank rate) in asm.
+  - Params: the lines' lengths, in-line allpasses and loop delays recomputed only while gliding.
+- Re-baselined (the C reference changed with the asm; RT60, stability, silence and every other space_check case
+  re-run and passing): the interpolated reads (stage 1 and the shimmer heads) round difference x fraction to nearest
+  even (one fractional multiply; was half up), and the in-line allpass's half to nearest no longer saturates z = 32767
+  first (16384, the true nearest even). Both sub-LSB.
+- Not taken: 3 input allpasses instead of 4 (~1.4 k at 44.1 kHz) needs a sound A/B; the targets were met without it.
+  Left for later: the mix knee (~16 cycles a sample), the ER taps' two passes, the shimmer heads' per-segment C.
+

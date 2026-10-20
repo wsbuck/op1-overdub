@@ -102,7 +102,7 @@ uint32_t space_prof[12], space_prof_last;
 struct sp {
     /* the line set (laid out at a clean start) */
     int16_t *line[NL], *lap[NL], *pd[2], *ap[8], *erap[4], *shr;
-    uint32_t lmask, lapmask, pdmask, apmask[8], erapmask[4], shmask, words;
+    uint32_t lmask, lapmask, pdmask, apmask[8], erapmask[4], shmask, shwords, words;
     int n, lgn, half, nch;
     uint32_t clr;                           /* words cleared so far: below `words` the set is still being cleared */
     uint32_t last_blk;
@@ -112,8 +112,11 @@ struct sp {
     int32_t tx;                             /* TONE, smoothed, Q15 */
     /* FDN */
     int32_t d[NL], dn[NL], base[NL];        /* read delay now and at the block's end, glided base (Q16 samples) */
+    int32_t tgt[NL];                        /* the base's target (from SPACE) */
+    uint32_t mstep[NL], lm[NL];             /* the modulation's phase step a block; the loop's delay (samples) */
     uint32_t mph[NL];
     int32_t lo[NL];                         /* damping low-passes, Q31 */
+    uint32_t k1[NL][20];                    /* stage 1's per-line jobs (the asm's; with lo) */
     int32_t gh[NL], gd[NL];                 /* gains, Q15, x 1/sqrt 8 */
     int32_t lap_len[NL], ap_len[8], erap_len[4], pre, ert[2][8], erg[8], erlev, diff, axo, ahp, alp, ash;
     int32_t v[SP_NF];                       /* the space at blue (smoothed): sp_pt interpolated */
@@ -133,9 +136,14 @@ struct sp {
     int32_t shd0[2][2];                     /* each head's start offset (samples), jittered per grain */
     int32_t shg[2], shr_gain;               /* voice gains (Q15, glided), the return's gain (Q15) */
     int32_t shhp, shbq[2][4];               /* high-pass (Q31), the biquads' x1 x2 y1 y2 */
+    uint32_t sht, sh_clr;                   /* the shifter's time (half the tank rate), the words of its ring cleared */
+    int32_t shprev;                         /* the return's last sample (the interpolation up) */
     int16_t shf[BLOCK];                     /* the return for the next block */
     /* half-band histories */
-    int16_t dbo[2][48], dbe[2][48], ic[2][48];  /* the half-band filters' buffers (decimate, interpolate) */
+    /* the half-band filters' buffers (k_decimate, k_interpolate; the asm's shifted copies too) */
+    int16_t dbo[2][48] __attribute__((aligned(4))), dbe[2][48] __attribute__((aligned(4)));
+    int16_t dbs[2][48] __attribute__((aligned(4))), ic[2][48] __attribute__((aligned(4)));
+    int16_t ics[2][48] __attribute__((aligned(4)));
     /* CYCLES */
     uint32_t cmax, csum, cfdn, ccount;
 };
@@ -283,8 +291,27 @@ static const int16_t sp_rcp[65] = {
 
 static inline int32_t half_q(int32_t z, int near)   /* z / 2 (z 16-bit): toward zero, or to nearest even */
 {
-    return near ? sat16(z + ((z >> 1) & 1)) >> 1 : (z + (z < 0)) >> 1;
+    return near ? (z + ((z >> 1) & 1)) >> 1 : (z + (z < 0)) >> 1;
 }
+
+/* one FDN line's stage-1 parameters (k_stage1_all) */
+struct l1 {
+    int32_t *F;
+    const int16_t *ring;
+    uint32_t p, inc;
+    int interp;
+    int16_t *lap;
+    int32_t dly, sgn, *lo, gh, gd;
+    uint32_t *job;                          /* the asm's own per-line state (struct k1j), kept across blocks */
+};
+
+/* one segment of a shimmer head (k_heads): acc[0 .. n) += the ring read from p + inc on x the window w (+ dw a
+ * sample) */
+struct hseg {
+    int32_t *acc;
+    uint32_t p, inc;
+    int32_t w, dw, n;
+};
 
 #if defined(__bfin__) && !defined(SPACE_C)
 #include "space_asm.h"
@@ -305,7 +332,7 @@ static void k_stage1(int32_t *F, const int16_t *ring, uint32_t mask, uint32_t p,
         uint32_t i = (p >> 16) & mask, w = t + (uint32_t)j;
         int32_t y = ring[i];
         if (interp)
-            y += (((sat16(ring[(i + 1) & mask] - y) * (int32_t)((p & 0xFFFF) >> 1)) >> 14) + 1) >> 1;
+            y += rne(sat16(ring[(i + 1) & mask] - y) * (int32_t)((p & 0xFFFF) >> 1), 15);
         int32_t z = lap[(w - (uint32_t)dly) & lmask];
         int32_t v = sat16(y + sgn * half_q(z, near));
         lap[w & lmask] = (int16_t)v;
@@ -315,6 +342,14 @@ static void k_stage1(int32_t *F, const int16_t *ring, uint32_t mask, uint32_t p,
         F[j] = ((f >> 12) + 1) >> 1;
     }
     *lo = sat32(l);
+}
+
+/* stage 1 for all 8 lines (the asm groups them into four calls) */
+static void k_stage1_all(const struct l1 *L, uint32_t mask, uint32_t lmask, uint32_t t, int32_t a, int near, int n)
+{
+    for (int i = 0; i < NL; i++)
+        k_stage1(L[i].F, L[i].ring, mask, L[i].p, L[i].inc, L[i].interp, L[i].lap, lmask, t, L[i].dly, L[i].sgn,
+                 L[i].lo, a, L[i].gh, L[i].gd, near, n);
 }
 
 /* Schroeder allpass in place, g > 0: v = x + g z stored (toward zero: an isolated recursion must die out), y = z - g v
@@ -328,6 +363,14 @@ static void k_ap(int16_t *x, int16_t *ring, uint32_t mask, uint32_t t, int32_t d
         ring[w & mask] = (int16_t)v;
         x[j] = (int16_t)rne16(z * g2c - xx * g, 15);
     }
+}
+
+/* a chain of na allpasses in place, the gains the same for all */
+static void k_aps(int16_t *x, int16_t *const *ring, const uint32_t *mask, uint32_t t, const int32_t *dly, int32_t g,
+                  int32_t g2c, int na, int n)
+{
+    for (int a = 0; a < na; a++)
+        k_ap(x, ring[a], mask[a], t, dly[a], g, g2c, n);
 }
 
 /* the tank's send: u = direct x sd + ER x se (the sends ramping per sample), to nearest, saturated */
@@ -353,6 +396,13 @@ static void k_pole(int16_t *x, int32_t *st_, int32_t a, int hp, int n)
         x[j] = (int16_t)(hp ? sat16(xx - h) : h);
     }
     *st_ = sat32(l);
+}
+
+/* a high-pass, then a high-pass (hp2) or a low-pass */
+static void k_pole2(int16_t *x, int32_t *s1, int32_t a1, int32_t *s2, int32_t a2, int hp2, int n)
+{
+    k_pole(x, s1, a1, 1, n);
+    k_pole(x, s2, a2, hp2, n);
 }
 
 /* the 8 early-reflection taps: er[j] = sum ring[pos_k + j] g_k (two passes of 4, each read saturated to 32 bits),
@@ -414,6 +464,53 @@ static void k_write(int16_t *ln, uint32_t mask, uint32_t t, const int32_t *row, 
     ln[mask + 1] = ln[0];
 }
 
+/* the predelay write (n divides the ring and t: one contiguous run) */
+static void k_pdw(int16_t *pd, uint32_t pmask, uint32_t t, const int16_t *x, int n)
+{
+    for (int j = 0; j < n; j++)
+        pd[(t + (uint32_t)j) & pmask] = x[j];
+}
+
+/* clearing: nw words */
+static void k_zero(uint32_t *w, uint32_t nw)
+{
+    for (uint32_t i = 0; i < nw; i++)
+        w[i] = 0;
+}
+
+/* the largest |x| of two blocks */
+static int32_t k_peak(const int16_t *a, const int16_t *b, int n)
+{
+    int32_t pk = 0;
+    for (int j = 0; j < n; j++) {
+        int32_t x = a[j] < 0 ? -a[j] : a[j], y = b[j] < 0 ? -b[j] : b[j];
+        pk = x > pk ? x : pk;
+        pk = y > pk ? y : pk;
+    }
+    return pk;
+}
+
+/* the shimmer's ring write: every second sample (the odd ones) */
+static void k_ringw(int16_t *ring, uint32_t mask, uint32_t t, const int16_t *in, int n2)
+{
+    for (int j = 0; j < n2; j++)
+        ring[(t + (uint32_t)j) & mask] = in[2 * j + 1];
+}
+
+/* the shimmer's return into the send, saturated */
+static void k_add(int16_t *u, const int16_t *a, int n)
+{
+    for (int j = 0; j < n; j++)
+        u[j] = (int16_t)sat16(u[j] + a[j]);
+}
+
+/* the shimmer's input: the late outputs >> 4 (stereo) or the one >> 3, the low 16 bits */
+static void k_shin(int16_t *sh, const int32_t *l0, const int32_t *l1, int stereo, int n)
+{
+    for (int j = 0; j < n; j++)
+        sh[j] = (int16_t)(stereo ? (l0[j] + l1[j]) >> 4 : l0[j] >> 3);
+}
+
 /* the wet: er x erlev (Q15) + late >> 2, to nearest... (the late output is Q18: >> 3, x 2), saturated; and
  * the sum of |late| (the tank level) */
 static int32_t k_wet(int16_t *wet, const int16_t *er, const int32_t *late, int32_t erlev, int n)
@@ -425,6 +522,15 @@ static int32_t k_wet(int16_t *wet, const int16_t *er, const int32_t *late, int32
         sum += lt < 0 ? -lt : lt;
     }
     return sum;
+}
+
+/* stage 3 for all 8 lines: inputs on rows 3 and 4's signs: +P on lines 0 3, -M on 1 2, +M on 4 7, -P on 5 6 */
+static const int8_t inj_of[NL] = { 0, 1, 1, 0, 1, 0, 0, 1 }, inj_sgn[NL] = { 1, -1, -1, 1, 1, -1, -1, 1 };
+static void k_write_all(int16_t *const *ln, uint32_t mask, uint32_t t, int32_t F[NL][BLOCK], int32_t inj[2][BLOCK],
+                        int near, int n)
+{
+    for (int i = 0; i < NL; i++)
+        k_write(ln[i], mask, t, F[i], inj[inj_of[i]], inj_sgn[i], near, n);
 }
 
 /* dry and wet: x = x g + y w (the gains Q15 <= 32767, stepping per sample), with a soft knee above -3 dBFS (4:1, so
@@ -445,6 +551,26 @@ static void k_mix(int16_t *x, const int16_t *y, int32_t g, int32_t dg, int32_t w
     }
 }
 
+/* the shimmer's anti-alias biquad in place, {b0, b1, b2, a1, a2} Q14, its state {x1, x2, y1, y2}: y = b x .. - a y ..
+ * toward zero, saturated */
+static void k_bq(int16_t *x, int32_t *st_, const int16_t *q, int n)
+{
+    int32_t x1 = st_[0], x2 = st_[1], y1 = st_[2], y2 = st_[3];
+    for (int j = 0; j < n; j++) {
+        int32_t xx = x[j];
+        int32_t y = sat16(tz(q[0] * xx + q[1] * x1 + q[2] * x2 - q[3] * y1 - q[4] * y2, 14));
+        x2 = x1;
+        x1 = xx;
+        y2 = y1;
+        y1 = y;
+        x[j] = (int16_t)y;
+    }
+    st_[0] = x1;
+    st_[1] = x2;
+    st_[2] = y1;
+    st_[3] = y2;
+}
+
 /* one shimmer head over a segment: acc += (the ring at p, interpolated) x w >> 15, the window x gain w stepping by dw;
  * the read runs at a whole number of samples per sample (inc = r << 16): the fraction stays fixed */
 static void k_head(int32_t *acc, const int16_t *ring, uint32_t mask, uint32_t p, uint32_t inc, int32_t w, int32_t dw,
@@ -454,10 +580,34 @@ static void k_head(int32_t *acc, const int16_t *ring, uint32_t mask, uint32_t p,
         p += inc;
         uint32_t i = (p >> 16) & mask;
         int32_t y = ring[i];
-        y += (((sat16(ring[(i + 1) & mask] - y) * (int32_t)((p & 0xFFFF) >> 1)) >> 14) + 1) >> 1;
+        y += rne(sat16(ring[(i + 1) & mask] - y) * (int32_t)((p & 0xFFFF) >> 1), 15);
         acc[j] += (y * w) >> 15;
         w += dw;
     }
+}
+
+/* the heads' segments of one block (<= 8: 2 voices x 2 heads, a grain ending in each at most once) */
+static void k_heads(const struct hseg *g, int ng, const int16_t *ring, uint32_t mask)
+{
+    for (int k = 0; k < ng; k++)
+        k_head(g[k].acc, ring, mask, g[k].p, g[k].inc, g[k].w, g[k].dw, g[k].n);
+}
+
+/* the shimmer's return: x the gain g (Q15), soft limit to 0.5 FS: y = 0.75 (u - u^3 / 3), u = x / 0.75 clamped to
+ * +-1; then up to the tank rate (linear: the halfway sample the mean of its neighbours, from *prev) */
+static void k_shret(int16_t *out, const int32_t *acc, int32_t g, int32_t *prev, int n)
+{
+    int32_t pv = *prev;
+    for (int j = 0; j < n; j++) {
+        int32_t xx = (acc[j] * g) >> 15;
+        int32_t u = clampi((xx * 43691) >> 15, -32768, 32768);
+        int32_t u3 = (((u * u) >> 15) * u) >> 15;
+        int32_t y = ((u - ((u3 * 10923) >> 15)) * 24576) >> 15;
+        out[2 * j] = (int16_t)((pv + y) >> 1);
+        out[2 * j + 1] = (int16_t)y;
+        pv = y;
+    }
+    *prev = pv;
 }
 
 /* the half-band decimator (2:1) and interpolator (1:2), 31 taps (space_tables.h sp_hb). The decimator's input
@@ -482,6 +632,32 @@ static void k_interp(int16_t *out, const int16_t *c)
         out[2 * m] = (int16_t)rne16(a, 14);
         out[2 * m + 1] = c[m + 8];
     }
+}
+
+/* with their histories: the decimator keeps its input deinterleaved (odd samples feed the taps, even ones the centre),
+ * 15 of each from the last block, then this one's (the asm keeps bs / cs too: shifted copies) */
+static void k_decimate(int16_t *out, const int16_t *in, int16_t *bo, int16_t *be, int16_t *bs)
+{
+    (void)bs;
+    for (int i = 0; i < 15; i++) {
+        bo[i] = bo[32 + i];
+        be[i] = be[32 + i];
+    }
+    for (int i = 0; i < BLOCK / 2; i++) {
+        be[15 + i] = in[2 * i];
+        bo[15 + i] = in[2 * i + 1];
+    }
+    k_decim(out, bo, be);
+}
+
+static void k_interpolate(int16_t *out, const int16_t *in, int16_t *c, int16_t *cs)
+{
+    (void)cs;
+    for (int i = 0; i < 15; i++)
+        c[i] = c[32 + i];
+    for (int i = 0; i < BLOCK / 2; i++)
+        c[15 + i] = in[i];
+    k_interp(out, c);
 }
 #endif
 
@@ -512,8 +688,9 @@ static void layout(struct sp *s, int16_t *base)
         s->erap[i] = q;
         q += s->erapmask[i] + 1;
     }
-    s->shmask = (8192u >> h) - 1;
+    s->shmask = (4096u >> h) - 1;                   /* the shifter runs at half the tank rate */
     s->shr = q;
+    s->shwords = s->shmask + 1;
     q += s->shmask + 3;
     s->words = (uint32_t)(q - base);
 }
@@ -650,25 +827,37 @@ static void params(struct sp *s, const int16_t *p, int stereo)
     int32_t mdep = ((v[SP_MDEP] << 8) >> h) >> 8;   /* Q8 samples */
     mdep = (mdep * (32768 - s->frz)) >> 15;         /* frozen: still (whole-sample reads: no interpolation loss) */
     mdep = (mdep * (32768 - (s->inf >> 1))) >> 15;  /* INFINITE: half */
+    uint32_t c = s->c, ch = s->ch;
     uint32_t minc = (uint32_t)v[SP_MRATE] + (((uint32_t)v[SP_MRATE] * 31855u) >> 16);   /* Hz -> Q32 per 44.1 k */
     minc <<= h;
-    uint32_t c = s->c, ch = s->ch;
-    for (int i = 0; i < NL; i++) {
-        int32_t tgt = (((sp_base[i] * sz4) >> h) + 32768) & ~0xFFFF;   /* whole samples at rest */
-        if (first)
-            s->base[i] = tgt;
-        s->base[i] += clampi(tgt - s->base[i], -SLEW * n, SLEW * n);
-        int32_t de = s->base[i];
-        if (i == 0 || i == 3 || i == 5 || i == 6) {
-            s->mph[i] += ((minc * (uint32_t)(4096 + 942 * i)) >> 12) * (uint32_t)n;
-            de += (mdep * tri(s->mph[i] + (uint32_t)i * 0x5EB851EBu)) >> 7;
+    if (space_moved)
+        for (int i = 0; i < NL; i++) {
+            s->tgt[i] = (((sp_base[i] * sz4) >> h) + 32768) & ~0xFFFF;   /* whole samples at rest */
+            s->mstep[i] = ((minc * (uint32_t)(4096 + 942 * i)) >> 12) * (uint32_t)n;
         }
-        if (first)
-            s->d[i] = de;
-        s->dn[i] = de;
-        int32_t lp_ = ((s->base[i] >> 16) * 8520 + 32768) >> 16;   /* 13 % of the line */
-        s->lap_len[i] = clampi(lp_, 1, (int32_t)s->lapmask);
-        uint32_t m = (uint32_t)((s->base[i] >> 16) + s->lap_len[i]);   /* the loop's delay */
+    for (int i = 0; i < NL; i++) {
+        int32_t tgt = s->tgt[i];
+        if (first || s->base[i] != tgt) {           /* gliding: the in-line allpass and the loop's delay follow */
+            int32_t b = first ? tgt : s->base[i];
+            b += clampi(tgt - b, -SLEW * n, SLEW * n);
+            s->base[i] = b;
+            int32_t lp_ = ((b >> 16) * 8520 + 32768) >> 16;   /* 13 % of the line */
+            s->lap_len[i] = clampi(lp_, 1, (int32_t)s->lapmask);
+            s->lm[i] = (uint32_t)((b >> 16) + s->lap_len[i]);   /* the loop's delay */
+        }
+        s->dn[i] = s->base[i];
+    }
+    static const uint8_t mod_line[4] = { 0, 3, 5, 6 };
+    for (int k = 0; k < 4; k++) {
+        int i = mod_line[k];
+        s->mph[i] += s->mstep[i];
+        s->dn[i] += (mdep * tri(s->mph[i] + (uint32_t)i * 0x5EB851EBu)) >> 7;
+    }
+    if (first)
+        for (int i = 0; i < NL; i++)
+            s->d[i] = s->dn[i];
+    for (int i = 0; i < NL; i++) {
+        uint32_t m = s->lm[i];
         if (!gains_moved && m == s->last_m[i])
             continue;
         s->last_m[i] = m;
@@ -748,108 +937,88 @@ static void params(struct sp *s, const int16_t *p, int stereo)
     s->first = 0;
 }
 
-/* the shimmer: one block of the late output -> high-pass 300 Hz -> anti-alias biquad -> the ring; the heads ->
- * s->shf (the next block's return) */
+/* the shimmer: one block of the late output -> high-pass 300 Hz -> anti-alias low-pass -> every second sample into the
+ * ring (the shifter runs at half the tank rate: its input is band-limited below a quarter of the tank rate, 7 kHz at
+ * 44.1, 3 kHz at 22.05); the heads -> the return (n / 2 samples) -> the limit -> linear interpolation up -> s->shf
+ * (the next block's return). The ring starts from silence when the shimmer comes on: cleared 1 KB a call first. */
 static void shimmer(struct sp *s, const int16_t *in, int n)
 {
-    int h = s->half;
-    const int16_t *q = sp_shbq[h][s->shg[1] ? 1 : 0];
-    k_pole(sc.sh, &s->shhp, s->ash, 1, n);          /* the 300 Hz high-pass, in place */
-    for (int pass = 0; pass <= h; pass++) {         /* the anti-alias low-pass: twice at 22.05 kHz (4th order) */
-        int32_t *b = s->shbq[pass], x1 = b[0], x2 = b[1], y1 = b[2], y2 = b[3], any = 0;
-        for (int j = 0; j < n; j++) {
-            int32_t hp = in[j];
-            int32_t y = sat16(tz(q[0] * hp + q[1] * x1 + q[2] * x2 - q[3] * y1 - q[4] * y2, 14));
-            x2 = x1;
-            x1 = hp;
-            y2 = y1;
-            y1 = y;
-            sc.sh[j] = (int16_t)y;
-            any |= y | hp;
-        }
-        if (!any)                                   /* silence: no sub-LSB residue left to circulate */
-            x1 = x2 = y1 = y2 = 0;
-        b[0] = x1;
-        b[1] = x2;
-        b[2] = y1;
-        b[3] = y2;
-    }
-    for (int j = 0; j < n; j++)
-        s->shr[(s->t + (uint32_t)j) & s->shmask] = in[j];
-    s->shr[s->shmask + 1] = s->shr[0];              /* the guard sample for the interpolated reads */
-    if (s->shr_gain == 0 || (s->shg[0] == 0 && s->shg[1] == 0)) {
+    int h = s->half, n2 = n >> 1;
+    if (s->sh_clr < s->shwords) {                  /* clearing: no ring writes, no return yet */
+        uint32_t *w = (uint32_t *)(void *)s->shr + (s->sh_clr >> 1), left = (s->shwords - s->sh_clr + 1) >> 1;
+        uint32_t nw = left < 256 ? left : 256;
+        k_zero(w, nw);
+        s->sh_clr += 2 * nw;
         for (int j = 0; j < n; j++)
             s->shf[j] = 0;
         return;
     }
-    int32_t W = SH_W >> h;
-    for (int j = 0; j < n; j++)
+    const int16_t *q = sp_shbq[h][s->shg[1] ? 1 : 0];
+    k_pole(sc.sh, &s->shhp, s->ash, 1, n);          /* the 300 Hz high-pass, in place */
+    for (int pass = 0; pass <= h; pass++) {         /* the anti-alias low-pass: twice at 22.05 kHz (4th order) */
+        int32_t *b = s->shbq[pass];
+        k_bq(sc.sh, b, q, n);
+        if (!(b[0] | b[1]) && b[2] >= -2 && b[2] <= 2 && b[3] >= -2 && b[3] <= 2)
+            b[2] = b[3] = 0;                        /* silence in: no sub-LSB residue left to circulate */
+    }
+    k_ringw(s->shr, s->shmask, s->sht, in, n2);
+    if (s->shr_gain == 0 || (s->shg[0] == 0 && s->shg[1] == 0)) {
+        for (int j = 0; j < n; j++)
+            s->shf[j] = 0;
+        s->shprev = 0;
+        s->sht += (uint32_t)n2;
+        return;
+    }
+    int32_t W = (SH_W >> h) >> 1;                   /* the window in the shifter's samples */
+    struct hseg hs[8];
+    int nh = 0;
+    for (int j = 0; j < n2; j++)
         sc.acc[j] = 0;
     for (int vc = 0; vc < 2; vc++) {
         int32_t g = s->shg[vc];
         if (!g)
             continue;
         uint32_t r = (uint32_t)vc + 2;              /* read speed: 2 (+12), 3 (+19: a twelfth) */
-        uint32_t dph = (r - 1) * (h ? 1947831u : 973915u);    /* (r - 1) / W per sample, Q32 */
+        uint32_t dph = (r - 1) * (h ? 3897429u : 1947831u);   /* (r - 1) / W per shifter sample, Q32 */
         for (int hd = 0; hd < 2; hd++) {
             uint32_t ph = s->shph[vc] + ((uint32_t)hd << 31);
             int j0 = 0;
-            while (j0 < n) {
-                /* the samples left in this grain (its window phase wraps at 2^32); divide only when it ends here */
-                uint32_t left = 0xFFFFFFFFu - ph >= (uint32_t)(n - j0) * dph ? (uint32_t)(n - j0) + 1
-                                : sp_udiv(0xFFFFFFFFu - ph, dph) + 1;
-                int m = left < (uint32_t)(n - j0) ? (int)left : n - j0;
-                /* delay = 64 + offset + W (1 - phase) at the segment's first sample, shortening by r - 1 per
+            while (j0 < n2) {
+                /* the samples left in this grain (its window phase wraps at 2^32); when it ends here, the quotient
+                 * (< 32) by a binary search */
+                uint32_t rest = 0xFFFFFFFFu - ph, left = (uint32_t)(n2 - j0) + 1;
+                if (rest < (uint32_t)(n2 - j0) * dph) {
+                    uint32_t qq = 0;
+                    for (uint32_t b = 16; b; b >>= 1)
+                        if ((qq + b) * dph <= rest)
+                            qq += b;
+                    left = qq + 1;
+                }
+                int m = left < (uint32_t)(n2 - j0) ? (int)left : n2 - j0;
+                /* delay = n2 + offset + W (1 - phase) at the segment's first sample, shortening by r - 1 per
                  * sample: the read runs at speed r */
                 uint32_t ph1 = ph + dph;
-                int32_t dq = ((64 >> h) + s->shd0[vc][hd]) * 65536 + W * (int32_t)(65535 - (ph1 >> 16));
-                uint32_t pos = ((s->t + (uint32_t)j0) << 16) - (uint32_t)dq;
-                /* the window (x the voice's gain) at the segment's first and last sample, linear between: a 64-sample
-                 * chord of a 3000-sample sine is within 0.2 % */
+                int32_t dq = (n2 + s->shd0[vc][hd]) * 65536 + W * (int32_t)(65535 - (ph1 >> 16));
+                uint32_t pos = ((s->sht + (uint32_t)j0) << 16) - (uint32_t)dq;
+                /* the window (x the voice's gain) at the segment's first and last sample, linear between */
                 int32_t wa = (sp_win[(ph + dph) >> 22] * g) >> 15, wb = (sp_win[(ph + dph * (uint32_t)m) >> 22] * g) >> 15;
                 int32_t dw = m > 1 ? ((wb - wa) * sp_rcp[m - 1]) >> 15 : 0;
-                k_head(sc.acc + j0, s->shr, s->shmask, pos - (r << 16), r << 16, wa, dw, m);
+                hs[nh++] = (struct hseg){ sc.acc + j0, pos - (r << 16), r << 16, wa, dw, m };
                 ph += dph * (uint32_t)m;
                 j0 += m;
                 if ((uint32_t)m == left) {          /* the grain ended: the next one's start offset, jittered */
                     s->rng = s->rng * 1664525u + 1013904223u;
-                    s->shd0[vc][hd] = (int32_t)(((s->rng >> 16) * (uint32_t)((W * 6554) >> 16)) >> 16);    /* 0 .. 0.1 W */
+                    s->shd0[vc][hd] = (int32_t)(((s->rng >> 16) * (uint32_t)((W * 6554) >> 16)) >> 16);   /* 0 .. 0.1 W */
                 }
             }
         }
-        s->shph[vc] += dph * (uint32_t)n;
+        s->shph[vc] += dph * (uint32_t)n2;
     }
-    /* x the return's gain, soft limit to 0.5 FS: y = 0.75 (u - u^3 / 3), u = x / 0.75 clamped to +-1 */
-    for (int j = 0; j < n; j++) {
-        int32_t xx = (sc.acc[j] * s->shr_gain) >> 15;
-        int32_t u = clampi((xx * 43691) >> 15, -32768, 32768);
-        int32_t u3 = (((u * u) >> 15) * u) >> 15;
-        s->shf[j] = (int16_t)(((u - ((u3 * 10923) >> 15)) * 24576) >> 15);
-    }
-}
-
-/* the half-band decimator (2:1) and interpolator (1:2) with their histories: the decimator keeps its input
- * deinterleaved (odd samples feed the taps, even ones the centre), 15 of each from the last block, then this one's */
-static void decimate(int16_t *out, const int16_t *in, int16_t *bo, int16_t *be)
-{
-    for (int i = 0; i < 15; i++) {
-        bo[i] = bo[32 + i];
-        be[i] = be[32 + i];
-    }
-    for (int i = 0; i < BLOCK / 2; i++) {
-        be[15 + i] = in[2 * i];
-        bo[15 + i] = in[2 * i + 1];
-    }
-    k_decim(out, bo, be);
-}
-
-static void interpolate(int16_t *out, const int16_t *in, int16_t *c)
-{
-    for (int i = 0; i < 15; i++)
-        c[i] = c[32 + i];
-    for (int i = 0; i < BLOCK / 2; i++)
-        c[15 + i] = in[i];
-    k_interp(out, c);
+    k_heads(hs, nh, s->shr, s->shmask);
+    s->sht += (uint32_t)n2;
+    /* x the return's gain, soft limit to 0.5 FS: y = 0.75 (u - u^3 / 3), u = x / 0.75 clamped to +-1; then up to the
+     * tank rate (linear: the halfway sample the mean of its neighbours) */
+    k_shret(s->shf, sc.acc, s->shr_gain, &s->shprev, n2);
 }
 
 /* ---- one block of the tank: sc.x[c] (n frames at the tank rate) -> sc.wet[c] ---- */
@@ -863,27 +1032,22 @@ static void tank(struct sp *s)
     for (int c = 0; c < nch; c++) {
         int16_t *pd = s->pd[c], *x = sc.x[c], *u = sc.u[c], *er = sc.er[c];
         uint32_t pos[8];
-        for (int j = 0; j < n; j++)                 /* the predelay line */
-            pd[(t + (uint32_t)j) & s->pdmask] = x[j];
+        k_pdw(pd, s->pdmask, t, x, n);              /* the predelay line */
         for (int k = 0; k < 8; k++)
             pos[k] = t - (uint32_t)s->ert[c][k];
         SPROF(1);
         k_taps(er, pd, s->pdmask, pos, s->erg, n);
         SPROF(2);
-        k_ap(er, s->erap[2 * c], s->erapmask[2 * c], t, s->erap_len[2 * c], 19661, 20972, n);   /* g 0.6 */
-        k_ap(er, s->erap[2 * c + 1], s->erapmask[2 * c + 1], t, s->erap_len[2 * c + 1], 19661, 20972, n);
-        k_pole(er, &s->erdc[c], s->adc, 1, n);      /* a DC blocker (20 Hz): the ERs reach the wet unfiltered */
-        k_pole(er, &s->erlp[c], s->alp, 0, n);      /* the bandwidth on the ERs too: TONE darkens them */
+        k_aps(er, &s->erap[2 * c], &s->erapmask[2 * c], t, &s->erap_len[2 * c], 19661, 20972, 2, n);   /* g 0.6 */
+        /* a DC blocker (20 Hz): the ERs reach the wet unfiltered; the bandwidth on the ERs too: TONE darkens them */
+        k_pole2(er, &s->erdc[c], s->adc, &s->erlp[c], s->alp, 0, n);
         SPROF(3);
         k_send(u, pd, s->pdmask, t - (uint32_t)s->pre, er, s->sd, dsd, se, dse, n);
-        k_pole(u, &s->filt[c][0], s->ahp, 1, n);   /* the low cut: two one-pole high-passes */
-        k_pole(u, &s->filt[c][1], s->ahp, 1, n);
+        k_pole2(u, &s->filt[c][0], s->ahp, &s->filt[c][1], s->ahp, 1, n);   /* the low cut: two one-pole high-passes */
         k_pole(u, &s->filt[c][2], s->alp, 0, n);   /* the bandwidth */
         SPROF(4);
-        for (int a = 0; a < 4; a++)
-            k_ap(u, s->ap[4 * c + a], s->apmask[4 * c + a], t, s->ap_len[4 * c + a], s->diff, g2c, n);
-        for (int j = 0; j < n; j++)
-            u[j] = (int16_t)sat16(u[j] + s->shf[j]);
+        k_aps(u, &s->ap[4 * c], &s->apmask[4 * c], t, &s->ap_len[4 * c], s->diff, g2c, 4, n);
+        k_add(u, s->shf, n);                        /* the shimmer's return (last block's) */
         SPROF(5);
     }
     s->sd = s->sd_t;
@@ -895,23 +1059,31 @@ static void tank(struct sp *s)
         s->near = 0;
     /* FDN stage 1: per line, read (gliding, modulated), the in-line allpass, the absorbent filter -> F */
     uint32_t t0 = cycles();
+    struct l1 L[NL];
     for (int i = 0; i < NL; i++) {
         int32_t st_ = (s->dn[i] - s->d[i]) >> lgn;
-        uint32_t p0 = (t << 16) - 65536u - (uint32_t)s->d[i];
-        int interp = st_ != 0 || (s->d[i] & 0xFFFF) != 0;     /* a whole-sample delay at rest reads plain */
-        k_stage1(sc.F[i], s->line[i], s->lmask, p0, 65536u - (uint32_t)st_, interp, s->lap[i], s->lapmask, t,
-                 s->lap_len[i], i & 1 ? -1 : 1, &s->lo[i], s->axo, s->gh[i], s->gd[i], s->near, n);
+        L[i].F = sc.F[i];
+        L[i].ring = s->line[i];
+        L[i].p = (t << 16) - 65536u - (uint32_t)s->d[i];
+        L[i].inc = 65536u - (uint32_t)st_;
+        L[i].interp = st_ != 0 || (s->d[i] & 0xFFFF) != 0;   /* a whole-sample delay at rest reads plain */
+        L[i].lap = s->lap[i];
+        L[i].dly = s->lap_len[i];
+        L[i].sgn = i & 1 ? -1 : 1;
+        L[i].lo = &s->lo[i];
+        L[i].gh = s->gh[i];
+        L[i].gd = s->gd[i];
+        L[i].job = s->k1[i];
         s->d[i] += st_ * n;
     }
+    k_stage1_all(L, s->lmask, s->lapmask, t, s->axo, s->near, n);
     SPROF(6);
     /* stage 2: the Hadamard, the outputs, the inputs; stage 3: the writes */
     k_wht(sc.F, sc.late[0], sc.late[1], n);
     /* the inputs on rows 3 and 4's signs, x 1/sqrt 8 (Q18): +P on lines 0 3, -M on 1 2, +M on 4 7, -P on 5 6 */
     k_inj(sc.inj[0], sc.inj[1], sc.u[0], nch == 2 ? sc.u[1] : sc.zero, n);
     SPROF(7);
-    static const int8_t inj_of[NL] = { 0, 1, 1, 0, 1, 0, 0, 1 }, inj_sgn[NL] = { 1, -1, -1, 1, 1, -1, -1, 1 };
-    for (int i = 0; i < NL; i++)
-        k_write(s->line[i], s->lmask, t, sc.F[i], sc.inj[inj_of[i]], inj_sgn[i], s->near, n);
+    k_write_all(s->line, s->lmask, t, sc.F, sc.inj, s->near, n);
     SPROF(8);
     s->cfdn += cycles() - t0;
 #ifdef SPACE_DIAG
@@ -932,14 +1104,11 @@ static void tank(struct sp *s)
     SPROF(9);
     /* the shimmer, from this block's late output (heard from the next block on) */
     if (s->shg[0] | s->shg[1] | s->shbq[0][0] | s->shbq[0][1] | s->shbq[0][2] | s->shbq[0][3] | s->shbq[1][2]) {
-        if (!s->sh_on) {                            /* the ring holds an old tail: start it from silence */
-            uint32_t *w = (uint32_t *)(void *)s->shr;
-            for (uint32_t i = 0; i < (s->shmask + 3) >> 1; i++)
-                w[i] = 0;
+        if (!s->sh_on) {                            /* the ring holds an old tail: clear it (shimmer(), 1 KB a call) */
+            s->sh_clr = 0;
             s->sh_on = 1;
         }
-        for (int j = 0; j < n; j++)
-            sc.sh[j] = (int16_t)(nch == 2 ? (sc.late[0][j] + sc.late[1][j]) >> 4 : sc.late[0][j] >> 3);
+        k_shin(sc.sh, sc.late[0], sc.late[1], nch == 2, n);
         shimmer(s, sc.sh, n);
     } else {
         for (int j = 0; j < n; j++)
@@ -970,12 +1139,7 @@ static void run(int stereo, int16_t **io, const int16_t *p)
     int32_t wet, dry, ddb;
     sp_mix(knob(p[3]), stereo, &wet, &dry, &ddb);
     if (stereo) {
-        int32_t pk = 0;
-        for (int c = 0; c < 2; c++)
-            for (int j = 0; j < BLOCK; j++) {
-                int32_t a = io[c][j] < 0 ? -io[c][j] : io[c][j];
-                pk = a > pk ? a : pk;
-            }
+        int32_t pk = k_peak(io[0], io[1], BLOCK);
         if (pk >= s->ef)
             s->dhold = 103;                         /* hold 150 ms after the last peak: no pumping between notes */
         if (pk > s->ef)
@@ -995,9 +1159,7 @@ static void run(int stereo, int16_t **io, const int16_t *p)
     if (!s->running) {                              /* clearing the set: the wet muted */
         uint32_t *w = (uint32_t *)(void *)s->line[0], left = (s->words - s->clr + 1) >> 1;
         uint32_t nw = left < CLEAR_WORDS / 2 ? left : CLEAR_WORDS / 2;
-        w += s->clr >> 1;
-        for (uint32_t i = 0; i < nw; i++)
-            w[i] = 0;
+        k_zero(w + (s->clr >> 1), nw);
         s->clr += 2 * nw;
         if (s->clr >= s->words)
             s->running = 1;
@@ -1010,7 +1172,7 @@ static void run(int stereo, int16_t **io, const int16_t *p)
         SPROF(0);
         for (int c = 0; c < nch; c++) {
             if (s->half)
-                decimate(sc.x[c], io[c], s->dbo[c], s->dbe[c]);
+                k_decimate(sc.x[c], io[c], s->dbo[c], s->dbe[c], s->dbs[c]);
             else
                 for (int j = 0; j < BLOCK; j++)
                     sc.x[c][j] = io[c][j];
@@ -1018,7 +1180,7 @@ static void run(int stereo, int16_t **io, const int16_t *p)
         tank(s);
         for (int c = 0; c < nch; c++)
             if (s->half)
-                interpolate(sc.wetf[c], sc.wet[c], s->ic[c]);
+                k_interpolate(sc.wetf[c], sc.wet[c], s->ic[c], s->ics[c]);
             else
                 for (int j = 0; j < BLOCK; j++)
                     sc.wetf[c][j] = sc.wet[c][j];
