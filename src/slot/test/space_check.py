@@ -16,9 +16,10 @@ skips the asm and CYCLES checks). Compares with the float prototype (design/fx/r
      the same way (the TONE variants against the prototype only)
   3. the spectrum of the tail matches the prototype's (octave bands relative to 1 kHz, within 3 dB, 125 Hz .. 4 kHz)
   4. early reflections: an impulse's first energy arrives at the predelay plus the first tap, none before
-  5. 60 s at the extremes (VOID x4 with SHIMMER +12 / +12+19 at the top, FREEZE and INFINITE with shimmer): bounded,
+  5. 60 s at the extremes (VOID x4 with SHIMMER +12 / +12+19 / SUB -12 at the top, FREEZE and INFINITE with shimmer
+     and SUB): bounded,
      no 5 s window louder than the first by more than 1 dB, no line saturating
-  6. FREEZE holds within 2 dB over 60 s (plain and frozen shimmer); INFINITE layers a second chord on the first
+  6. FREEZE holds within 2 dB over 60 s (plain, frozen shimmer, frozen SUB); INFINITE layers a second chord on the first
      (both present at the end) with the line peak < 0.5 FS on a 0 dBFS pad
   7. the tail ends in exact silence (every space, x1 and x4, both rates), and nothing above -90 dBFS on the way
      (no limit cycle sits there)
@@ -30,7 +31,14 @@ skips the asm and CYCLES checks). Compares with the float prototype (design/fx/r
       pingpong / repeat after space start from silence too
   12. re-enabled after a gap: a clean start (the old tail is gone); the green key freezes while held
   13. TE's LFO on white (synth): the zone stays the stored knob's
-  14. CYCLES per 64-frame call at both rates: idle, busy, shimmer, freeze (reported; sanity bounds)
+  14. CYCLES per 64-frame call at both rates: idle, busy, shimmer, freeze, SUB, GATE, SWELL (reported; sanity bounds;
+      every v1.1 zone's peak at or below SHIMMER +12+19's)
+  15. the v1.1 TAIL zones (zones()): SUB -12 exactly an octave down and stable 60 s at VOID x4 (and frozen), no
+      sub-bass build-up; GATE's hold times 50 / 200 / 350 ms, the close (60 dB in ~30 ms) without clicks, a sustained
+      pad (loud and quiet) held to its end; SWELL's rise times 0.15 .. 1.5 s and the dry untouched; FREEZE in each
+      zone; the zone joins glide (no click); TE's LFO keeps GATE's zone
+
+  --zones runs only 15 (and 14's zone rows in the simulator)
 """
 import argparse
 import math
@@ -113,12 +121,406 @@ def wet_of(out, x):
         x = np.concatenate([x, np.zeros((len(out) - len(x), x.shape[1]))])
     return out.astype(float) - x
 
+SUB_TOP, GATE_LO, GATE_MID, GATE_HI, SWELL_LO, SWELL_MID, SWELL_HI = 23551, 23552, 26112, 28671, 28672, 30720, 32767
+
+
+def cycles(run, builds, zones_only=False):
+    """14: CYCLES per 64-frame call (simulator), mean / max; the v1.1 zones' peaks at or below SHIMMER +12+19's"""
+    nc = LEAD + 600 * 64
+    rng = np.random.default_rng(9)
+    busy = rng.uniform(-12000, 12000, (nc, 2))
+    idle = np.zeros((nc, 2))
+    hits = np.zeros((nc, 2))                    # snare-like hits every 0.25 s: the gate opens and shuts, swells
+    for t0 in range(LEAD, nc, FS // 4):
+        m = min(int(0.08 * FS), nc - t0)
+        hits[t0:t0 + m] = (rng.uniform(-16000, 16000, m) * np.exp(-np.arange(m) / FS / 0.02))[:, None]
+    cyc_cases = {"idle": (idle, (8192, 16384, 5120, 16384)), "busy": (busy, (8192, 16384, 5120, 16384)),
+                 "busy_void4": (busy, (32767, 30719, 5120, 24576)),
+                 "shimmer_12_19": (busy, (24576, 22000, 17500, 16384)),
+                 "freeze_shimmer": (busy, (24576, 32767, 12800, 16384)), "infinite": (busy, (8192, 31000, 5120, 16384)),
+                 "sub": (busy, (24576, 22000, SUB_TOP, 16384)), "frozen_sub": (busy, (24576, 32767, SUB_TOP, 16384)),
+                 "gate": (hits, (8192, 16384, GATE_MID, 16384)), "swell": (hits, (24576, 16384, SWELL_MID, 16384))}
+    if zones_only:
+        cyc_cases = {k: v for k, v in cyc_cases.items() if k in ("shimmer_12_19", "sub", "frozen_sub", "gate", "swell")}
+    for rate, defs in builds:
+        cases = {}
+        for nm, (sig, k) in cyc_cases.items():
+            for m in "sm":
+                if m == "m" and defs:
+                    continue
+                c = S.Case(sig, m)
+                for b in range(nc // 64):
+                    c.block(k, fx="S" if b < LEAD // 64 + 40 else "s")
+                cases[f"{nm}_{m}"] = c
+        res = run(cases, defs)
+        for m in "sm":
+            if m == "m" and defs:
+                continue
+            tag = "mono 22.05 kHz" if m == "m" else f"stereo {rate} kHz"
+            row = ", ".join(f"{nm} {res[f'{nm}_{m}'][2][1] / 1000:.1f}k / {res[f'{nm}_{m}'][2][0] / 1000:.1f}k"
+                            for nm in cyc_cases)
+            worst = max(res[f"{nm}_{m}"][2][0] for nm in cyc_cases)
+            bound = 110000 if m == "s" and not defs else 80000
+            check(worst < bound, f"CYCLES per call, {tag} (mean / max): {row}")
+            shp = res[f"shimmer_12_19_{m}"][2][0]
+            zp = {nm: res[f"{nm}_{m}"][2][0] for nm in ("sub", "frozen_sub", "gate", "swell")}
+            check(max(zp.values()) <= shp, f"CYCLES, {tag}: the v1.1 zones' peaks "
+                  + " ".join(f"{k} {v / 1000:.1f}k" for k, v in zp.items())
+                  + f" at or below SHIMMER +12+19's {shp / 1000:.1f}k")
+
+
+def env_db(x, w):
+    """RMS envelope in dB, windows of w samples"""
+    n = len(x) // w
+    r = np.sqrt(np.mean(x[:n * w].reshape(n, w) ** 2, axis=1))
+    return 20 * np.log10(r / 32768 + 1e-12)
+
+
+def peak_freq(x, lo, hi):
+    """the strongest frequency in lo .. hi (Hz), interpolated (Hann, parabolic on the log magnitude)"""
+    n = len(x)
+    X = np.abs(np.fft.rfft(x * np.hanning(n), 8 * n))
+    f = np.fft.rfftfreq(8 * n, 1 / FS)
+    sel = np.nonzero((f >= lo) & (f <= hi))[0]
+    i = sel[np.argmax(X[sel])]
+    a, b, c = np.log(X[i - 1:i + 2] + 1e-12)
+    return f[i] + (a - c) / (2 * (a - 2 * b + c)) * (f[1] - f[0]), X, f
+
+
+def zones(run, quick):
+    """15: the v1.1 TAIL zones (SUB -12, GATE, SWELL)"""
+    rng = np.random.default_rng(15)
+    tt = np.arange(LEAD + 40 * FS) / FS
+
+    # -- SUB -12, the shifter alone (space_shtest, the C path: SUB's heads are C on the device too): an 880 Hz sine ->
+    # 440 Hz exactly. Its mean frequency over 11 s with the grains' jitter (what plays), and the in-grain frequency
+    # with the jitter off (SPACE_SH_STILL: the heads coherent, so the crossfades add no phase drift) --
+    import subprocess
+    for half in (0, 1):
+        fs = FS >> half
+        t = np.arange(12 * fs) / fs
+        xs = np.round(np.sin(2 * np.pi * 880 * t) * 8000)
+        got = []
+        for d in ("", "-DSPACE_SH_STILL"):
+            w = tempfile.mkdtemp(prefix="space_sh_")
+            exe = os.path.join(w, "m")
+            subprocess.run(["cc", "-std=gnu99", "-O2", "-w", "-DSPACE_HOST", "-DSPACE_NO_KEY", "-DSPACE_SHTEST", *d.split(),
+                            "-I", S.SLOT, "-o", exe, os.path.join(HERE, "space_main.c"), os.path.join(S.SLOT, "space.c")],
+                           check=True)
+            nb = len(xs) // (64 >> half)
+            xs.astype("<i2").tofile(os.path.join(w, "i"))
+            subprocess.run([exe, "shtest", str(half), "2", os.path.join(w, "i"), os.path.join(w, "o"), str(nb)], check=True)
+            y = np.fromfile(os.path.join(w, "o"), dtype="<i2").astype(float)[fs:]
+            Y = np.fft.fft(y)
+            fy = np.fft.fftfreq(len(y), 1 / fs)
+            Y[(fy < 396) | (fy > 484)] = 0
+            fi = np.diff(np.unwrap(np.angle(np.fft.ifft(Y)))) * fs / (2 * np.pi)
+            got.append(1200 * math.log2((np.mean(fi) if not d else np.median(fi)) / 440))
+        check(abs(got[0]) < 1 and abs(got[1]) < (0.1 if half == 0 else 1.0),
+              f"SUB -12's shifter alone at {44.1 / (1 + half):.2f} kHz: an 880 Hz sine comes out {got[0]:+.2f} cents "
+              f"from 440 Hz on average (the grains jittered), in-grain {got[1]:+.2f} cents (jitter off; at 22.05 kHz "
+              "the half window, 551 samples, isn't a whole number of 880 Hz periods: its crossfades drift ~1 cent)")
+    # ... and in the tank: an 880 Hz tone's tail holds a strong 440 Hz the plain tail doesn't
+    n = LEAD + int(6 * FS)
+    x = np.zeros((n, 2))
+    on = slice(LEAD, LEAD + int(0.8 * FS))
+    x[on] = (np.sin(2 * np.pi * 880 * tt[on]) * 12000 * np.minimum(1, (tt[on] - tt[LEAD]) / 0.01))[:, None]
+    cases = {}
+    for m in "sm":
+        for nm, kt in (("sub", SUB_TOP), ("tone", 5120)):
+            c = S.Case(x, m)
+            c.fill((24576, 24000, kt, 16384))
+            cases[f"{nm}{m}"] = c
+    res = run(cases)
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        seg = slice(LEAD + int(1.5 * FS), LEAD + int(5.5 * FS))
+        X = peak_freq(wet_of(res[f"sub{m}"][0], x)[seg, 0], 300, 600)[1]
+        Xt, f = peak_freq(wet_of(res[f"tone{m}"][0], x)[seg, 0], 300, 600)[1:]
+        lvl = lambda XX, fc: 20 * math.log10(XX[(f > fc - 5) & (f < fc + 5)].max() + 1e-9)   # noqa: E731
+        rel, gain = lvl(X, 440) - lvl(X, 880), lvl(X, 440) - lvl(Xt, 440)
+        check(rel > -12 and gain > 25, f"{tag} SUB -12 at the top of its zone, CATHEDRAL: an 880 Hz tone's tail has "
+              f"440 Hz {rel:+.0f} dB vs 880 Hz, {gain:.0f} dB above the plain tail's")
+
+    # -- SUB at VOID x4 on a pad (110 .. 330 Hz), 60 s: no sub-bass build-up (the energy below 60 Hz never grows, and
+    # stays a small share of the tail); frozen on the pad: no more creep than the frozen shimmer's --
+    T = 20 if quick else 60
+    nb = LEAD + int((T + 1) * FS)
+    tl = np.arange(nb) / FS
+    padx = np.zeros((nb, 2))
+    pon = slice(LEAD, LEAD + 2 * FS)
+    padx[pon] = (sum(np.sin(2 * np.pi * fr * tl[pon]) for fr in (110.0, 220.0, 277.2, 329.6)) / 4 * 20000)[:, None]
+    cases = {}
+    for m in "sm":
+        c = S.Case(padx, m)
+        c.fill((32767, 30719, SUB_TOP, 16384))
+        cases[f"voidsub{m}"] = c
+        for nm, kt in (("sub", SUB_TOP), ("sh12", 14000)):
+            c = S.Case(padx, m)
+            for b in range(nb // 64):
+                c.block((24576, 32767 if b * 64 >= LEAD + int(1.0 * FS) else 16384, kt, 16384))
+            cases[f"frz{nm}{m}"] = c
+    res = run(cases, "-DSPACE_DIAG")
+
+    def low(y):                                     # energy below 60 Hz (dB) and its share of the tail's
+        Y = np.abs(np.fft.rfft(y)) ** 2
+        fy = np.fft.rfftfreq(len(y), 1 / FS)
+        lo, tot = Y[(fy > 10) & (fy < 60)].sum(), Y[fy > 10].sum()
+        return 10 * math.log10(lo + 1e-9), 10 * math.log10(lo / (tot + 1e-9) + 1e-12)
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        win = 5 * FS
+        ws = res[f"voidsub{m}"][0][LEAD + 2 * FS:, 0].astype(float)
+        ls = [low(ws[i:i + win]) for i in range(0, len(ws) - win + 1, win)]
+        audible = [k for k in range(len(ls)) if 10 * math.log10(np.mean(ws[k * win:(k + 1) * win] ** 2) + 1e-9) > 40]
+        grow = max(ls[k][0] - ls[0][0] for k in audible)
+        share = max(ls[k][1] for k in audible)
+        check(grow <= 3.0 and share <= -18, f"{tag} SUB -12 at VOID x4 on a pad (110 .. 330 Hz: its octave down reaches "
+              f"55 Hz), {T} s: below 60 Hz at most {share:.0f} dB of the tail's energy (per 5 s: "
+              + " ".join(f"{v[1]:.0f}" for v in ls) + f"), its level {grow:+.1f} dB at most over the first 5 s's while "
+              "the tail decays (no sub-bass drone)")
+        drift = []
+        for nm in ("sub", "sh12"):
+            o = res[f"frz{nm}{m}"][0][LEAD + 3 * FS:, 0].astype(float)
+            rr = [20 * math.log10(math.sqrt(np.mean(o[i:i + FS] ** 2)) + 1e-9) for i in range(0, len(o) - FS + 1, FS)]
+            drift.append(max(rr) - min(rr))
+        check(drift[0] <= drift[1] + 1.0, f"{tag} FREEZE in SUB on the pad, {T - 2} s: the level within "
+              f"{drift[0]:.1f} dB (frozen shimmer on the same pad {drift[1]:.1f} dB; on a noise burst: 6)")
+
+    # -- GATE: hold times, the close, a pad held to its end --
+    n = LEAD + int(3 * FS)
+    x = np.zeros((n, 2))
+    on = slice(LEAD, LEAD + int(0.3 * FS))
+    x[on] = rng.uniform(-8000, 8000, (int(0.3 * FS), 2))
+    cases = {}
+    for m in "sm":
+        for nm, kt in (("g50", GATE_LO), ("g200", GATE_MID), ("g350", GATE_HI), ("open", 5120)):
+            c = S.Case(x, m)
+            c.fill((24576, 16384, kt, 16384))
+            cases[f"{nm}{m}"] = c
+    res = run(cases, "-DSPACE_GATE_FLAT")          # (GATE's own low cut off: its tank = TONE's, the gain exact)
+    end = LEAD + int(0.3 * FS)
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        wo = wet_of(res[f"open{m}"][0], x)[:, 0]
+        for nm, hold in (("g50", 50), ("g200", 200), ("g350", 350)):
+            wg = wet_of(res[f"{nm}{m}"][0], x)[:, 0]
+            g = env_db(wg[end:], 44) - env_db(wo[end:], 44)          # the gate's gain, 1 ms steps after the input
+            t20 = int(np.argmax(g < -20))                              # ms after the input stopped
+            t60 = int(np.argmax(g < -60)) if (g < -60).any() else 999
+            open_ok = np.all(np.abs(g[:hold]) < 0.5)
+            # the close without clicks: the 2nd difference never above the open tail's
+            d2g, d2o = np.abs(np.diff(wg[end:end + int(0.6 * FS)], 2)), np.abs(np.diff(wo[end:end + int(0.6 * FS)], 2))
+            k = 44
+            mg = d2g[:len(d2g) // k * k].reshape(-1, k).max(1)
+            mo = d2o[:len(d2o) // k * k].reshape(-1, k).max(1)
+            click = np.max(mg - 1.05 * mo)
+            # the input's follower takes ~15 ms to fall 15 dB (under the threshold), then the hold, then 60 dB in
+            # ~30 ms (-20 dB ~10 ms in)
+            exp = 15 + hold + 10
+            check(open_ok and abs(t20 - exp) <= 8 and t60 - t20 <= 25 and click <= 4,
+                  f"{tag} GATE {hold} ms: the tail at full through the hold after the input stops, -20 dB at {t20} ms, "
+                  f"-60 dB at {t60} ms (expected ~{exp} and {t20} + 20), no click (the 2nd difference never above the "
+                  f"open tail's: {click:+.0f})")
+    # a pad held to its end (loud and quiet); and drums: every hit opens it
+    n = LEAD + int(7 * FS)
+    t = np.arange(n) / FS - LEAD / FS
+    envp = np.clip(t / 0.08, 0, 1) * np.where(t < 4.0, 1.0, np.exp(-(t - 4.0) / 0.12))
+    envp[t < 0] = 0
+    sawc = sum(((fr * t) % 1) * 2 - 1 for fr in (130.8, 164.8, 196.0)) / 3
+    cases = {}
+    for m in "sm":
+        for lv in (20000, 600):
+            for nm, kt in (("gate", GATE_MID), ("open", 5120)):
+                c = S.Case(sawc * envp * lv, m)
+                c.fill((16384, 20000, kt, 16384))
+                cases[f"pad{lv}{nm}{m}"] = c
+    res = run(cases, "-DSPACE_GATE_FLAT")
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        for lv in (20000, 600):
+            xin = cases[f"pad{lv}gate{m}"].inp
+            g = env_db(wet_of(res[f"pad{lv}gate{m}"][0], xin)[LEAD:, 0], 441) - \
+                env_db(wet_of(res[f"pad{lv}open{m}"][0], xin)[LEAD:, 0], 441)       # 10 ms steps
+            held = g[10:400]                                                   # 0.1 .. 4 s: the pad
+            after = g[470:520]                                                 # 4.7 .. 5.2 s
+            check(np.all(np.abs(held) < 0.5) and np.all(after < -50), f"{tag} GATE 200 ms on a 4 s pad at "
+                  f"{20 * math.log10(lv / 32768):.0f} dBFS: open through the pad (gain {held.min():+.1f} .. "
+                  f"{held.max():+.1f} dB), shut after its release (<= {after.max():.0f} dB from 4.7 s)")
+
+    # a pluck (a note decaying, no release) shuts the gate too: the reference follows the recent peak slowly (~5 s)
+    n = LEAD + int(4 * FS)
+    tp = np.arange(n - LEAD) / FS
+    x = np.zeros((n, 2))
+    x[LEAD:] = (np.sin(2 * np.pi * 330 * tp) * np.exp(-tp / 0.25) * 16000)[:, None]
+    cases = {}
+    for m in "sm":
+        for nm, kt in (("gate", GATE_MID), ("open", 5120)):
+            c = S.Case(x, m)
+            c.fill((16384, 16384, kt, 16384))
+            cases[f"pl{nm}{m}"] = c
+    res = run(cases, "-DSPACE_GATE_FLAT")
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        g = env_db(wet_of(res[f"plgate{m}"][0], x)[LEAD:, 0], 441) - env_db(wet_of(res[f"plopen{m}"][0], x)[LEAD:, 0], 441)
+        t = int(np.argmax(g < -20)) * 10
+        check(400 <= t <= 1100, f"{tag} GATE 200 ms on a pluck (a 0.25 s decay, no release): shut (-20 dB) {t} ms after "
+              "its attack, once it's 15 dB down plus the hold")
+
+    # -- SWELL: the rise times, the dry untouched --
+    n = LEAD + int(9 * FS)
+    x = np.zeros((n, 2))
+    onsets = [LEAD + int(0.2 * FS), LEAD + int(3.2 * FS), LEAD + int(6.2 * FS)]
+    for o in onsets:
+        m_ = int(2.5 * FS)
+        tp = np.arange(m_) / FS
+        x[o:o + m_] += (np.sin(2 * np.pi * 392 * tp) * np.exp(-tp / 0.6) * 12000 * np.minimum(1, tp / 0.002))[:, None]
+    cases = {}
+    for m in "sm":
+        for nm, kt in (("s150", SWELL_LO), ("s470", SWELL_MID), ("s1500", SWELL_HI), ("open", 5120)):
+            c = S.Case(x, m)
+            c.fill((16384, 16384, kt, 16384))
+            cases[f"{nm}{m}"] = c
+    res = run(cases)
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        wo = wet_of(res[f"open{m}"][0], x)[:, 0]
+        for nm, ms in (("s150", 150), ("s470", 474), ("s1500", 1496)):
+            out = res[f"{nm}{m}"][0]
+            wg = wet_of(out, x)[:, 0]
+            t90 = []
+            for o in onsets[1:]:                    # (the first: the wet starts from nothing anyway)
+                g = env_db(wg[o:o + 2 * FS], 44) - env_db(wo[o:o + 2 * FS], 44)
+                t90.append(int(np.argmax(g[5:] > 20 * math.log10(0.9))) + 5)
+            exp = ms * math.sqrt(0.9)               # rise^2 reaches 0.9 at 0.95 of the rise
+            o = onsets[1]
+            dr = out[o + int(0.02 * FS):o + int(0.04 * FS), 0].astype(float)
+            di = x[o + int(0.02 * FS):o + int(0.04 * FS), 0]
+            dry_db = 20 * math.log10(np.std(dr) / np.std(di))
+            res_db = 20 * math.log10(np.std(dr - di) / np.std(di))
+            check(all(abs(v / exp - 1) < 0.12 for v in t90) and abs(dry_db) < 0.5 and res_db < -20,
+                  f"{tag} SWELL {ms / 1000:.2f} s: the wet back to 90 % {', '.join(map(str, t90))} ms after each "
+                  f"onset (~{exp:.0f} expected); 20 .. 40 ms after an onset the output is the dry ({dry_db:+.2f} dB, "
+                  f"the wet {res_db:.0f} dB under it)")
+    # busy playing (8th-note plucks, 0.25 s apart) at a 1.5 s rise: each onset ducks the wet to 0.42 of the rise (-15 dB)
+    # at most, so the reverb never vanishes; the first note (the tank quiet) swells from silence
+    n = LEAD + int(5 * FS)
+    x = np.zeros((n, 2))
+    for i in range(12):
+        o = LEAD + int(i * 0.25 * FS)
+        tp = np.arange(int(0.25 * FS)) / FS
+        x[o:o + len(tp)] += (np.sin(2 * np.pi * (220, 277.2, 329.6, 440)[i % 4] * tp) * np.exp(-tp / 0.08) * 12000
+                             * np.minimum(1, tp / 0.002))[:, None]
+    cases = {}
+    for m in "sm":
+        for nm, kt in (("sw", SWELL_HI), ("open", 5120)):
+            c = S.Case(x, m)
+            c.fill((16384, 16384, kt, 16384))
+            cases[f"busy{nm}{m}"] = c
+    res = run(cases)
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        eo = env_db(wet_of(res[f"busyopen{m}"][0], x)[LEAD:, 0], 441)
+        g = env_db(wet_of(res[f"busysw{m}"][0], x)[LEAD:, 0], 441) - eo
+        i0 = int(np.argmax(eo > -70))               # the wet's first 30 ms (after the predelay)
+        first, busy = g[i0:i0 + 3].max(), g[100:300]
+        check(first < -20 and busy.min() > -17, f"{tag} SWELL 1.5 s on 8th-note plucks: the first note swells from "
+              f"silence ({first:.0f} dB at most in the wet's first 30 ms), then the wet stays within {busy.min():.0f} dB of the plain tail "
+              "(each onset ducks it to the rise's 0.42 at most: -15 dB)")
+    # MIX 0 in SWELL / GATE is the input, bit exact
+    cases = {}
+    for m in "sm":
+        for nm, kt in (("sw", SWELL_MID), ("gt", GATE_MID)):
+            c = S.Case(x, m)
+            c.fill((16384, 16384, kt, 0))
+            cases[f"{nm}{m}"] = c
+    res = run(cases)
+    check(all(np.array_equal(res[k][0][:len(x)], cases[k].inp.astype(np.int64)) for k in cases),
+          "MIX 0 in SWELL and GATE: the input, bit exact (the dry never touched)")
+
+    # -- FREEZE in GATE and SWELL; the zone joins; the LFO --
+    n = LEAD + int(8 * FS)
+    x = np.zeros((n, 2))
+    x[LEAD:LEAD + FS] = (sum(np.sin(2 * np.pi * fr * tt[LEAD:LEAD + FS]) for fr in (220.0, 277.2, 329.6)) / 3
+                         * 12000)[:, None]
+    hit = LEAD + int(5 * FS)
+    x[hit:hit + int(0.4 * FS)] = (np.sin(2 * np.pi * 523.3 * tt[:int(0.4 * FS)]) * 8000)[:, None]
+    cases = {}
+    for m in "sm":
+        for nm, kt in (("gate", GATE_MID), ("swell", SWELL_MID)):
+            c = S.Case(x, m)
+            for b in range(n // 64):
+                c.block((24576, 32767 if b * 64 >= LEAD + int(0.9 * FS) else 16384, kt, 16384))
+            cases[f"frz{nm}{m}"] = c
+    res = run(cases)
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        out, st, _ = res[f"frzgate{m}"]
+        w = wet_of(out, x)[:, 0]
+        e = env_db(w, 441)
+        gap = e[(LEAD + int(2.5 * FS)) // 441:(hit - FS // 10) // 441]
+        play = e[(hit + FS // 10) // 441:(hit + int(0.4 * FS)) // 441]
+        lvb = st["level"][(hit - FS // 10) // 64]
+        check(gap.max() < -70 and play.min() > -40 and lvb > 100, f"{tag} FREEZE in GATE: the frozen tail is kept "
+              f"(tank level {lvb}) but gated shut while nothing plays (<= {gap.max():.0f} dBFS), heard while a note "
+              f"plays over it (>= {play.min():.0f} dBFS)")
+        out, st, _ = res[f"frzswell{m}"]
+        w = wet_of(out, x)[:, 0]
+        e = env_db(w, 441)
+        before = e[(hit - FS // 2) // 441:hit // 441].mean()
+        dip = e[(hit + int(0.03 * FS)) // 441:(hit + int(0.06 * FS)) // 441].max()
+        back = e[(hit + int(1.5 * FS)) // 441:(hit + int(2.0 * FS)) // 441].mean()
+        check(before - 20 < dip < before - 4 and abs(back - before) < 3, f"{tag} FREEZE in SWELL: the frozen tail "
+              f"ducks under a new note ({before:.0f} -> {dip:.0f} dBFS: from 0.42 of the rise, -15 dB at most, as the "
+              f"tank isn't quiet) and swells back ({back:.0f} dBFS 1.5 s later)")
+    # zone joins mid-tail: no click (the 2nd difference vs the plain tail's)
+    n = LEAD + int(6 * FS)
+    x = np.zeros((n, 2))
+    x[LEAD:LEAD + 2 * FS] = (np.sin(2 * np.pi * 220 * tt[LEAD:LEAD + 2 * FS]) * 9000)[:, None]
+    joins = [("SHIMMER+12+19 > SUB", 17500, 20500), ("SUB > GATE", 22000, GATE_MID), ("GATE > SWELL", 27000, 29500),
+             ("SWELL > TONE", 30000, 5120), ("TONE > GATE", 5120, GATE_MID), ("GATE > TONE", GATE_MID, 5120),
+             ("TONE > SWELL", 5120, SWELL_HI), ("SUB > TONE", SUB_TOP, 9000)]
+    cases = {}
+    jb = (LEAD + int(2.4 * FS)) // 64                 # the join 0.4 s after the tone stops: the gate shut, the tail on
+    for m in "sm":
+        for i, (nm, k0, k1) in enumerate(joins):
+            c = S.Case(x, m)
+            for b in range(n // 64):
+                c.block((16384, 22000, k0 if b < jb else k1, 16384))
+            cases[f"j{i}{m}"] = c
+            c = S.Case(x, m)
+            c.fill((16384, 22000, 5120, 16384))
+        cases[f"jref{m}"] = c
+    res = run(cases)
+    for m in "sm":
+        tag = "master" if m == "s" else "synth"
+        ref = res[f"jref{m}"][0][LEAD + int(2.1 * FS):LEAD + int(3.5 * FS), 0].astype(float)
+        r0 = np.abs(np.diff(ref, 2)).max()
+        worst = []
+        for i, (nm, _, _) in enumerate(joins):
+            y = res[f"j{i}{m}"][0][jb * 64 - FS // 10:jb * 64 + FS // 2, 0].astype(float)
+            pre = np.abs(np.diff(res[f"j{i}{m}"][0][jb * 64 - FS // 4:jb * 64 - 64, 0].astype(float), 2)).max()
+            worst.append((np.abs(np.diff(y, 2)).max() / max(pre, r0, 1.0), nm))
+        mx = max(worst)
+        check(mx[0] < 1.6, f"{tag}: zone joins mid-tail glide (the 2nd difference at the join <= {mx[0]:.2f} x the "
+              f"tail's before it; worst {mx[1]}): " + ", ".join(f"{nm} {v:.2f}" for v, nm in worst))
+    cases = {}
+    c = S.Case(np.zeros((LEAD + 2 * FS, 2)), "m")
+    for b in range((LEAD + 2 * FS) // 64):
+        c.block((8192, 16384, 26000 + int(4000 * math.sin(b / 20)), 16384), stored=26000)   # GATE; the LFO into SWELL
+    cases["lfo_gate"] = c
+    res = run(cases)
+    z = res["lfo_gate"][1]["zone"][LEAD // 64:]
+    check(set(z.tolist()) == {4}, f"synth: TE's LFO swinging white from GATE into SWELL (stored GATE): the zone stays "
+          f"GATE ({sorted(set(z.tolist()))})")
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="fewer and shorter cases")
     ap.add_argument("--host", action="store_true", help="the C reference natively (no asm, no CYCLES)")
     ap.add_argument("--keep")
+    ap.add_argument("--zones", action="store_true", help="only the v1.1 TAIL zones (15) and their CYCLES")
     a = ap.parse_args()
     sim = not a.host
     tmp = tempfile.mkdtemp(prefix="space_proto_")
@@ -128,6 +530,13 @@ def main():
 
     def run(cases, defs="", asm=True):
         return S.run(cases, sim=sim, defs=defs, asm=asm and sim, keep=a.keep)
+
+    if a.zones:
+        zones(run, a.quick)
+        if sim:
+            cycles(run, builds, zones_only=True)
+        print(f"\n{len(fails)} failed" if fails else "\nall passed")
+        sys.exit(1 if fails else 0)
 
     # ---- 1. asm = the C reference ----
     if sim:
@@ -147,6 +556,8 @@ def main():
         x[LEAD + 130 * 64:] = 0
         cases = {}
         for nm, k in (("hall", (8192, 16384, 5120, 16384)), ("sh19", (24576, 20000, 17000, 24000)),
+                      ("sub", (16384, 22000, 21000, 20000)), ("gate", (8192, 16384, 25000, 16384)),
+                      ("swell", (24576, 16384, 30000, 16384)), ("subfrz", (24576, 32767, 20500, 16384)),
                       ("dark", (3000, 8000, 1000, 30000)), ("frz", (12000, 32000, 12000, 20000)),
                       ("inf", (30000, 31000, 13000, 24000)), ("void4", (32767, 30719, 13000, 32767))):
             for m in "sm":
@@ -263,8 +674,10 @@ def main():
     bst[LEAD:LEAD + B] = rng.uniform(-0.5, 0.5, (B, 2)) * 32767
     ext = {"void4_sh12": ((32767, 30719, 14000, 16384), None), "void4_sh19": ((32767, 30719, 18000, 16384), None),
            "cath4_sh12": ((24576, 30719, 14000, 16384), None), "inf_sh12": ((24576, 31000, 14000, 16384), None),
+           "void4_sub": ((32767, 30719, SUB_TOP, 16384), None), "inf_sub": ((24576, 31000, SUB_TOP, 16384), None),
            "frz_hall": ((8192, 16384, 5120, 16384), (8192, 32767, 5120, 16384)),
-           "frz_sh12": ((24576, 16384, 12800, 16384), (24576, 32767, 12800, 16384))}
+           "frz_sh12": ((24576, 16384, 12800, 16384), (24576, 32767, 12800, 16384)),
+           "frz_sub": ((24576, 16384, SUB_TOP, 16384), (24576, 32767, SUB_TOP, 16384))}
     for rate, defs in builds:
         for mode in "sm":
             if mode == "m" and defs:
@@ -536,33 +949,10 @@ def main():
 
     # ---- 14. CYCLES ----
     if sim:
-        nc = LEAD + 600 * 64
-        busy = np.random.default_rng(9).uniform(-12000, 12000, (nc, 2))
-        idle = np.zeros((nc, 2))
-        cyc_cases = {"idle": (idle, (8192, 16384, 5120, 16384)), "busy": (busy, (8192, 16384, 5120, 16384)),
-                     "busy_void4": (busy, (32767, 30719, 5120, 24576)),
-                     "shimmer_12_19": (busy, (24576, 22000, 17500, 16384)),
-                     "freeze_shimmer": (busy, (24576, 32767, 12800, 16384)), "infinite": (busy, (8192, 31000, 5120, 16384))}
-        for rate, defs in builds:
-            cases = {}
-            for nm, (sig, k) in cyc_cases.items():
-                for m in "sm":
-                    if m == "m" and defs:
-                        continue
-                    c = S.Case(sig, m)
-                    for b in range(nc // 64):
-                        c.block(k, fx="S" if b < LEAD // 64 + 40 else "s")
-                    cases[f"{nm}_{m}"] = c
-            res = run(cases, defs)
-            for m in "sm":
-                if m == "m" and defs:
-                    continue
-                tag = "mono 22.05 kHz" if m == "m" else f"stereo {rate} kHz"
-                row = ", ".join(f"{nm} {res[f'{nm}_{m}'][2][1] / 1000:.1f}k / {res[f'{nm}_{m}'][2][0] / 1000:.1f}k"
-                                for nm in cyc_cases)
-                worst = max(res[f"{nm}_{m}"][2][0] for nm in cyc_cases)
-                bound = 110000 if m == "s" and not defs else 80000
-                check(worst < bound, f"CYCLES per call, {tag} (mean / max): {row}")
+        cycles(run, builds)
+
+    # ---- 15. the v1.1 zones ----
+    zones(run, a.quick)
 
     print(f"\n{len(fails)} failed" if fails else "\nall passed")
     sys.exit(1 if fails else 0)

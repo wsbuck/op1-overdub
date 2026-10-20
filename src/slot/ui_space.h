@@ -12,22 +12,23 @@
  *   white  TAIL   TONE: phase round(5 x the zone amount) (0: a dark new Earth .. 5 full); SHIMMER: sh1 .. 9 (and in
  *                 +12+19 sx1 .. 8) by the shimmer amount heard (40 .. 100 %, faded in over the zone's first detent);
  *                 `halo` scaled 0.85 + 0.35 x the tail level (-72 .. 0 dBFS -> 0 .. 1) about Earth (262, 40);
- *                 sub / gate / swell hidden (reserved)
+ *                 SUB -12, GATE, SWELL: their group (`sub` an arc below Earth, `gate` a bar, `swell` a wedge; one
+ *                 element each, so not amount-driven) in their zone
  *   orange MIX    wave1 .. 6: the first round(6 x wet); on the master `waves` scaled 1 - 0.55 x the duck now (0 dB ..
  *                 -24 dB -> 0 .. 1) about the feed (76.14, 86.86), duckdepth1 .. 4 above the middle (one per 4096);
  *                 as a synth / drum FX the hut goes dark (dry_ghost) once the dry left is under half
  *   FX off: the ridges in darkblue (ridges_dim), no track, flag, phase, halo, shimmer, waves or duck dots. A clean
  *   start (the lines clearing): no track, inf or shimmer.
  * Knob turns (stored knobs, >= 512 raw) show the value ~1.5 s in the design's top-left box in the knob's colour.
- * Diagnostic builds (--svg-cost, --debug-ui): SHIFT held shows the CPU page instead (both instances' process call,
- * this context's FDN share, TE's records). Without space.svg (or one without the marker `ridges_dim`): the line
- * screen, with the CPU lines at its foot in diagnostic builds. */
+ * Diagnostic builds (--debug-ui): SHIFT held shows the CPU page instead (both instances' process call, this context's
+ * FDN share, TE's records); normal builds: SHIFT does nothing here. Without space.svg (or one without the marker
+ * `ridges_dim`): the line screen, with the CPU lines at its foot in diagnostic builds. */
 
 extern struct space_ui space_ui[2] __attribute__((weak));
 extern struct fx_pub space_pub[2] __attribute__((weak));
 
-#if defined(SVG_COST) || defined(UI_DEBUG) || defined(SP_CPU_PAGE)
-#define SP_CPU 1                                    /* the CPU readings (test images) */
+#if defined(UI_DEBUG) || defined(SP_CPU_PAGE)
+#define SP_CPU 1                                    /* the CPU readings (--debug-ui probe images only) */
 #endif
 
 #ifdef __bfin__
@@ -52,6 +53,27 @@ static char *sp_put_pct(char *p, int32_t q15)                /* Q15 -> "40%" */
 {
     p = put_dec(p, (uint32_t)((q15 < 0 ? 0 : q15) * 100 + 16384) >> 15);
     return put_str(p, "%");
+}
+
+/* the v1.1 zones' values: GATE's hold "200MS", SWELL's rise "0.47S" / "1.2S" (sep: between the number and the unit) */
+static char *sp_put_zone_val(char *p, int z, int32_t amt, const char *sep)
+{
+    if (z == SP_Z_GATE)
+        return put_str(put_str(put_dec(p, (uint32_t)(sp_gate_hold_ms(amt) + 5) / 10 * 10), sep), "MS");
+    uint32_t ms = (uint32_t)sp_swell_ms(amt);
+    if (ms >= 995) {                                                /* one decimal from 1 s */
+        uint32_t t = (ms + 50) / 100;
+        p = put_dec(p, t / 10);
+        *p++ = '.';
+        p = put_dec(p, t % 10);
+    } else {                                                        /* two below: 0.15 .. 0.99 */
+        uint32_t c = (ms + 5) / 10;
+        p = put_str(p, "0.");
+        if (c < 10)
+            *p++ = '0';
+        p = put_dec(p, c);
+    }
+    return put_str(put_str(p, sep), "S");
 }
 
 static char *sp_put_dec1(char *p, uint32_t v10)              /* tenths -> "2.4" (whole above 99) */
@@ -191,11 +213,11 @@ static void draw_space_lines(void *r, const int16_t *k, const struct space_ui *u
             put_str(p, " NATURAL");
         else
             sp_put_pct(put_str(p, x < 0 ? " DARK " : " BRIGHT "), x < 0 ? -x : x);
-    } else if (z == SP_Z_SH12 || z == SP_Z_SH19)
+    } else if (z == SP_Z_SH12 || z == SP_Z_SH19 || z == SP_Z_SUB)
         sp_put_pct(put_str(p, " "), sp_shimmer_level(kt, z));
-    else
-        put_str(p, " SOON");                                        /* reserved: nothing yet (natural tone) */
-    text(r, buf, xv, y, step, z >= SP_Z_SUB ? GREY : WHITE);
+    else                                                            /* GATE HOLD 200 MS, SWELL RISE 0.47 S */
+        sp_put_zone_val(put_str(p, z == SP_Z_GATE ? " HOLD " : " RISE "), z, sp_zone_amount(kt, z), " ");
+    text(r, buf, xv, y, step, WHITE);
 
     /* orange: the mix */
     y += dy;
@@ -346,10 +368,11 @@ static void sp_readout(char *p, int knob, const int16_t *k, const struct space_u
                 put_str(p, "NATURAL");
             else
                 sp_put_pct(put_str(p, x < 0 ? "DARK " : "BRIGHT "), x < 0 ? -x : x);
-        } else if (z == SP_Z_SH12 || z == SP_Z_SH19)
-            sp_put_pct(put_str(p, z == SP_Z_SH12 ? "SHIM+12 " : "SH12+19 "), sp_shimmer_level(kt, z));
-        else
-            put_str(p, z == SP_Z_SUB ? "SUB-12 SOON" : z == SP_Z_GATE ? "GATE SOON" : "SWELL SOON");
+        } else if (z == SP_Z_SH12 || z == SP_Z_SH19 || z == SP_Z_SUB)
+            sp_put_pct(put_str(p, z == SP_Z_SH12 ? "SHIM+12 " : z == SP_Z_SH19 ? "SH12+19 " : "SUB-12 "),
+                       sp_shimmer_level(kt, z));
+        else                                                        /* GATE 200MS, SWELL 0.47S */
+            sp_put_zone_val(put_str(p, z == SP_Z_GATE ? "GATE " : "SWELL "), z, sp_zone_amount(kt, z), "");
     } else {
         int32_t wet, dry, ddb;
         sp_mix(km, stereo, &wet, &dry, &ddb);
@@ -445,9 +468,9 @@ static void draw_space(void *r, const int16_t *k, const int16_t *stored, int run
         show(sp_sx[i], i < nsx);
     show(sp_node[SN_SHIM12], !off && !clean && shim);
     show(sp_node[SN_SHIM1219], !off && !clean && z == SP_Z_SH19);
-    show(sp_node[SN_SUB], 0);
-    show(sp_node[SN_GATE], 0);
-    show(sp_node[SN_SWELL], 0);
+    show(sp_node[SN_SUB], !off && z == SP_Z_SUB);                  /* one element each: shown in the zone */
+    show(sp_node[SN_GATE], !off && z == SP_Z_GATE);
+    show(sp_node[SN_SWELL], !off && z == SP_Z_SWELL);
 
     /* orange: the waves (wet), shrunk by the duck now and the duck depth's dots (master); the hut (dry) */
     int32_t wet, dry, ddb;

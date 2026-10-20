@@ -14,8 +14,9 @@ Tables:
   sp_coef     one-pole coefficient a = 1 - exp(-2 pi f / fs), Q15, per tank rate, on log2 f in 1/16 octaves
   sp_exp2     2^(-j / 256), Q30: line gains 2^-e
   sp_win      sin(pi i / 1024), Q15: the shimmer heads' windows
-  sp_shbq     the shimmer's anti-alias low-pass (RBJ biquad, Q 0.7071) per tank rate, for +12 and for +12+19, Q14
-              (the 22.05 kHz tank runs it twice: 4th order, its alias band is an octave lower)
+  sp_shbq     the shimmer's anti-alias low-pass (RBJ biquad, Q 0.7071) per tank rate, for +12, for +12+19 and for
+              SUB -12 (2 kHz: the octave down kept clean; run once), Q14 (the 22.05 kHz tank runs the shimmer's twice:
+              4th order, its alias band is an octave lower)
   sp_hb       the half-band filter (31 taps, Kaiser) for the 22.05 kHz tank: the 8 odd taps, Q15
 """
 import math
@@ -115,10 +116,10 @@ def main():
     w(f"/* half-band low-pass ({HB_TAPS} taps, cut-off fs / 4, Kaiser 6): centre 0.5, taps +-1, +-3 .. +-15, Q15 */")
     w("static const int16_t sp_hb[8] __attribute__((aligned(4))) = { " + ", ".join(map(str, hb)) + " };\n")
     w("/* shimmer anti-alias low-pass, RBJ biquad Q 0.7071, {b0, b1, b2, a1, a2} Q14 (b0 + b1 + b2 = 1 + a1 + a2):")
-    w(" * [rate: 44.1 / 22.05 kHz][+12 / +12+19]; corners 7 / 6 kHz at 44.1 kHz; 3 / 2.2 kHz at 22.05 kHz, run twice there")
-    w(" * aliases above fs / 2r) */")
-    w("static const int16_t sp_shbq[2][2][5] = {")
-    for fs, corners in ((44100, (7000, 6000)), (22050, (3000, 2200))):
+    w(" * [rate: 44.1 / 22.05 kHz][+12 / +12+19 / SUB -12]; corners 7 / 6 / 2 kHz at 44.1 kHz; 3 / 2.2 / 2 kHz at")
+    w(" * 22.05 kHz, the shimmer's run twice there (aliases above fs / 2r); SUB's once (no alias: kept clean) */")
+    w("static const int16_t sp_shbq[2][3][5] = {")
+    for fs, corners in ((44100, (7000, 6000, 2000)), (22050, (3000, 2200, 2000))):
         w("    {")
         for fc in corners:
             wq = 2 * math.pi * fc / fs

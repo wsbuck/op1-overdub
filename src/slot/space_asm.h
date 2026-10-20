@@ -901,8 +901,8 @@ static __attribute__((noinline)) void k_bq(int16_t *x, int32_t *st_, const int16
         : "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "P0", "P1", "P2", "A0", "LC0", "LT0", "LB0", "memory", "cc");
 }
 
-/* ---- the shimmer's heads (k_heads): per segment (a job), the read steps r whole samples per sample, its fraction
- * fixed (the difference x the fraction a fractional multiply, rounded to nearest even); the window x gain w steps
+/* ---- the shimmer's heads (k_heads): per segment (a job), acc stepping st words (1, or 2: SUB), the read steps r
+ * whole samples per sample, its fraction fixed (the difference x the fraction a fractional multiply, rounded to nearest even); the window x gain w steps
  * linearly; acc += y w >> 15 ---- */
 struct khj {
     int32_t *acc;               /* 0 */
@@ -911,6 +911,7 @@ struct khj {
     uint32_t f;                 /* 16: the fraction, Q15 */
     uint32_t wd;                /* 20: w | dw << 16 */
     int32_t n;                  /* 24 */
+    uint32_t ast;               /* 28: acc's step, bytes (4, or 8 for SUB's even / odd samples) */
 };
 
 static __attribute__((noinline)) void k_heads(const struct hseg *g, int ng, const int16_t *ring, uint32_t mask)
@@ -919,7 +920,7 @@ static __attribute__((noinline)) void k_heads(const struct hseg *g, int ng, cons
     for (int k = 0; k < ng; k++) {
         uint32_t p1 = g[k].p + g[k].inc, i = (p1 >> 16) & mask;
         jobs[k] = (struct khj){ g[k].acc, ring + i, ring + ((i + 1) & mask), (g[k].inc >> 16) * 2, (p1 & 0xFFFF) >> 1,
-                                PK2(g[k].w, g[k].dw), g[k].n };
+                                PK2(g[k].w, g[k].dw), g[k].n, g[k].st > 1 ? 8u : 4u };
     }
     struct khj *jp = jobs;
     __asm__ volatile(
@@ -935,6 +936,7 @@ static __attribute__((noinline)) void k_heads(const struct hseg *g, int ng, cons
         "R5 = [%[k] + 20];\n\t"
         "R6 = R5 >> 16;\n\t"                        /* dw in R6.L */
         "P0 = [%[k] + 24];\n\t"
+        "R0 = [%[k] + 28];\n\tM0 = R0;\n\t"
         "LSETUP (1f, 2f) LC0 = P0;\n"
         "1:\tMNOP || R3.L = W [I2] || R7.L = W [I3];\n\t"
         "MNOP || I2 += M2 || R0 = [I0];\n\t"
@@ -945,13 +947,13 @@ static __attribute__((noinline)) void k_heads(const struct hseg *g, int ng, cons
         "R3 >>>= 15;\n\t"
         "R5.L = R5.L + R6.L (NS);\n\t"
         "R0 = R0 + R3;\n"
-        "2:\t[I0++] = R0;\n"
-        "4:\t%[k] += 28;\n\t"
+        "2:\t[I0++M0] = R0;\n"
+        "4:\t%[k] += 32;\n\t"
         "R0 = 0;\n\tL2 = R0;\n\tL3 = R0;\n\t"
         RND_OFF
         : [k] "+a"(jp)
         : [ring] "a"(ring), [bytes] "a"((mask + 1) * 2), [nj] "a"(ng)
-        : "R0", "R2", "R3", "R5", "R6", "R7", "P0", "I0", "I2", "I3", "B2", "B3", "L2", "L3", "M2", "LC0", "LT0",
+        : "R0", "R2", "R3", "R5", "R6", "R7", "P0", "I0", "I2", "I3", "B2", "B3", "L2", "L3", "M0", "M2", "LC0", "LT0",
           "LB0", "LC1", "LT1", "LB1", "memory", "cc");
 }
 

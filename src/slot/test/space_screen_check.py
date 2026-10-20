@@ -4,7 +4,7 @@
   python3 src/slot/test/space_screen_check.py [OUTDIR] [--user PNG_DIR]
 
 1. The design's preview states (smallroom, cathedral, void_long, shimmer, frozen, ducking, synth_wet, off; the
-   designer's gen_space_moon.py states()): preview.py renders ui.c's draw_space on the host with space_ui forced to the
+   designer's gen_space_moon.py states(); and sub, gate, swell, the v1.1 zones, from his b_state()): preview.py renders ui.c's draw_space on the host with space_ui forced to the
    state (SPACE_FORCE, no DSP) and the knobs set to reach it; the reference is space.svg with the header's rules applied
    (the designer's own b_state(), imported from design/fx/gen_space_moon.py) rendered by rsvg at the same size. Must
    match (mean |pixel difference| < 2.5 on what the panel shows). With --user, also each beside the designer's own PNG
@@ -55,7 +55,13 @@ STATES = {
     "ducking": (113, (12288, 16384, 6144, 29491), f"zone=0,level={level(0.4)},duck={q15_db(-24 * 0.8)}"),
     "synth_wet": (213, (16384, 16384, 5000, 32767), f"zone=0,level={level(0.6)}"),
     "off": (213, (16384, 16384, 6144, 13107), None),
+    # the v1.1 zones (not among the designer's previews: b_state() with zone sub / gate / swell)
+    "sub": (213, (16384, 16384, 21000, 13107), f"zone=3,level={level(0.6)}"),
+    "gate": (113, (16384, 16384, 26112, 13107), f"zone=4,level={level(0.6)}"),
+    "swell": (213, (16384, 16384, 30000, 13107), f"zone=5,level={level(0.6)}"),
 }
+V11 = {z: dict(space=2, decay=0.5, zone=z, amount=0.6, mix=0.4, master=z == "gate", level=0.6)
+       for z in ("sub", "gate", "swell")}
 HOW = {
     "void_long": "DECAY at INFINITE (detent 30, 31500 raw: the track's 12 stretches), not the knob's end (FREEZE)",
     "frozen": "the green push held at DECAY 0.8 (the knob's FREEZE detent would draw all 12 stretches)",
@@ -128,6 +134,7 @@ def main():
 
     # ---- 1. the design's states ----
     rules = gen.states(gen.b_state)
+    rules.update({z: gen.b_state(**kw) for z, kw in V11.items()})
     for name, (eng, knobs, force) in STATES.items():
         hide, tf = rules[name]
         a = ref_render(os.path.join(ref, name + ".png"), hide, tf)
@@ -171,6 +178,8 @@ def main():
     for i, (knob, txt) in enumerate(((0, "0:0:24576"), (2, "0:2:19000"), (3, "0:3:29491"))):
         c_render(cdir, f"ro_k{knob}", 113 if knob == 3 else 213, K, 10, SPACE_FORCE=F + (",zone=2" if knob == 2 else ""),
                  SPACE_TURN=txt.replace("0:", "5:", 1))
+    for z, raw in ((3, 21000), (4, 26112), (5, 30720)):            # the v1.1 zones' readouts: SUB-12, GATE, SWELL
+        c_render(cdir, f"ro_z{z}", 213, K, 10, SPACE_FORCE=F.replace("zone=0", f"zone={z}"), SPACE_TURN=f"5:2:{raw}")
     _, s0 = c_render(cdir, "lfo_stored", 213, (0, 16384, 3000, 9830), 3, SPACE_FORCE=F)
     _, s1 = c_render(cdir, "lfo_live", 213, (0, 16384, 3000, 9830), 3, SPACE_FORCE=F, FX_LIVE="24576,16384,3000,9830")
     _, s2 = c_render(cdir, "lfo_as", 213, (24576, 16384, 3000, 9830), 3, SPACE_FORCE=F)
@@ -196,7 +205,12 @@ def main():
                         env=dict(os.environ, NAME="lines.png", FRAMES="3", NO_SVG="1", SPACE_FORCE=F,
                                  PREVIEW_DEFS="-DSP_CPU_PAGE"), check=True, capture_output=True, text=True).stdout
     nl = int(nl.strip().rsplit(":", 1)[1].split()[0])
-    check(nl > 300, f"without space.svg: the line screen, CPU lines at its foot in diagnostic builds ({nl} segments)")
+    nlr = subprocess.run([sys.executable, os.path.join(HERE, "preview.py"), cdir, "113"] + [str(v) for v in K],
+                         env=dict(os.environ, NAME="lines_release.png", FRAMES="3", NO_SVG="1", SPACE_FORCE=F),
+                         check=True, capture_output=True, text=True).stdout
+    nlr = int(nlr.strip().rsplit(":", 1)[1].split()[0])
+    check(nl > 300 and nlr < nl - 100, f"without space.svg: the line screen, CPU lines at its foot in diagnostic builds "
+          f"({nl} segments), none in normal builds ({nlr})")
     c_render(cdir, "dsp_hall", 113, (8192, 16384, 5120, 8192), 30)
     c_render(cdir, "dsp_shimmer", 213, (19661, 24000, 17000, 14000), 30)
     check(True, "the DSP running (space.c on the host): dsp_hall.png, dsp_shimmer.png (shown)")
@@ -223,6 +237,8 @@ def main():
     for name, cap in (("ro_turn", "DECAY turned: the readout (seconds and the multiplier) in the top-left box"),
                       ("ro_k0", "SPACE turned: CATHEDRAL"), ("ro_k2", "TAIL turned into SHIMMER +12+19"),
                       ("ro_k3", "MIX turned above the middle on the master: the duck depth"),
+                      ("ro_z3", "TAIL turned into SUB -12"), ("ro_z4", "TAIL turned into GATE: the hold"),
+                      ("ro_z5", "TAIL turned into SWELL: the rise"),
                       ("lfo_live", "TE's LFO: blue live at CATHEDRAL, stored at ROOM"),
                       ("clean", "a clean start: no track, no shimmer"), ("not_clean", "the same, running"),
                       ("cpu_page", "SHIFT held (diagnostic builds): the CPU page"),

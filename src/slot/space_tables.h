@@ -208,16 +208,18 @@ static const int16_t sp_win[1025] = {
 static const int16_t sp_hb[8] __attribute__((aligned(4))) = { 10303, -3113, 1527, -795, 393, -171, 58, -10 };
 
 /* shimmer anti-alias low-pass, RBJ biquad Q 0.7071, {b0, b1, b2, a1, a2} Q14 (b0 + b1 + b2 = 1 + a1 + a2):
- * [rate: 44.1 / 22.05 kHz][+12 / +12+19]; corners 7 / 6 kHz at 44.1 kHz; 3 / 2.2 kHz at 22.05 kHz, run twice there
- * aliases above fs / 2r) */
-static const int16_t sp_shbq[2][2][5] = {
+ * [rate: 44.1 / 22.05 kHz][+12 / +12+19 / SUB -12]; corners 7 / 6 / 2 kHz at 44.1 kHz; 3 / 2.2 / 2 kHz at
+ * 22.05 kHz, the shimmer's run twice there (aliases above fs / 2r); SUB's once (no alias: kept clean) */
+static const int16_t sp_shbq[2][3][5] = {
     {
         { 2351, 4702, 2351, -11153, 4173 },
         { 1836, 3672, 1836, -14024, 4984 },
+        { 276, 551, 276, -26232, 10951 },
     },
     {
         { 1836, 3672, 1836, -14024, 4984 },
         { 1101, 2202, 1101, -18757, 6777 },
+        { 937, 1875, 937, -19970, 7335 },
     },
 };
 

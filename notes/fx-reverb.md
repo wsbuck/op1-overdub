@@ -1,7 +1,8 @@
 # Reverb FX (`space`, firmware 246): research, design and the MVP
 
 **Status: MVP built (2026-10-19), FX id 13 `space`; test images SPACE1 (master tank 44.1 kHz) and SPACE1H
-(22.05 kHz), LOG test image 93. As built and the user's decisions: §11; the reviews: §12. A placeholder line screen.**
+(22.05 kHz), LOG test image 93. As built and the user's decisions: §11; the reviews: §12; the CPU pass §13; William
+Buck's screen §14; v1.1, the SUB -12 / GATE / SWELL zones (SPACE4H, LOG test image 96): §15.**
 - The float prototype (v2, after the design review) and a simulator CPU benchmark are in
   `design/fx/reverb_proto/`.
 - The FX contract is in fx-slot.md; memory sharing in fx-pingpong.md "Memory" and fx-beatrepeat.md "Memory".
@@ -721,7 +722,7 @@ SPACE1 (the MVP as first built; SPACE2's numbers in §13):
 ### Screen (placeholder, `ui_space.h`; since SPACE3 the fallback without space.svg, §14)
 Line text: the title the space's name (blue); SPACE (the morph `HALL > CHURCH 46%`, or the anchor's own RT60), DECAY
 (seconds and the multiplier, `> INF` from detent 28, `INFINITE  IN OPEN`, `FREEZE  IN MUTED`), TAIL (zone and
-amount, reserved zones grey `SOON`), MIX (`DRY 100 WET 50`, `DUCK -14DB` on the master); a state box (FROZEN,
+amount; v1.1: SUB, GATE, SWELL with their values, §15), MIX (`DRY 100 WET 50`, `DUCK -14DB` on the master); a state box (FROZEN,
 FREEZE HELD for the green push, INFINITE, CLEARING); the tail level meter (light blue, -72 .. 0 dBFS) and the duck now;
 three grey CPU lines. Knob colours only on knob values. Drawn from the published params (fxpub: TE's LFO moves it) and
 the DSP's state while it runs (fx_lfo_check: stored S + live M draws exactly stored M).
@@ -822,7 +823,7 @@ master at 44.1 kHz <= 45 k.
   | halo | scale(0.85 + 0.35 x L) about (262, 40), L = the tail level -72 .. 0 dBFS -> 0 .. 1 (the old meter's scale) |
   | shim12, sh1 .. sh9 | a shimmer zone: the first round(9 x a); a = the shimmer amount heard (sp_shimmer_level: 40 .. 100 %, faded in over the zone's first detent) |
   | shim1219, sx1 .. sx8 | SHIMMER +12+19 (with shim12): the first round(8 x a) |
-  | sub, gate, swell | hidden (reserved) |
+  | sub, gate, swell | shown in their zone (v1.1, §15; one element each, so not amount-driven); hidden when off |
   | wave1 .. wave6 | the first round(6 x wet), wet = sp_mix's (min(1, 2 x mix)) |
   | waves | master: scale(1 - 0.55 x D) about (76.14, 86.86), D = the duck now 0 .. -24 dB -> 0 .. 1 |
   | duckdepth1 .. 4 | master above the middle: ceil((orange - 16384) / 4096), the DSP's middle (no dot at exactly 16384) |
@@ -833,9 +834,10 @@ master at 44.1 kHz <= 45 k.
 - The readout: a stored knob turned (>= 512 raw) shows its value ~1.5 s at size 2 in the design's top-left box (12
   characters at most), in the knob's colour, as heard (the live knobs): blue the space's name (`CATHEDRAL`); green
   `3.8S X1.00` (the decay played and the multiplier), `INFINITE`, `FREEZE`; white `DARK 40%` / `NATURAL` /
-  `BRIGHT 60%` (TONE), `SHIM+12 70%`, `SH12+19 70%`, `SUB-12 SOON` / `GATE SOON` / `SWELL SOON`; orange `WET 60%` up to
+  `BRIGHT 60%` (TONE), `SHIM+12 70%`, `SH12+19 70%`, `SUB-12 70%` / `GATE 200MS` / `SWELL 0.47S` (v1.1); orange `WET 60%` up to
   the middle, then `DUCK -18DB` (master) or `DRY 40%` (synth / drum). Not from TE's LFO alone, not on entering.
-- The CPU readings (diagnostic builds only: `--svg-cost`, `--debug-ui`): **hold SHIFT on the space screen** for the
+- The CPU readings (diagnostic builds only: since v1.1 `--debug-ui` alone; `--svg-cost` only adds the render cost):
+  **hold SHIFT on the space screen** for the
   CPU page: `CPU MASTER max/mean PEAK p 44KHZ|22KHZ`, `CPU SYNTH ...`, `FDN n  TE FX last/max`, `CALLBACK last/max`,
   then the DSP's state (T60, level, duck, zone, FRZ / INF %, CLEARING / KEY). Release builds: SHIFT does nothing here.
   The line screen keeps the CPU lines at its foot in diagnostic builds. The `--svg-cost` kilocycles stay bottom right.
@@ -850,3 +852,60 @@ master at 44.1 kHz <= 45 k.
   LFO, a clean start, the SHIFT page (diagnostic only), the line screen, the DSP running, SVG cells. Reaching the
   states: void_long at INFINITE (31500 raw: 12 stretches; the knob's end is FREEZE), frozen by the green push at DECAY
   0.8, synth_wet's TAIL at 0.49 (0.5 on the knob rounds to phase 3).
+
+## 15. v1.1: the SUB -12, GATE and SWELL zones (SPACE4H, 2026-10-20)
+The reserved TAIL zones (detents 19 .. 31, `SOON` since the MVP) are filled; saved sounds keep their meaning (the
+zones never moved). The zone comes from the stored white knob (TE's LFO moves only the amount, as before); every join
+glides over ~23 ms (one-poles on the shimmer / SUB voice gains and on GATE's and SWELL's depths, >> 4 a block).
+
+| zone | detents | design (space.c `dynamics()`, `shimmer()`, `params()`) | FREEZE / INFINITE (and the green push) |
+|---|---|---|---|
+| **SUB -12** | 19 .. 22, amount 40 .. 100 % (faded in over the first detent, as the shimmer) | the shimmer's two-head delay-line shifter at ratio 1/2 in the feedback path (100 ms window, sine windows, start-offset jitter 0 .. 2 % of the window: more smeared its octave into a ±3 Hz band). Read at half a sample per sample: its even and odd samples each step one whole sample, so the asm `k_heads` runs them with an acc step of 2. Filtering: a one-pole high-pass at 150 Hz and the 2 kHz biquad low-pass (once: an octave down does not alias) into the shifter; two one-pole 80 Hz high-passes on its return (it enters the tank after the input's low cut). The return x min(cap, 4 sqrt(1 - g^2)) (g the mean loop gain), the cap raised from the shimmer's 1 to 2 on the master / 1.4 on synth / drum (review: ~12 dB under the tail before; long decays, where 4 sqrt(1 - g^2) < 1, keep the shimmer's return, so VOID x4 stays bounded; none while held), then the cubic limit at 0.5 FS | frozen sub: the return servoed to the held level as the frozen shimmer's, but (target / level)^8 instead of ^4 (its octaves down pile up in the lossless loop's low band: ^4 drifted 2.0 dB in 58 s): within 0.8 .. 1.0 dB |
+| **GATE** | 23 .. 27, hold 50 .. 350 ms | a gain on the wet only, keyed by the dry input's block peak: open while a follower (~10 ms release) is within 12 dB of a reference (the recent peak, ~5 s release; floor -60 dBFS; 3 dB hysteresis), so a pad holds it to its end, a pluck shuts it ~0.7 s after its attack, a kit's hats don't open it; opens over ~3 ms; after the input drops: the hold, then 60 dB in 30 ms (exponential, linear inside a block). Once shut, the tank's RT60 drops to 60 ms, so the next hit opens on its own tail. The tank's low cut x 2.5 in this zone (review: the kick's gated burst was a low boom) | the held tail is kept (no dump) and gated by the playing: a frozen pad heard only while you play (opening over ~9 ms) |
+| **SWELL** | 28 .. 31, rise 0.15 .. 1.5 s (150 x 10^amount ms) | a gain on the wet only (never the dry): an onset (a fast follower, 60 ms release, above 1.5 x a slow one, 40 ms / 400 ms, plus a -40 dBFS floor; re-armed once back within 1.1 x) restarts the rise, gain = p^2 over the rise time. From silence (the tank 36 dB under the note) it starts at 0; otherwise the rise restarts from 0.42 of itself at most (-15 dB) and the wet falls to the curve within 40 ms (review: a full restart chopped the tail on every note and busy playing lost the reverb) | the held tail ducks under each new note (-15 dB at most) and swells back |
+
+- Readouts: `SUB-12 70%`, `GATE 200MS`, `SWELL 0.47S` (two decimals under 1 s, one above); the line screen `SUB -12 70%`,
+  `GATE HOLD 200 MS`, `SWELL RISE 0.47 S`, white.
+- The screen: space.svg's `sub` (an arc below Earth), `gate` (a bar beside it) and `swell` (a wedge) groups hold one
+  element each (William Buck's, unchanged); each is shown in its zone while the FX runs, as b_state() does
+  (space_screen_check: the three states against his b_state(), 0.08).
+- CPU (simulator, CYCLES per call, mean / max; space_check 14):
+
+  | | SHIMMER +12+19 | SUB -12 | frozen SUB | GATE (hits) | SWELL (hits) |
+  |---|---|---|---|---|---|
+  | master, tank 44.1 kHz | 43.2k / 45.1k | 43.3k / 44.9k | 41.7k / 42.1k | 37.5k / 38.7k | 37.5k / 39.0k |
+  | master, tank 22.05 kHz (SPACE4H) | 30.7k / 31.9k | 30.1k / 31.2k | 29.2k / 29.6k | 26.4k / 27.3k | 26.4k / 27.5k |
+  | synth / drum, 22.05 kHz | 23.0k / 24.2k | 22.5k / 23.5k | 21.5k / 21.9k | 18.8k / 19.7k | 18.8k / 19.8k |
+
+  Every v1.1 zone peaks at or below SHIMMER +12+19 (the device's most expensive measured case, SPACE3H: 162 k on the
+  master). GATE and SWELL are ~0.3 k of per-block logic; SUB is one shifter voice (two heads) and four one-poles. A first
+  cut with SUB's heads in C was ~1 k over; the acc-step heads fixed it.
+- Checks (space_check 15, `--zones` alone): SUB's shifter alone (`space_shtest`, `-DSPACE_SHTEST`) gives 440.0 Hz for
+  880 Hz (+0.2 cents on average with the jitter; in-grain 0.00 cents at 44.1 kHz with the jitter off,
+  `-DSPACE_SH_STILL`); in the tank the octave down 12 dB over the source line; SUB 60 s at VOID x4 (bounded, below
+  60 Hz at most ~-20 dB of the tail and not growing) and frozen (within the frozen shimmer's drift); GATE's hold times
+  (-20 dB at hold + ~25 ms, -60 dB ~18 ms later), no click on the close, a 4 s pad at -4 and -35 dBFS held to its end,
+  a pluck shut; SWELL's rise to 90 % at 0.95 of the rise time (0.15 / 0.47 / 1.5 s), the dry untouched (MIX 0 bit exact;
+  the output = the dry 20 .. 40 ms after an onset), busy 8ths never more than 15 dB under the plain tail; FREEZE in
+  GATE and SWELL; zone joins mid-tail (no click); TE's LFO keeps GATE's zone; the asm = C cases include SUB, GATE,
+  SWELL and frozen SUB. The gate's timing cases build with `-DSPACE_GATE_FLAT` (its low cut off: the same tank as
+  TONE's, so its gain is exact).
+- Simulator only: on the device ~3x (SPACE3H), so ~95 k for SUB on the 22.05 kHz master against TE's own FX's 173 k.
+  Zone changes into a held SUB recompute the gains once (a 33 k block in the zone-sweep render, as other knob turns).
+- Renders: `src/slot/test/space_render.py OUTDIR --v11` (SUB on a pad, GATE on an 80s drum pattern and a pad, SWELL
+  on plucks, FREEZE in each, the plain tails for A / B, a zone sweep).
+
+### Review log (v1.1, 2026-10-20)
+A fresh subagent (a reverb designer / producer) on the renders, with its own analysis scripts.
+
+| review item | change | result |
+|---|---|---|
+| MUST: SWELL chopped the ringing tail to silence (-55 dB in ~20 ms) on every note; at 1.5 s and 0.6 s notes the wet never got above -16 dB; the frozen swell stuttered | an onset restarts the rise from min(itself, 0.42) (-15 dB at most) unless the tank is quiet (36 dB under the note: from silence, at once); the fall 20 -> 40 ms | busy 8ths at 1.5 s stay within 15 dB of the plain tail; the frozen tail ducks ~6 .. 9 dB and swells back |
+| SHOULD: GATE didn't shut on ringing plucks (the reference released at 1.5 s and followed the note down) | the reference's release ~5 s | a pluck shuts it ~0.7 s after its attack; pads still held to the end; hats still don't open it |
+| SHOULD: SUB ~12 dB under the tail at 100 % on the master (7 dB weaker than on synth) | its return's normalisation capped at x 2 on the master, x 1.4 on synth / drum instead of x 1 (a flat x 2 grew VOID x4's tail +7 dB over 20 s: long decays keep x 1 and less) | CATHEDRAL pad: the octave down -6 dB under the plain wet while playing (was -12), +2 .. +5 dB in the tail; 60 s at VOID x4 bounded, frozen within 2 dB |
+| COULD: the SUB octave smeared into a ±3 Hz band (the grains' start jitter under 150 Hz) | SUB's jitter 0 .. 10 % -> 0 .. 2 % of the window | |
+| COULD: the gated burst on kicks a low boom (8 dB over the snare's) | the tank's low cut x 2.5 in GATE | |
+| COULD: a held tail opening in 3 ms could tick | held: opening over ~9 ms | |
+| render notes: the drums clipped; 36's pad cut off | drums x 0.8; a 50 ms fade | |
+| (CPU, after the changes) SUB 0.1 .. 0.7 k over SHIMMER +12+19's peak | SUB's low-pass once at 22.05 kHz too (no alias), one 150 Hz high-pass in (the return's two kept) | under it at every rate (table above); the low-end checks unchanged |
+| kept (good): SUB clean (no grain AM, no clicks, no sub-bass mud, VOID x4 low end steady); frozen sub holds at +2 dB; GATE click-free, kick and snare open it, hats don't, the dump gives silence between hits, the pad held, open times 241 / 329 / 479 ms for 120 / 200 / 350; SWELL's detector (13 of 13 notes, 0 .. 2 ms late) and its p^2 curve; zone joins | | |

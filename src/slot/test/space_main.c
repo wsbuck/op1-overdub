@@ -51,8 +51,25 @@ static inline uint32_t cycles(void)
 static inline uint32_t cycles(void) { return 0; }
 #endif
 
+#ifdef SPACE_SHTEST
+void space_shtest(int half, int voice, const int16_t *in, int16_t *out, int nblocks);
+#endif
+
 int main(int argc, char **argv)
 {
+#ifdef SPACE_SHTEST
+    if (argc == 7) {                        /* space_main shtest HALF VOICE IN OUT NBLOCKS: the shifter alone */
+        int half = atoi(argv[2]), voice = atoi(argv[3]), nb = atoi(argv[6]), n = 64 >> half;
+        int16_t *x = calloc((size_t)(nb * n), 2), *y = calloc((size_t)(nb * n), 2);
+        FILE *fi = fopen(argv[4], "rb"), *fo = fopen(argv[5], "wb");
+        if (!x || !y || !fi || !fo || fread(x, 2, (size_t)(nb * n), fi) != (size_t)(nb * n))
+            return 3;
+        space_shtest(half, voice, x, y, nb);
+        fwrite(y, 2, (size_t)(nb * n), fo);
+        fclose(fo);
+        return 0;
+    }
+#endif
     if (argc != 5)
         return 2;
     FILE *ctl = fopen(argv[1], "r"), *in = fopen(argv[2], "rb"), *out = fopen(argv[3], "wb"), *st = fopen(argv[4], "w");

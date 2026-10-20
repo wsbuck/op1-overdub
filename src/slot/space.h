@@ -3,9 +3,10 @@
  *   blue   SPACE  ROOM (0) -> HALL (8192) -> CHURCH (16384) -> CATHEDRAL (24576) -> VOID (32767), one morph
  *   green  DECAY  x1/4 .. x4 of the space's own RT60 over detents 0 .. 29, noon (16384) = the space's own; detent 30
  *                 INFINITE (input open, the tail holds and layers), 31 FREEZE (input muted, the tail holds)
- *   white  TAIL   zones: TONE 0 .. 9 (dark .. natural at 5 .. bright), SHIMMER +12 10 .. 14, SHIMMER +12+19 15 .. 18
- *                 (amount 40 .. 100 % across each); 19 .. 31 reserved for SUB -12, GATE and SWELL (v1.1): natural
- *                 tone, no tail effect yet
+ *   white  TAIL   zones: TONE 0 .. 9 (dark .. natural at 5 .. bright), SHIMMER +12 10 .. 14, SHIMMER +12+19 15 .. 18,
+ *                 SUB -12 19 .. 22 (amount 40 .. 100 % across each, faded in over the zone's first detent); GATE
+ *                 23 .. 27 (the wet held while the input plays, then closed after a hold of 50 .. 350 ms); SWELL
+ *                 28 .. 31 (the wet fades in over 0.15 .. 1.5 s after each onset). Natural tone outside TONE
  *   orange MIX    0 .. 16384: dry at unity, wet 0 -> 1 (0 = dry, bit exact). Above the middle, on the master: the
  *                 wet ducks under the playing, -12 dB one detent above the middle -> -24 dB at the top; on synth /
  *                 drum: the dry fades out (all wet at the top)
@@ -116,6 +117,20 @@ static inline int32_t sp_shimmer_level(int32_t k, int z)
 {
     int32_t sa = sp_shimmer_amount(sp_zone_amount(k, z)), in = k - (sp_zone_lo[z] << 10);
     return in < 0 ? 0 : in < 1024 ? (sa * in) >> 10 : sa;
+}
+
+/* GATE: the hold after the input drops, 50 .. 350 ms across the zone (amount a, Q15) */
+static inline int32_t sp_gate_hold_ms(int32_t a)
+{
+    return 50 + ((a * 300 + 16384) >> 15);
+}
+/* SWELL: the wet's rise after an onset, 0.15 .. 1.5 s across the zone, exponential: 150 x 10^a ms (2^frac by a
+ * quadratic, within 0.3 %) */
+static inline int32_t sp_swell_ms(int32_t a)
+{
+    int32_t e = (int32_t)(((uint32_t)(a < 0 ? 0 : a) * 108853u) >> 15);  /* a x log2 10, Q15 */
+    int32_t f = e & 32767, p = 32768 + ((f * (21512 + ((f * 11256) >> 15))) >> 15);
+    return ((150 * p) >> 15) << (e >> 15);
 }
 
 /* ---- orange MIX ---- */

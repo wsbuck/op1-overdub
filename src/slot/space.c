@@ -20,6 +20,10 @@
  *   the tank holds its level while the octaves build (frozen shimmer). INFINITE: the same loop gain, the input open
  *   with its gain servoed on the tank level.
  *   master DUCK: a peak follower on the dry input ducks the wet (MIX above the middle).
+ *   v1.1 TAIL zones (notes/fx-reverb.md §15): SUB -12 = a third shifter voice at ratio 1/2 (150 Hz high-passes and a
+ *   2 kHz low-pass in, 80 Hz high-passes on its return); GATE and SWELL = gains on the wet only, from followers on the
+ *   dry input (dynamics()): the gate held while playing, then a hold and 60 dB in 30 ms (the tank's RT60 dropped once
+ *   shut); the swell restarted on each onset.
  * Every recursive requantisation rounds toward zero (the tail ends in exact silence, no limit cycles); the damping
  * low-passes keep a 32-bit state updated exactly. No division in the sample loops.
  *
@@ -70,6 +74,17 @@ static inline uint32_t cycles(void) { return 0; }
 #define LOG2_03 (-113836)                   /* log2 0.3, Q16 */
 #define LOG2_300 539284                     /* log2 300 Hz, Q16 */
 #define LOG2_20 283242                      /* log2 20 Hz, Q16 */
+#define LOG2_150 473748                     /* log2 150 Hz, Q16: SUB's high-pass before the shifter */
+#define LOG2_80 414314                      /* log2 80 Hz, Q16: SUB's high-pass on its return (no sub-bass drone) */
+#define GATE_FLOOR 33                       /* GATE: below -60 dBFS the input never opens it */
+#define GATE_REL 4428                       /* its follower's release, ~10 ms (Q15 a block) */
+#define GATE_CLOSE 23463                    /* closing: 60 dB in 30 ms (x 0.716 a block, linear inside one) */
+#define DUMP_MS 60                          /* the gate shut: the tank's RT60 meanwhile (the next hit starts clean) */
+#define SW_ONSET 328                        /* SWELL's onset detector: its floor, -40 dBFS */
+#define SW_FALL 1190                        /* on an onset the wet falls to the rise's curve in <= 40 ms */
+#define SW_P0 440402                        /* ... and restarts from 0.42 of it at most (-15 dB: a duck and bloom
+                                             * under busy playing, not a chop), from 0 when the tank is quiet */
+#define LOG2_25 86638                       /* log2 2.5, Q16: GATE's low cut x 2.5 (the snare's splash, not a boom) */
 
 void space_mono(void *self, int16_t *buf, const int16_t *p);
 void space_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
@@ -132,13 +147,22 @@ struct sp {
     int32_t wg, dg, wet, dry;               /* wet (with the duck) and dry gains now; MIX's wet and dry, Q15 */
     int32_t t60_ms;
     /* shimmer */
-    uint32_t shph[2], rng;
-    int32_t shd0[2][2];                     /* each head's start offset (samples), jittered per grain */
-    int32_t shg[2], shr_gain;               /* voice gains (Q15, glided), the return's gain (Q15) */
-    int32_t shhp, shbq[2][4];               /* high-pass (Q31), the biquads' x1 x2 y1 y2 */
+    uint32_t shph[3], rng;
+    int32_t shd0[3][2];                     /* each head's start offset (samples), jittered per grain */
+    int32_t shg[3], shr_gain;               /* voice gains (+12, +19, SUB -12; Q15, glided), the return's gain (Q15) */
+    int32_t shhp, shbq[2][4], subhp[2];     /* high-pass (Q31), the biquads' x1 x2 y1 y2; SUB's two on its return */
+    int32_t asub, asubhp;                   /* SUB's high-passes (one-pole coefficients) */
+    int32_t subb;                           /* SUB's return boost, Q15 (32768 .. 65536) */
     uint32_t sht, sh_clr;                   /* the shifter's time (half the tank rate), the words of its ring cleared */
     int32_t shprev;                         /* the return's last sample (the interpolation up) */
     int16_t shf[BLOCK];                     /* the return for the next block */
+    /* GATE and SWELL: followers on the dry input's block peak (Q15), the wet's gains */
+    int32_t pk, ge, gref, gg, gz, ghold;    /* GATE: follower, reference (the recent peak), gain, zone depth, hold */
+    uint32_t cdump;                         /* the shut gate's loss per sample (DUMP_MS) */
+    int32_t sf, ss, sph, sstep, sg, swz, sms;   /* SWELL: fast / slow followers, the rise's phase (Q20) and step a
+                                                 * block, gain, zone depth, the rise (ms) */
+    int32_t dyn;                            /* the wet's gain from both, Q15 */
+    uint8_t gopen, gdump, sarm, last_gate;
     /* half-band histories */
     /* the half-band filters' buffers (k_decimate, k_interpolate; the asm's shifted copies too) */
     int16_t dbo[2][48] __attribute__((aligned(4))), dbe[2][48] __attribute__((aligned(4)));
@@ -311,6 +335,7 @@ struct hseg {
     int32_t *acc;
     uint32_t p, inc;
     int32_t w, dw, n;
+    int32_t st;                             /* acc's step: 1 (0 too), or 2 (SUB: its even or odd samples) */
 };
 
 #if defined(__bfin__) && !defined(SPACE_C)
@@ -574,14 +599,14 @@ static void k_bq(int16_t *x, int32_t *st_, const int16_t *q, int n)
 /* one shimmer head over a segment: acc += (the ring at p, interpolated) x w >> 15, the window x gain w stepping by dw;
  * the read runs at a whole number of samples per sample (inc = r << 16): the fraction stays fixed */
 static void k_head(int32_t *acc, const int16_t *ring, uint32_t mask, uint32_t p, uint32_t inc, int32_t w, int32_t dw,
-                   int n)
+                   int n, int st)
 {
     for (int j = 0; j < n; j++) {
         p += inc;
         uint32_t i = (p >> 16) & mask;
         int32_t y = ring[i];
         y += rne(sat16(ring[(i + 1) & mask] - y) * (int32_t)((p & 0xFFFF) >> 1), 15);
-        acc[j] += (y * w) >> 15;
+        acc[j * st] += (y * w) >> 15;
         w += dw;
     }
 }
@@ -590,7 +615,7 @@ static void k_head(int32_t *acc, const int16_t *ring, uint32_t mask, uint32_t p,
 static void k_heads(const struct hseg *g, int ng, const int16_t *ring, uint32_t mask)
 {
     for (int k = 0; k < ng; k++)
-        k_head(g[k].acc, ring, mask, g[k].p, g[k].inc, g[k].w, g[k].dw, g[k].n);
+        k_head(g[k].acc, ring, mask, g[k].p, g[k].inc, g[k].w, g[k].dw, g[k].n, g[k].st > 1 ? 2 : 1);
 }
 
 /* the shimmer's return: x the gain g (Q15), soft limit to 0.5 FS: y = 0.75 (u - u^3 / 3), u = x / 0.75 clamped to
@@ -710,6 +735,9 @@ static void clean_start(struct sp *s, int stereo)
     s->lgn = 6 - s->half;
     s->duck = 32768;
     s->rng = stereo ? 0x2545F491u : 0x9E3779B9u;
+    s->sph = 1 << 20;                       /* no onset yet: SWELL's wet at full */
+    s->sg = s->dyn = 32768;
+    s->sarm = 1;
     layout(s, pingpong_ram + (stereo ? 0 : 2 * 65536));
     space_ui[stereo].cyc_peak = 0;
 }
@@ -749,6 +777,71 @@ static inline int32_t spms(int32_t ms_q8, int half)   /* ms (Q8) -> samples at t
 }
 
 
+/* ---- GATE and SWELL, per block, on the dry input's peak (both always followed, so either is ready on entering
+ * its zone; each zone's depth glides in over ~23 ms). GATE: open while the input is within 12 dB of its recent peak
+ * (a reference with a 1.5 s release; floor -60 dBFS; 3 dB hysteresis), so a pad holds it to its end and a drum's
+ * quieter hats don't; then the hold, then 60 dB in 30 ms. Once shut the tank's RT60 drops to DUMP_MS, so the next
+ * hit opens on its own tail (not when held: FREEZE / INFINITE keep the tail, which the playing then gates). SWELL:
+ * an onset (the fast follower 1.5 x above the slow one, re-armed once it's back within 1.1 x) restarts the rise
+ * (rise^2 over 0.15 .. 1.5 s); the wet falls to the curve in <= 20 ms first. Returns 1 when the gate's dump toggled
+ * (the loop gains recompute). ---- */
+static int dynamics(struct sp *s, int z, int32_t amt, int held, uint32_t K)
+{
+    int32_t pk = s->pk;
+    /* GATE */
+    s->ge = pk >= s->ge ? pk : s->ge - (((s->ge - pk) * GATE_REL + 32767) >> 15);
+    s->gref = pk >= s->gref ? pk : s->gref - ((s->gref * 10 + 32767) >> 15);   /* ~5 s: a pluck shuts it */
+    int32_t thr = s->gref >> 2;                     /* -12 dB */
+    thr = thr < GATE_FLOOR ? GATE_FLOOR : thr;
+    s->gopen = (uint8_t)(s->ge > (s->gopen ? (thr * 23170) >> 15 : thr));
+    if (s->gopen) {
+        s->ghold = (sp_gate_hold_ms(z == SP_Z_GATE ? amt : 16384) * 22579) >> 15;   /* ms -> blocks */
+        int32_t up = held ? 5461 : 16384;           /* open over ~3 ms (a held tail ~9 ms: no tick) */
+        s->gg = s->gg + up > 32768 ? 32768 : s->gg + up;
+    } else if (s->ghold > 0)
+        s->ghold--;
+    else {
+        s->gg = (s->gg * GATE_CLOSE) >> 15;
+        s->gg = s->gg < 33 ? 0 : s->gg;             /* -60 dB: shut */
+    }
+    int32_t gt = z == SP_Z_GATE ? 32768 : 0;
+    s->gz += (gt - s->gz) >> 4;
+    s->gz = s->gz - gt < 16 && gt - s->gz < 16 ? gt : s->gz;
+    int dump = z == SP_Z_GATE && s->gz == 32768 && s->gg == 0 && !held, moved = dump != s->gdump;
+    if (moved) {
+        s->gdump = (uint8_t)dump;
+        if (!s->cdump)
+            s->cdump = sp_udiv(K, DUMP_MS);
+    }
+    /* SWELL */
+    s->sf = pk >= s->sf ? pk : s->sf - (((s->sf - pk) * 783 + 32767) >> 15);        /* ~60 ms */
+    if (pk >= s->ss)
+        s->ss += ((pk - s->ss) * 1167 + 32767) >> 15;                             /* ~40 ms */
+    else
+        s->ss -= ((s->ss - pk) * 119 + 32767) >> 15;                              /* ~400 ms */
+    if (s->sarm && s->sf > s->ss + (s->ss >> 1) + (SW_ONSET >> 2) && s->sf > SW_ONSET >> 1) {
+        int32_t p0 = s->lv * 64 < s->sf ? 0 : SW_P0;    /* the tank quiet (36 dB under the note): from silence */
+        s->sph = s->sph < p0 ? s->sph : p0;
+        if (!p0)
+            s->sg = 0;                              /* (nothing to fade: the wet starts from silence) */
+        s->sarm = 0;
+    } else if (!s->sarm && s->sf < s->ss + ((s->ss * 3277) >> 15))
+        s->sarm = 1;
+    int32_t ms = z == SP_Z_SWELL ? sp_swell_ms(amt) : s->sms ? s->sms : 150;
+    if (ms != s->sms) {
+        s->sms = ms;
+        s->sstep = (int32_t)sp_udiv(1521742u, (uint32_t)ms);   /* (64 / 44.1 ms) / rise, Q20 a block */
+    }
+    s->sph = s->sph + s->sstep > 1 << 20 ? 1 << 20 : s->sph + s->sstep;
+    int32_t p15 = s->sph >> 5, r = p15 >= 32768 ? 32768 : (p15 * p15) >> 15;
+    s->sg = r >= s->sg ? r : r > s->sg - SW_FALL ? r : s->sg - SW_FALL;
+    int32_t st = z == SP_Z_SWELL ? 32768 : 0;
+    s->swz += (st - s->swz) >> 4;
+    s->swz = s->swz - st < 16 && st - s->swz < 16 ? st : s->swz;
+    s->dyn = ((32768 - ((s->gz * (32768 - s->gg)) >> 15)) * (32768 - ((s->swz * (32768 - s->sg)) >> 15))) >> 15;
+    return moved;
+}
+
 /* ---- per block: the knobs -> the tank's parameters. The costly parts (the space's morph, exp2s, divisions) run only
  * when their inputs moved; the modulation, the glides and the holds every block. ---- */
 static void params(struct sp *s, const int16_t *p, int stereo)
@@ -776,7 +869,9 @@ static void params(struct sp *s, const int16_t *p, int stereo)
     s->zone = (uint8_t)z;
     int32_t xt = z == SP_Z_TONE ? sp_tone(kt) : 0;
     s->tx = first ? xt : s->tx + ((xt - s->tx) >> 3);
-    int tone_moved = space_moved || s->tx != s->last_tx;
+    int gz = z == SP_Z_GATE;
+    int tone_moved = space_moved || s->tx != s->last_tx || gz != s->last_gate;
+    s->last_gate = (uint8_t)gz;
     if (tone_moved) {
         int32_t x = s->tx, hi = v[SP_HI], lpo = 2 * x, hpo = 0;
         if (x < 0) {
@@ -784,6 +879,10 @@ static void params(struct sp *s, const int16_t *p, int stereo)
             hpo = (-x * 24838) >> 15;                   /* dark thins the low end a little: the low cut x 1.3 at most */
         } else
             hi += ((32768 - hi) * x) >> 15;             /* bright: towards a flat decay */
+#ifndef SPACE_GATE_FLAT                             /* (space_check's gate timing: the same tank as TONE's) */
+        if (gz)
+            hpo += LOG2_25;
+#endif
         s->hi = clampi(hi, 64, 32768);
         s->axo = coef(v[SP_LXO], h);
         s->ahp = coef(v[SP_LHP] - LOG2_HP_SPLIT + hpo, h);
@@ -820,6 +919,7 @@ static void params(struct sp *s, const int16_t *p, int stereo)
     int32_t hh = s->frz > s->inf ? s->frz : s->inf;
     int gains_moved = decay_moved || hh != s->last_hh;
     s->last_hh = hh;
+    gains_moved |= dynamics(s, z, amt, hh > 0, K);
 
     /* the lines: lengths glide (<= 1/64 sample per sample), 4 modulated; the gains for the RT60 per band (from the
      * glided lengths: the modulation's few samples change them by < 0.5 %) */
@@ -827,7 +927,7 @@ static void params(struct sp *s, const int16_t *p, int stereo)
     int32_t mdep = ((v[SP_MDEP] << 8) >> h) >> 8;   /* Q8 samples */
     mdep = (mdep * (32768 - s->frz)) >> 15;         /* frozen: still (whole-sample reads: no interpolation loss) */
     mdep = (mdep * (32768 - (s->inf >> 1))) >> 15;  /* INFINITE: half */
-    uint32_t c = s->c, ch = s->ch;
+    uint32_t c = s->gdump ? s->cdump : s->c, ch = s->gdump ? s->cdump : s->ch;   /* the gate shut: the tail goes */
     uint32_t minc = (uint32_t)v[SP_MRATE] + (((uint32_t)v[SP_MRATE] * 31855u) >> 16);   /* Hz -> Q32 per 44.1 k */
     minc <<= h;
     if (space_moved)
@@ -889,6 +989,8 @@ static void params(struct sp *s, const int16_t *p, int stereo)
         s->erlev = v[SP_ERLEV];
         s->diff = v[SP_DIFF];
         s->ash = coef(LOG2_300, h);
+        s->asub = coef(LOG2_150, h);
+        s->asubhp = coef(LOG2_80, h);
         s->adc = coef(LOG2_20, h);
     }
 
@@ -902,21 +1004,22 @@ static void params(struct sp *s, const int16_t *p, int stereo)
 
     if (hh < 328)                                   /* the level a held shimmer keeps (+2 dB) */
         s->frz_target = (s->lv * 5) >> 2;
-    /* shimmer: the voices by zone, glided over ~16 blocks; normalised by the loop gain; frozen: servoed */
-    int32_t g0 = 0, g1 = 0, sa = z == SP_Z_SH12 || z == SP_Z_SH19 ? sp_shimmer_level(kt, z) : 0;
+    /* shimmer and SUB: the voices by zone, glided over ~16 blocks; normalised by the loop gain; frozen: servoed */
+    int shz = z == SP_Z_SH12 || z == SP_Z_SH19 || z == SP_Z_SUB;
+    int32_t gv[3] = { 0, 0, 0 }, sa = shz ? sp_shimmer_level(kt, z) : 0;
     if (z == SP_Z_SH12)
-        g0 = sa;
+        gv[0] = sa;
     else if (z == SP_Z_SH19) {
-        g0 = (sa * 22938) >> 15;                    /* x 0.7 */
-        g1 = sa >> 1;                               /* x 0.5 */
+        gv[0] = (sa * 22938) >> 15;                 /* x 0.7 */
+        gv[1] = sa >> 1;                            /* x 0.5 */
+    } else if (z == SP_Z_SUB)
+        gv[2] = sa;
+    for (int i = 0; i < 3; i++) {
+        s->shg[i] += (gv[i] - s->shg[i]) >> 4;
+        if (gv[i] == 0 && s->shg[i] < 16)
+            s->shg[i] = 0;
     }
-    s->shg[0] += (g0 - s->shg[0]) >> 4;
-    s->shg[1] += (g1 - s->shg[1]) >> 4;
-    if (g0 == 0 && s->shg[0] < 16)
-        s->shg[0] = 0;
-    if (g1 == 0 && s->shg[1] < 16)
-        s->shg[1] = 0;
-    if (s->shg[0] | s->shg[1]) {
+    if (s->shg[0] | s->shg[1] | s->shg[2]) {
         if (gains_moved || !s->shk) {
             int32_t gsum = 0;
             for (int i = 0; i < NL; i++)
@@ -924,14 +1027,21 @@ static void params(struct sp *s, const int16_t *p, int stereo)
             int32_t gm = gsum >> 15;                /* the mean loop gain, Q15 */
             int32_t shk = 4 * (int32_t)isqrt((uint32_t)((1 << 30) - gm * gm));
             s->shk = shk > 32768 ? 32768 : shk;
+            /* SUB: the same normalisation with its cap raised to x 2 (master) / x 1.4 (synth / drum): the octave down
+             * sits ~12 dB under the tail otherwise; long decays (4 sqrt(1 - g^2) < 1) keep the shimmer's return */
+            int32_t bc = stereo ? 65536 : 45875;
+            s->subb = clampi(shk, 32768, bc);
         }
         int32_t servo = 32768;
         if (hh && s->lv > s->frz_target) {
             servo = (int32_t)sp_udiv((uint32_t)s->frz_target << 15, (uint32_t)s->lv);
             servo = (servo * servo) >> 15;
             servo = (servo * servo) >> 15;
+            if (z == SP_Z_SUB)                      /* SUB: (target / level)^8: its octaves down pile up in the
+                                                     * lossless loop's low band, so it holds tighter */
+                servo = (servo * servo) >> 15;
         }
-        int32_t afs = z == SP_Z_SH12 || z == SP_Z_SH19 ? 9830 + ((amt * 13107) >> 15) : 0;   /* 0.3 + 0.4 amount */
+        int32_t afs = shz ? 9830 + ((amt * 13107) >> 15) : 0;   /* 0.3 + 0.4 amount */
         s->shr_gain = ((s->shk * (32768 - hh)) >> 15) + ((((afs * servo) >> 15) * hh) >> 15);   /* held: servoed */
     }
     s->first = 0;
@@ -953,16 +1063,18 @@ static void shimmer(struct sp *s, const int16_t *in, int n)
             s->shf[j] = 0;
         return;
     }
-    const int16_t *q = sp_shbq[h][s->shg[1] ? 1 : 0];
-    k_pole(sc.sh, &s->shhp, s->ash, 1, n);          /* the 300 Hz high-pass, in place */
-    for (int pass = 0; pass <= h; pass++) {         /* the anti-alias low-pass: twice at 22.05 kHz (4th order) */
+    int sub = s->zone == SP_Z_SUB;                  /* SUB: 150 Hz .. 2 kHz into the shifter (the octave down clean) */
+    const int16_t *q = sp_shbq[h][sub ? 2 : s->shg[1] ? 1 : 0];
+    k_pole(sc.sh, &s->shhp, sub ? s->asub : s->ash, 1, n);   /* the 300 Hz high-pass (SUB 150 Hz), in place */
+    for (int pass = 0; pass <= (sub ? 0 : h); pass++) {   /* the anti-alias low-pass: twice at 22.05 kHz (4th
+                                                     * order); SUB once (an octave down doesn't alias) */
         int32_t *b = s->shbq[pass];
         k_bq(sc.sh, b, q, n);
         if (!(b[0] | b[1]) && b[2] >= -2 && b[2] <= 2 && b[3] >= -2 && b[3] <= 2)
             b[2] = b[3] = 0;                        /* silence in: no sub-LSB residue left to circulate */
     }
     k_ringw(s->shr, s->shmask, s->sht, in, n2);
-    if (s->shr_gain == 0 || (s->shg[0] == 0 && s->shg[1] == 0)) {
+    if (s->shr_gain == 0 || (s->shg[0] == 0 && s->shg[1] == 0 && s->shg[2] == 0)) {
         for (int j = 0; j < n; j++)
             s->shf[j] = 0;
         s->shprev = 0;
@@ -970,16 +1082,18 @@ static void shimmer(struct sp *s, const int16_t *in, int n)
         return;
     }
     int32_t W = (SH_W >> h) >> 1;                   /* the window in the shifter's samples */
-    struct hseg hs[8];
-    int nh = 0;
+    struct hseg hs[8], hsub[8];                     /* the shimmer's heads; SUB's (each segment as two, below) */
+    int nh = 0, ns = 0;
     for (int j = 0; j < n2; j++)
         sc.acc[j] = 0;
-    for (int vc = 0; vc < 2; vc++) {
+    for (int vc = 0; vc < 3; vc++) {
         int32_t g = s->shg[vc];
         if (!g)
             continue;
-        uint32_t r = (uint32_t)vc + 2;              /* read speed: 2 (+12), 3 (+19: a twelfth) */
-        uint32_t dph = (r - 1) * (h ? 3897429u : 1947831u);   /* (r - 1) / W per shifter sample, Q32 */
+        int dn = vc == 2;                           /* SUB -12: the read at half speed, the delay growing */
+        uint32_t r = (uint32_t)vc + 2;              /* read speed: 2 (+12), 3 (+19: a twelfth); SUB 1/2 */
+        uint32_t inc = dn ? 0x8000u : r << 16;
+        uint32_t dph = dn ? (h ? 1948714u : 973915u) : (r - 1) * (h ? 3897429u : 1947831u);   /* |r - 1| / W, Q32 */
         for (int hd = 0; hd < 2; hd++) {
             uint32_t ph = s->shph[vc] + ((uint32_t)hd << 31);
             int j0 = 0;
@@ -996,30 +1110,81 @@ static void shimmer(struct sp *s, const int16_t *in, int n)
                 }
                 int m = left < (uint32_t)(n2 - j0) ? (int)left : n2 - j0;
                 /* delay = n2 + offset + W (1 - phase) at the segment's first sample, shortening by r - 1 per
-                 * sample: the read runs at speed r */
+                 * sample: the read runs at speed r (SUB: n2 + offset + W phase, growing by 1/2 a sample) */
                 uint32_t ph1 = ph + dph;
-                int32_t dq = (n2 + s->shd0[vc][hd]) * 65536 + W * (int32_t)(65535 - (ph1 >> 16));
+                int32_t dq = (n2 + s->shd0[vc][hd]) * 65536 + W * (int32_t)(dn ? ph1 >> 16 : 65535 - (ph1 >> 16));
                 uint32_t pos = ((s->sht + (uint32_t)j0) << 16) - (uint32_t)dq;
                 /* the window (x the voice's gain) at the segment's first and last sample, linear between */
                 int32_t wa = (sp_win[(ph + dph) >> 22] * g) >> 15, wb = (sp_win[(ph + dph * (uint32_t)m) >> 22] * g) >> 15;
                 int32_t dw = m > 1 ? ((wb - wa) * sp_rcp[m - 1]) >> 15 : 0;
-                hs[nh++] = (struct hseg){ sc.acc + j0, pos - (r << 16), r << 16, wa, dw, m };
+                if (!dn)
+                    hs[nh++] = (struct hseg){ sc.acc + j0, pos - inc, inc, wa, dw, m, 1 };
+                else {                              /* SUB: its even and odd samples each step one whole sample, so
+                                                     * the asm heads run them (their fraction fixed), acc step 2 */
+                    hsub[ns++] = (struct hseg){ sc.acc + j0, pos - 0x10000u, 0x10000u, wa, 2 * dw, (m + 1) >> 1, 2 };
+                    if (m > 1)                      /* (no empty job: a zero loop count is not a no-op) */
+                        hsub[ns++] = (struct hseg){ sc.acc + j0 + 1, pos + 0x8000u - 0x10000u, 0x10000u, wa + dw,
+                                                    2 * dw, m >> 1, 2 };
+                }
                 ph += dph * (uint32_t)m;
                 j0 += m;
                 if ((uint32_t)m == left) {          /* the grain ended: the next one's start offset, jittered */
                     s->rng = s->rng * 1664525u + 1013904223u;
-                    s->shd0[vc][hd] = (int32_t)(((s->rng >> 16) * (uint32_t)((W * 6554) >> 16)) >> 16);   /* 0 .. 0.1 W */
+                    s->shd0[vc][hd] = (int32_t)(((s->rng >> 16) * (uint32_t)((W * (dn ? 1311 : 6554)) >> 16)) >> 16);
+                    /* 0 .. 0.1 W (SUB 0 .. 0.02 W: under 150 Hz more smears its octave into a band) */
+#ifdef SPACE_SH_STILL
+                    s->shd0[vc][hd] = 0;            /* space_check's pitch case: no jitter, the heads coherent */
+#endif
                 }
             }
         }
         s->shph[vc] += dph * (uint32_t)n2;
     }
-    k_heads(hs, nh, s->shr, s->shmask);
+    if (nh)
+        k_heads(hs, nh, s->shr, s->shmask);
+    if (ns)
+        k_heads(hsub, ns, s->shr, s->shmask);
     s->sht += (uint32_t)n2;
     /* x the return's gain, soft limit to 0.5 FS: y = 0.75 (u - u^3 / 3), u = x / 0.75 clamped to +-1; then up to the
      * tank rate (linear: the halfway sample the mean of its neighbours) */
+    if (s->shg[2] && s->subb > 32768) {             /* SUB: its return's boost (params), before the limit */
+        int32_t hh = s->frz > s->inf ? s->frz : s->inf;
+        int32_t b = (32768 + (((s->subb - 32768) * ((32768 - hh) >> 1)) >> 14)) >> 1;   /* held: none; Q14 */
+        for (int j = 0; j < n2; j++)                /* (|acc| <= 32767 first: <= 2^16 after, x b in 32 bits) */
+            sc.acc[j] = (clampi(sc.acc[j], -32767, 32767) * b) >> 14;
+    }
     k_shret(s->shf, sc.acc, s->shr_gain, &s->shprev, n2);
+    if (s->shg[2])                                  /* SUB: 80 Hz high-passes on its return, 12 dB/oct (it enters the
+                                                     * tank after the input's low cut: no sub-bass drone) */
+        k_pole2(s->shf, &s->subhp[0], s->asubhp, &s->subhp[1], s->asubhp, 1, n);
 }
+
+#ifdef SPACE_SHTEST
+/* space_check's pitch case: the shifter alone (voice 0 +12, 1 +19, 2 SUB -12, its filters as in the FX), a block at a
+ * time at the tank rate (n frames in, n out; the return at unity gain) */
+void space_shtest(int half, int voice, const int16_t *in, int16_t *out, int nblocks)
+{
+    struct sp *s = &st[0];
+    clean_start(s, 0);
+    s->half = half;
+    s->n = BLOCK >> half;
+    layout(s, pingpong_ram);
+    s->sh_clr = s->shwords;
+    s->zone = voice == 2 ? SP_Z_SUB : voice ? SP_Z_SH19 : SP_Z_SH12;
+    s->shg[voice] = 32767;
+    s->shr_gain = 32767;
+    s->ash = coef(LOG2_300, half);
+    s->asub = coef(LOG2_150, half);
+    s->asubhp = coef(LOG2_80, half);
+    for (int b = 0; b < nblocks; b++) {
+        for (int j = 0; j < s->n; j++)
+            sc.sh[j] = in[b * s->n + j];
+        shimmer(s, sc.sh, s->n);
+        for (int j = 0; j < s->n; j++)
+            out[b * s->n + j] = s->shf[j];
+    }
+}
+#endif
 
 /* ---- one block of the tank: sc.x[c] (n frames at the tank rate) -> sc.wet[c] ---- */
 static void tank(struct sp *s)
@@ -1103,7 +1268,7 @@ static void tank(struct sp *s)
     s->lv += (m - s->lv) >> 5;
     SPROF(9);
     /* the shimmer, from this block's late output (heard from the next block on) */
-    if (s->shg[0] | s->shg[1] | s->shbq[0][0] | s->shbq[0][1] | s->shbq[0][2] | s->shbq[0][3] | s->shbq[1][2]) {
+    if (s->shg[0] | s->shg[1] | s->shg[2] | s->shbq[0][0] | s->shbq[0][1] | s->shbq[0][2] | s->shbq[0][3] | s->shbq[1][2]) {
         if (!s->sh_on) {                            /* the ring holds an old tail: clear it (shimmer(), 1 KB a call) */
             s->sh_clr = 0;
             s->sh_on = 1;
@@ -1138,8 +1303,9 @@ static void run(int stereo, int16_t **io, const int16_t *p)
     /* MIX (and on the master the duck: a peak follower on the dry input) */
     int32_t wet, dry, ddb;
     sp_mix(knob(p[3]), stereo, &wet, &dry, &ddb);
+    int32_t pk = k_peak(io[0], io[nch - 1], BLOCK);
+    s->pk = pk;                                     /* (GATE and SWELL's input) */
     if (stereo) {
-        int32_t pk = k_peak(io[0], io[1], BLOCK);
         if (pk >= s->ef)
             s->dhold = 103;                         /* hold 150 ms after the last peak: no pumping between notes */
         if (pk > s->ef)
@@ -1169,6 +1335,7 @@ static void run(int stereo, int16_t **io, const int16_t *p)
     } else {
         SPROF(11);
         params(s, p, stereo);
+        wg = (wg * s->dyn) >> 15;                   /* GATE, SWELL */
         SPROF(0);
         for (int c = 0; c < nch; c++) {
             if (s->half)
