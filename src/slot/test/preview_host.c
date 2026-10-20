@@ -9,6 +9,7 @@
 #include "crush.h"
 #include "fxpub.h"
 #include "repeat.h"
+#include "space.h"
 #include "drumprobe.h"
 #include "fmdrum.h"
 #include "fmdrum_tables.h"
@@ -334,18 +335,54 @@ static void repeat_frame(int i, int frames, int stereo)
 /* space (engines 113 / 213): the real space.c (linked by preview.py, its C reference kernels) runs on the host, one
  * 30 fps frame of audio per frame: a 220 Hz saw at -12 dBFS for the first SPACE_PLAY frames (default 6), then silence,
  * so the level meter shows a tail; on TE's words as the device has them (the stored white knob = K2). The first
- * frames clear the line set (a clean start), as on the device; SPACE_KEY=1 holds the green push. */
+ * frames clear the line set (a clean start), as on the device; SPACE_KEY=1 holds the green push; SPACE_SHIFT=1 holds
+ * SHIFT (the CPU page in diagnostic builds); SPACE_TURN=frame:knob:value turns a stored knob before that frame (the
+ * readout). SPACE_FORCE="zone=1,level=16000,duck=8000,frz=32768,..." skips the DSP and
+ * sets space_ui directly every frame (t60, level, duck, frz, inf, zone, key, clearing as in struct space_ui): the
+ * design's preview states, exactly. */
 volatile int32_t te_fx_slot[2];
 volatile int16_t te_fx_knobs_synth[64], te_fx_knobs_drum[64];
 void space_mono(void *self, int16_t *buf, const int16_t *p);
 void space_stereo(void *self, int16_t *l, int16_t *r, const int16_t *p);
+extern struct fx_pub space_pub[2];
 static uint64_t sp_t;
 static void space_frame(int i, int frames, int stereo)
 {
     int off = getenv("FX_OFF") ? atoi(getenv("FX_OFF")) : 0, play = getenv("SPACE_PLAY") ? atoi(getenv("SPACE_PLAY")) : 6;
+    host_shift = getenv("SPACE_SHIFT") && atoi(getenv("SPACE_SHIFT"));
+    const char *turn = getenv("SPACE_TURN");                      /* "frame:knob:value": a stored-knob turn */
+    if (turn && atoi(turn) == i)
+        host_knobs[atoi(strchr(turn, ':') + 1)] = (int16_t)atoi(strrchr(turn, ':') + 1);
     if (off && i >= frames - off)
         return;
     te_fx_knobs_synth[2] = te_fx_knobs_drum[2] = host_knobs[2];
+    const char *force = getenv("SPACE_FORCE");
+    if (force) {
+        struct space_ui *q = &space_ui[stereo];
+        char buf[256], *t;
+        q->t60_ms = 2000;
+        q->duck = 32768;
+        q->blocks += 23;
+        te_blocks += 23;
+        snprintf(buf, sizeof buf, "%s", force);
+        for (t = strtok(buf, ","); t; t = strtok(0, ",")) {
+            char *e = strchr(t, '=');
+            if (!e)
+                continue;
+            *e++ = 0;
+            long v = strtol(e, 0, 0);
+            if (!strcmp(t, "t60")) q->t60_ms = (int32_t)v;
+            else if (!strcmp(t, "level")) q->level = (int32_t)v;
+            else if (!strcmp(t, "duck")) q->duck = (int32_t)v;
+            else if (!strcmp(t, "frz")) q->frz = (int32_t)v;
+            else if (!strcmp(t, "inf")) q->inf = (int32_t)v;
+            else if (!strcmp(t, "zone")) q->zone = (uint8_t)v;
+            else if (!strcmp(t, "key")) q->key = (uint8_t)v;
+            else if (!strcmp(t, "clearing")) q->clearing = (uint8_t)v;
+        }
+        fx_publish(&space_pub[stereo], fx_params());
+        return;
+    }
     if (getenv("SPACE_KEY") && atoi(getenv("SPACE_KEY"))) {
         rep_key.held[stereo ? RK_MASTER : RK_SYNTH] = 1;
         rep_key.screen_seen = te_blocks;

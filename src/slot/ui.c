@@ -2552,7 +2552,7 @@ void fx_ui_draw(int id, int mode, int slot)
     else if (kind == FX_REPEAT)
         draw_wheel(r, k, stored, k != stored, mode == 3, mode << 4 | slot, 0, mode);   /* the key in every context */
     else if (kind == FX_SPACE)
-        draw_space(r, k, k != stored, mode == 3, mode);
+        draw_space(r, k, stored, k != stored, mode == 3, mode, mode << 4 | slot);
 }
 
 /* ---- harm and fm4 (notes/harm-fm4.md): screens in ui_harm.h / ui_fm4.h; their edit state lives in knobhook.c (the

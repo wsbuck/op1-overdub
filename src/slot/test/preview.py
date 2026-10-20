@@ -23,7 +23,7 @@ from PIL import Image, ImageDraw
 
 DESIGN = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "design")
 SVG_PATHS = {"choir.svg": "fx", "pingpong.svg": "fx", "pedals.svg": "fx", "crush3d.svg": "fx", "repeat.svg": "fx",
-             "fm4.svg": "synth"}   # name -> design/ subfolder
+             "space.svg": "fx", "fm4.svg": "synth"}   # name -> design/ subfolder
 if os.environ.get("CRUSH_CARD"):        # build.py --test-card: the crush screen's boot test card (ui.c draw_card)
     SVG_PATHS["crushcard.svg"] = "fx"
 SVGS = tuple(SVG_PATHS)
@@ -104,7 +104,8 @@ def main():
                     os.path.join(SLOT, "crush.c"), os.path.join(SLOT, "metal.c"), os.path.join(SLOT, "repeat.c"),
                     os.path.join(SLOT, "space.c"), "-Wno-shift-negative-value",
                     "-DDISTORTION_CURVE_ONLY", os.path.join(SLOT, "distortion.c"), "-o", exe,
-                    ] + (["-DCRUSH_TEST_CARD"] if os.environ.get("CRUSH_CARD") else []), check=True)
+                    ] + (["-DCRUSH_TEST_CARD"] if os.environ.get("CRUSH_CARD") else [])
+                   + os.environ.get("PREVIEW_DEFS", "").split(), check=True)   # e.g. -DSP_CPU_PAGE
     ids = os.path.join(tmp, "ids.txt")
     svg_ids(ids)
     env = dict(os.environ, SVG_DIR=SVG_DIR, SVG_IDS=ids)

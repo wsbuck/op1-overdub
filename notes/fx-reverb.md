@@ -718,7 +718,7 @@ SPACE1 (the MVP as first built; SPACE2's numbers in §13):
 - Levers if the device is over budget: fuse the per-line kernels (one call for 8 lines), 3 input allpasses, the
   22.05 kHz master, fewer ER taps.
 
-### Screen (placeholder, `ui_space.h`)
+### Screen (placeholder, `ui_space.h`; since SPACE3 the fallback without space.svg, §14)
 Line text: the title the space's name (blue); SPACE (the morph `HALL > CHURCH 46%`, or the anchor's own RT60), DECAY
 (seconds and the multiplier, `> INF` from detent 28, `INFINITE  IN OPEN`, `FREEZE  IN MUTED`), TAIL (zone and
 amount, reserved zones grey `SOON`), MIX (`DRY 100 WET 50`, `DUCK -14DB` on the master); a state box (FROZEN,
@@ -801,3 +801,52 @@ master at 44.1 kHz <= 45 k.
 - Not taken: 3 input allpasses instead of 4 (~1.4 k at 44.1 kHz) needs a sound A/B; the targets were met without it.
   Left for later: the mix knee (~16 cycles a sample), the ER taps' two passes, the shimmer heads' per-segment C.
 
+## 14. The screen: William Buck's lunar ridges (SPACE3, 2026-10-19)
+- The design: `design/fx/space.svg` from `design/fx/gen_space_moon.py` (William Buck's version B, "RIDGES", of his
+  gen_space_moon.py; brought over unchanged but for the output path, the credit and version A left out; it reads
+  nothing and holds no TE content beyond the palette's hex values). Published as `content/display/space.svg`
+  (build.py FX_SVGS); check_svg PASS (159 drawable elements), heaviest element ridge0 / ridge0_dim 2271 cells, 59 % of
+  AGG's 3840 (build limit 70 %). The header comment is the contract; `ui_space.h` follows it, marker `ridges_dim`
+  (without it, or without the file: the line screen above).
+- Driven by the published live state: the knobs from fxpub (TE's LFO moves the picture) and `space_ui` (zone, level,
+  duck, frz, inf, key, clearing). Mapping:
+
+  | id | driven by |
+  |---|---|
+  | ridge0 .. ridge3, void | stage = round(blue / 8192) (half to even, as the design's Python): ROOM ridge0, HALL ridge1, CHURCH ridge1 + 2, CATHEDRAL ridge2 + 3, VOID `void`; the shown ridges translate(0, 6 x frac(blue / 8192)) when frac > 0.01 |
+  | ridges / ridges_dim | the FX running / off (the dim set follows the same stage and shift) |
+  | print1 .. print12 | the first 1 + round(11 x green / 32767): the DECAY knob, not the seconds |
+  | inf | space_ui.inf > 0.5 |
+  | flag | space_ui.frz > 0.5 or the green push held (space_ui.key) |
+  | phase1 .. phase5 | TONE zone: phase round(5 x the zone amount) (0: none, a dark new Earth) |
+  | halo | scale(0.85 + 0.35 x L) about (262, 40), L = the tail level -72 .. 0 dBFS -> 0 .. 1 (the old meter's scale) |
+  | shim12, sh1 .. sh9 | a shimmer zone: the first round(9 x a); a = the shimmer amount heard (sp_shimmer_level: 40 .. 100 %, faded in over the zone's first detent) |
+  | shim1219, sx1 .. sx8 | SHIMMER +12+19 (with shim12): the first round(8 x a) |
+  | sub, gate, swell | hidden (reserved) |
+  | wave1 .. wave6 | the first round(6 x wet), wet = sp_mix's (min(1, 2 x mix)) |
+  | waves | master: scale(1 - 0.55 x D) about (76.14, 86.86), D = the duck now 0 .. -24 dB -> 0 .. 1 |
+  | duckdepth1 .. 4 | master above the middle: ceil((orange - 16384) / 4096), the DSP's middle (no dot at exactly 16384) |
+  | dry / dry_ghost | synth / drum: dry_ghost once sp_mix's dry < 0.5; the master always `dry` |
+
+  FX off: ridges_dim; no prints, inf, flag, phase, halo, shim, waves, duckdepth. Clean start (space_ui.clearing): no
+  prints, inf, shim12, shim1219.
+- The readout: a stored knob turned (>= 512 raw) shows its value ~1.5 s at size 2 in the design's top-left box (12
+  characters at most), in the knob's colour, as heard (the live knobs): blue the space's name (`CATHEDRAL`); green
+  `3.8S X1.00` (the decay played and the multiplier), `INFINITE`, `FREEZE`; white `DARK 40%` / `NATURAL` /
+  `BRIGHT 60%` (TONE), `SHIM+12 70%`, `SH12+19 70%`, `SUB-12 SOON` / `GATE SOON` / `SWELL SOON`; orange `WET 60%` up to
+  the middle, then `DUCK -18DB` (master) or `DRY 40%` (synth / drum). Not from TE's LFO alone, not on entering.
+- The CPU readings (diagnostic builds only: `--svg-cost`, `--debug-ui`): **hold SHIFT on the space screen** for the
+  CPU page: `CPU MASTER max/mean PEAK p 44KHZ|22KHZ`, `CPU SYNTH ...`, `FDN n  TE FX last/max`, `CALLBACK last/max`,
+  then the DSP's state (T60, level, duck, zone, FRZ / INF %, CLEARING / KEY). Release builds: SHIFT does nothing here.
+  The line screen keeps the CPU lines at its foot in diagnostic builds. The `--svg-cost` kilocycles stay bottom right.
+- Choices where the contract left room: rounding half to even everywhere (the previews' Python; matters only at exact
+  halves, e.g. TAIL 0.5 -> phase 2); the shimmer count from the amount heard (40 .. 100 %), not the knob's place in the
+  zone; the level and the duck on dB scales (linear would barely move the halo); sub / gate / swell hidden although
+  b_state() shows the zone's group (the header: hidden for now); the dim ridges shift with the live ones; the duck dots
+  from the DSP's middle; the readout only on turns, as repeat's.
+- Check: `src/slot/test/space_screen_check.py [OUTDIR] [--user PNG_DIR]` renders the C path for each of the
+  designer's preview states (SPACE_FORCE on the host, the knobs set to reach it) against b_state() rendered by rsvg:
+  all 8 within 0.13 mean |difference| (limit 2.5); against his own PNGs 0.6 .. 1.05 (resampling). Plus the readout, the
+  LFO, a clean start, the SHIFT page (diagnostic only), the line screen, the DSP running, SVG cells. Reaching the
+  states: void_long at INFINITE (31500 raw: 12 stretches; the knob's end is FREEZE), frozen by the green push at DECAY
+  0.8, synth_wet's TAIL at 0.49 (0.5 on the knob rounds to phase 3).
